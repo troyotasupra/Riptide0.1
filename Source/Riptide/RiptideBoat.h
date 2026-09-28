@@ -107,14 +107,14 @@ protected:
 
 	/**
 	 * Hydrodynamic lift on the forward hull as it moves (N per (m/s)^2 of forward speed). Pushes the bow up
-	 * at speed so it rides over swells instead of burying. At ~15 kn this carries roughly a third of the weight.
+	 * at speed so it rides over swells instead of burying. Only acts where the forward hull is in the water.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
-	float PlaningLift = 45.f;
+	float PlaningLift = 70.f;
 
 	/** Largest planing lift as a fraction of the boat's weight, so jumps off wave crests don't launch it. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull", meta = (ClampMin = "0", ClampMax = "1"))
-	float MaxPlaningLiftFraction = 0.4f;
+	float MaxPlaningLiftFraction = 0.5f;
 
 	// --- Engine ---
 

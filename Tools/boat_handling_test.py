@@ -130,6 +130,9 @@ def verdict():
         under = sum(1 for fb, _ in ahead_bow if fb < 0) / len(ahead_bow)
         checks.append(("bow stays above water at full ahead (under less than 5% of the time)", under < 0.05,
                        "under %.0f%%" % (under * 100)))
+        high = sum(1 for _, p in ahead_bow if p > 12.0) / len(ahead_bow)
+        checks.append(("bow doesn't leap at full ahead (pitched up over 12 deg less than 5% of the time)", high < 0.05,
+                       "over 12 deg %.0f%%, highest %.0f deg" % (high * 100, max(p for _, p in ahead_bow))))
 
     ok = True
     for name, passed, detail in checks:

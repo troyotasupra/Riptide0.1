@@ -31,6 +31,11 @@ SWELL = {
     "min_amplitude": 2.0,
     "max_amplitude": 30.0,
     "wind_angle_deg": -30.0,
+    # A wave's sideways pinch depends on steepness alone, not height, so steepness is scaled down with the
+    # amplitudes (30/80 of the default 0.4 / 0.2). Left at the default, the smaller waves fold over where
+    # they cross and render as dark spots.
+    "small_wave_steepness": 0.15,
+    "large_wave_steepness": 0.075,
 }
 
 

@@ -377,11 +377,29 @@ void ARiptideBoat::ApplyHydrodynamics()
 
 	// Planing lift: water striking the forward hull bottom pushes up ahead of the centre of mass,
 	// so the bow trims up with speed. Only going forward, and capped so crests don't launch the boat.
+	// It only exists where the hull is in the water: scaled by how deep the forward bottom sits compared
+	// with its resting draft, so a bow lifting clear (or leaving a crest) loses the lift and settles back.
 	if (LocalVelMs.X > 0.f)
 	{
-		const float WeightN = HullMassKg * FMath::Abs(GetWorld()->GetGravityZ()) / 100.f;
-		const float LiftN = FMath::Min(PlaningLift * LocalVelMs.X * LocalVelMs.X, WeightN * MaxPlaningLiftFraction);
 		const FVector LiftPoint = Xf.TransformPosition(FVector(HullExtent.X * 0.3f, 0.f, -HullExtent.Z));
+
+		float WaterHeightSum = 0.f;
+		int32 NumForward = 0;
+		for (const FSphericalPontoon& Pontoon : Buoyancy->BuoyancyData.Pontoons)
+		{
+			if (Pontoon.RelativeLocation.X > 0.f)
+			{
+				WaterHeightSum += Pontoon.WaterHeight;
+				++NumForward;
+			}
+		}
+		const float RestDraft = WaterlineZ + HullExtent.Z;
+		const float Wetness = NumForward > 0
+			? FMath::Clamp((WaterHeightSum / NumForward - LiftPoint.Z) / RestDraft, 0.f, 1.f)
+			: 0.f;
+
+		const float WeightN = HullMassKg * FMath::Abs(GetWorld()->GetGravityZ()) / 100.f;
+		const float LiftN = Wetness * FMath::Min(PlaningLift * LocalVelMs.X * LocalVelMs.X, WeightN * MaxPlaningLiftFraction);
 		HullBody->AddForceAtLocation(Xf.GetUnitAxis(EAxis::Z) * LiftN * NewtonsToUnreal, LiftPoint);
 	}
 
