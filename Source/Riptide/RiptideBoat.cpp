@@ -25,6 +25,13 @@ namespace
 
 	// Hull size in cm (length, beam, depth) for the placeholder skiff.
 	const FVector HullExtent(300.f, 110.f, 35.f);
+
+	// Buoyancy pontoons, in cm. They sit only a quarter of their height in the water at rest, so the hull
+	// has about six times its resting lift in reserve: a bow driven into a swell gets pushed back up hard
+	// instead of burying. The waterline sits 20 cm up the hull.
+	constexpr float PontoonRadius = 60.f;
+	constexpr float PontoonRestDepth = 30.f;
+	const float WaterlineZ = -HullExtent.Z + 20.f;
 }
 
 ARiptideBoat::ARiptideBoat()
@@ -41,7 +48,8 @@ ARiptideBoat::ARiptideBoat()
 	HullBody->SetBoxExtent(HullExtent);
 	HullBody->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
 	HullBody->SetSimulatePhysics(true);
-	HullBody->SetMassOverrideInKg(NAME_None, HullMassKg, true);
+	// Set the override directly: SetMassOverrideInKg recalculates mass, which can't run during CDO construction.
+	HullBody->BodyInstance.SetMassOverride(HullMassKg, true);
 	HullBody->SetLinearDamping(0.f);
 	HullBody->SetAngularDamping(0.5f);
 	RootComponent = HullBody;
@@ -77,17 +85,23 @@ ARiptideBoat::ARiptideBoat()
 	HelmCamera->SetRelativeLocation(FVector(-HullExtent.X * 0.5f, 0.f, HullExtent.Z + 150.f));
 	HelmCamera->bUsePawnControlRotation = false;
 
-	// Pontoons: four corners, two amidships, one at the stern that also tells us if the prop is wet.
+	// Weight sits low and aft (engine, fuel, crew on the floor), which keeps the hull from rolling over.
+	HullBody->BodyInstance.COMNudge = FVector(-30.f, 0.f, -30.f);
+
+	// Pontoons run down both sides, where the hull's width resists rolling, plus one at the stern
+	// that also tells us if the prop is wet. BeginPlay sizes their lift so they float PontoonRestDepth deep.
 	Buoyancy = CreateDefaultSubobject<UBuoyancyComponent>(TEXT("Buoyancy"));
-	const float PontoonRadius = 60.f;
-	const float PontoonZ = -HullExtent.Z * 0.5f;
+	const float PontoonZ = WaterlineZ - PontoonRestDepth + PontoonRadius;
+	const float ChineY = HullExtent.Y * 0.6f;
 	const FVector PontoonOffsets[] = {
-		FVector(HullExtent.X * 0.8f, HullExtent.Y * 0.6f, PontoonZ),
-		FVector(HullExtent.X * 0.8f, -HullExtent.Y * 0.6f, PontoonZ),
-		FVector(0.f, HullExtent.Y * 0.7f, PontoonZ),
-		FVector(0.f, -HullExtent.Y * 0.7f, PontoonZ),
-		FVector(-HullExtent.X * 0.8f, HullExtent.Y * 0.6f, PontoonZ),
-		FVector(-HullExtent.X * 0.8f, -HullExtent.Y * 0.6f, PontoonZ),
+		FVector(HullExtent.X * 0.8f, ChineY, PontoonZ),
+		FVector(HullExtent.X * 0.8f, -ChineY, PontoonZ),
+		FVector(HullExtent.X * 0.27f, ChineY, PontoonZ),
+		FVector(HullExtent.X * 0.27f, -ChineY, PontoonZ),
+		FVector(-HullExtent.X * 0.27f, ChineY, PontoonZ),
+		FVector(-HullExtent.X * 0.27f, -ChineY, PontoonZ),
+		FVector(-HullExtent.X * 0.8f, ChineY, PontoonZ),
+		FVector(-HullExtent.X * 0.8f, -ChineY, PontoonZ),
 		FVector(-HullExtent.X, 0.f, PontoonZ),
 	};
 	for (const FVector& Offset : PontoonOffsets)
@@ -98,10 +112,25 @@ ARiptideBoat::ARiptideBoat()
 		Buoyancy->BuoyancyData.Pontoons.Add(Pontoon);
 	}
 	SternPontoonIndex = Buoyancy->BuoyancyData.Pontoons.Num() - 1;
+	BowPontoonIndex = 0;
 }
 
 void ARiptideBoat::BeginPlay()
 {
+	// Size buoyancy to the hull's mass before the buoyancy component starts (it begins play inside Super).
+	// The engine spreads one pontoon's worth of lift across all pontoons (their coefficients sum to 1),
+	// so lift = submerged volume of one pontoon * BuoyancyCoefficient. Pick the coefficient that holds the
+	// boat up with the pontoons PontoonRestDepth under (a spherical cap), which puts the waterline at WaterlineZ.
+	{
+		const float R = PontoonRadius;
+		const float D = PontoonRestDepth;
+		const float RestVolumeCm3 = (UE_PI / 3.f) * D * D * (3.f * R - D);
+		const float WeightUnreal = HullMassKg * FMath::Abs(GetWorld()->GetGravityZ());
+		Buoyancy->BuoyancyData.BuoyancyCoefficient = WeightUnreal / RestVolumeCm3;
+		// The engine clamps each pontoon's force; leave room for a fully buried pontoon's full reserve.
+		Buoyancy->BuoyancyData.MaxBuoyantForce = WeightUnreal * 20.f;
+	}
+
 	Super::BeginPlay();
 
 	HullBody->SetMassOverrideInKg(NAME_None, HullMassKg, true);
@@ -342,14 +371,55 @@ void ARiptideBoat::ApplyHydrodynamics()
 	const FVector LocalDragN(
 		-ForwardDrag * LocalVelMs.X * FMath::Abs(LocalVelMs.X),
 		-LateralDrag * LocalVelMs.Y * FMath::Abs(LocalVelMs.Y),
-		0.f);
+		-HeaveDamping * LocalVelMs.Z);
 
 	HullBody->AddForce(Xf.TransformVectorNoScale(LocalDragN) * NewtonsToUnreal);
 
-	// Resist spinning in place.
+	// Planing lift: water striking the forward hull bottom pushes up ahead of the centre of mass,
+	// so the bow trims up with speed. Only going forward, and capped so crests don't launch the boat.
+	// It only exists where the hull is in the water: scaled by how deep the forward bottom sits compared
+	// with its resting draft, so a bow lifting clear (or leaving a crest) loses the lift and settles back.
+	if (LocalVelMs.X > 0.f)
+	{
+		const FVector LiftPoint = Xf.TransformPosition(FVector(HullExtent.X * 0.3f, 0.f, -HullExtent.Z));
+
+		float WaterHeightSum = 0.f;
+		int32 NumForward = 0;
+		for (const FSphericalPontoon& Pontoon : Buoyancy->BuoyancyData.Pontoons)
+		{
+			if (Pontoon.RelativeLocation.X > 0.f)
+			{
+				WaterHeightSum += Pontoon.WaterHeight;
+				++NumForward;
+			}
+		}
+		const float RestDraft = WaterlineZ + HullExtent.Z;
+		const float Wetness = NumForward > 0
+			? FMath::Clamp((WaterHeightSum / NumForward - LiftPoint.Z) / RestDraft, 0.f, 1.f)
+			: 0.f;
+
+		const float WeightN = HullMassKg * FMath::Abs(GetWorld()->GetGravityZ()) / 100.f;
+		const float LiftN = Wetness * FMath::Min(PlaningLift * LocalVelMs.X * LocalVelMs.X, WeightN * MaxPlaningLiftFraction);
+		HullBody->AddForceAtLocation(Xf.GetUnitAxis(EAxis::Z) * LiftN * NewtonsToUnreal, LiftPoint);
+	}
+
+	// Resist spinning in place, and resist rocking so the hull settles after a wave instead of building up a roll.
 	const FVector Up = HullBody->GetUpVector();
-	const float YawRate = FVector::DotProduct(HullBody->GetPhysicsAngularVelocityInRadians(), Up);
-	HullBody->AddTorqueInRadians(-Up * YawRate * YawDamping, NAME_None, true);
+	const FVector AngVel = HullBody->GetPhysicsAngularVelocityInRadians();
+	const float YawRate = FVector::DotProduct(AngVel, Up);
+	const FVector RockRate = AngVel - Up * YawRate;
+	HullBody->AddTorqueInRadians(-Up * YawRate * YawDamping - RockRate * RockDamping, NAME_None, true);
+}
+
+float ARiptideBoat::GetBowFreeboardCm() const
+{
+	if (!Buoyancy || !Buoyancy->BuoyancyData.Pontoons.IsValidIndex(BowPontoonIndex))
+	{
+		return 0.f;
+	}
+	const FSphericalPontoon& Bow = Buoyancy->BuoyancyData.Pontoons[BowPontoonIndex];
+	const FVector BowDeckEdge = HullBody->GetComponentTransform().TransformPosition(FVector(HullExtent.X, 0.f, HullExtent.Z));
+	return BowDeckEdge.Z - Bow.WaterHeight;
 }
 
 float ARiptideBoat::GetSpeedKnots() const
@@ -362,6 +432,15 @@ void ARiptideBoat::ApplyEngineDamage(float Amount)
 	if (HasAuthority())
 	{
 		EngineHealth = FMath::Clamp(EngineHealth - Amount, 0.f, 1.f);
+	}
+}
+
+void ARiptideBoat::SetHelmInput(float Throttle, float Steer)
+{
+	if (HasAuthority())
+	{
+		ThrottleInput = FMath::Clamp(Throttle, -1.f, 1.f);
+		SteerInput = FMath::Clamp(Steer, -1.f, 1.f);
 	}
 }
 
