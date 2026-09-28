@@ -22,6 +22,17 @@ SEA_SIZE = 200000.0
 SHORE_CENTRE = (-90000.0, -90000.0)
 SHORE_HALF_SIZE = 200.0
 
+# A moderate swell, about 1-1.5 m trough to crest: the engine's default ocean waves (up to 5 m) are storm
+# seas for a small skiff. Same long wavelengths as the default, so it rolls rather than chops. Heights in cm.
+SWELL = {
+    "num_waves": 16,
+    "min_wavelength": 521.0,
+    "max_wavelength": 6000.0,
+    "min_amplitude": 2.0,
+    "max_amplitude": 30.0,
+    "wind_angle_deg": -30.0,
+}
+
 
 def _spawn_ocean():
     # Placing through the actor factory gives the ocean its default shoreline spline and mesh,
@@ -53,6 +64,17 @@ def _open_up_sea(zone, ocean):
     body.set_editor_property("ocean_extents", unreal.Vector2D(SEA_SIZE, SEA_SIZE))
 
 
+def _set_swell(ocean):
+    # The ocean gets its own waves, saved inside the map, instead of the shared engine wave asset.
+    waves = unreal.new_object(unreal.GerstnerWaterWaves, outer=ocean)
+    generator = unreal.new_object(unreal.GerstnerWaterWaveGeneratorSimple, outer=waves)
+    for name, value in SWELL.items():
+        generator.set_editor_property(name, value)
+    waves.set_editor_property("gerstner_wave_generator", generator)
+    ocean.set_water_waves(waves)
+    unreal.log(f"Riptide: swell up to {ocean.get_water_body_component().get_max_wave_height():.0f} cm")
+
+
 def build_ocean_test_map():
     levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 
@@ -76,6 +98,7 @@ def build_ocean_test_map():
     zone = _spawn(unreal.WaterZone)
     ocean = _spawn_ocean()
     _open_up_sea(zone, ocean)
+    _set_swell(ocean)
 
     # The boat spawns here and drops onto the water.
     _spawn(unreal.PlayerStart, (0, 0, 150))

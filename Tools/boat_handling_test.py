@@ -5,9 +5,11 @@ Run it with the editor closed (it quits the editor when done):
 (-ExecutePythonScript won't work: it closes the editor as soon as the script returns, before the test has run.)
 Then read the "RiptideTest:" lines in Saved/Logs/Riptide.log. The last one says PASS or FAIL.
 Use -RenderOffscreen instead of -nullrhi to also save helm-camera screenshots and report frame rate.
+To try tuning values without rebuilding, set RIPTIDE_TEST_SET before launching, e.g. "planing_lift=0,rock_damping=4".
 """
 
 import math
+import os
 
 import unreal
 
@@ -30,7 +32,7 @@ RENDERING = "-nullrhi" not in unreal.SystemLibrary.get_command_line().lower()
 SHOTS = [(13.0, "at_rest"), (30.0, "full_ahead"), (38.0, "hard_right")]
 
 state = {"ticks": 0, "started": False, "boat": None, "next_log": 0.0, "samples": [], "handle": None,
-         "frame_times": [], "shots_taken": 0}
+         "frame_times": [], "shots_taken": 0, "bow": {}}
 
 
 def log(msg):
@@ -116,6 +118,19 @@ def verdict():
                        "%.1f kn at end" % coast[-1]["kn"]))
     checks.append(("never flipped", all(abs(s["roll"]) < 60 and abs(s["pitch"]) < 60 for s in state["samples"]), ""))
 
+    for phase in ("settle", "full ahead", "hard right"):
+        frames = state["bow"].get(phase, [])
+        if frames:
+            under = sum(1 for fb, _ in frames if fb < 0) / len(frames)
+            log("bow in %-10s: lowest %+.0f cm above water, under water %.0f%% of the time, pitch %.1f..%.1f deg (avg %.1f)"
+                % (phase, min(fb for fb, _ in frames), under * 100, min(p for _, p in frames), max(p for _, p in frames),
+                   sum(p for _, p in frames) / len(frames)))
+    ahead_bow = state["bow"].get("full ahead", [])
+    if ahead_bow:
+        under = sum(1 for fb, _ in ahead_bow if fb < 0) / len(ahead_bow)
+        checks.append(("bow stays above water at full ahead (under less than 5% of the time)", under < 0.05,
+                       "under %.0f%%" % (under * 100)))
+
     ok = True
     for name, passed, detail in checks:
         ok &= bool(passed)
@@ -166,6 +181,16 @@ def _tick(_dt):
                 return
             state["boat"] = boats[0]
             log("boat found: %s" % state["boat"].get_name())
+            if os.environ.get("RIPTIDE_TEST_CALM"):
+                # Flat water: shows how the hull trims on its own, without swell tilting it.
+                for ocean in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.WaterBodyOcean):
+                    ocean.set_water_waves(None)
+                state["wave_cm"] = 0.0
+                log("calm water (waves off)")
+            for pair in filter(None, os.environ.get("RIPTIDE_TEST_SET", "").split(",")):
+                name, value = pair.split("=")
+                state["boat"].set_editor_property(name.strip(), float(value))
+                log("override %s = %s" % (name.strip(), value))
             for ocean in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.WaterBodyOcean):
                 try:
                     wave_cm = ocean.get_water_body_component().get_max_wave_height()
@@ -178,6 +203,11 @@ def _tick(_dt):
         t = unreal.GameplayStatics.get_time_seconds(world)
         start, throttle, steer, phase = phase_at(t)
         boat.set_helm_input(throttle, steer)
+
+        # Bow height above the water, every frame, so brief dives into a swell aren't missed between samples.
+        if t >= 5.0:
+            bow = state["bow"].setdefault(phase, [])
+            bow.append((boat.get_bow_freeboard_cm(), boat.get_actor_rotation().pitch))
 
         if t >= state["next_log"]:
             sample(boat, t, phase)

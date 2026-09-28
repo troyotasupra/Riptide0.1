@@ -57,6 +57,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	float GetFuelLiters() const { return FuelLiters; }
 
+	/** Height of the bow's deck edge above the water there, in cm. Negative means the bow is under. */
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetBowFreeboardCm() const;
+
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UBoxComponent> HullBody;
@@ -91,7 +95,7 @@ protected:
 
 	/** Water resistance to bobbing up and down (N per m/s). Higher = the hull settles faster after a wave. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
-	float HeaveDamping = 3500.f;
+	float HeaveDamping = 6000.f;
 
 	/** How quickly the hull stops spinning, in 1/s. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
@@ -99,7 +103,18 @@ protected:
 
 	/** How quickly roll and pitch rocking dies out in the water, in 1/s. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
-	float RockDamping = 2.5f;
+	float RockDamping = 6.f;
+
+	/**
+	 * Hydrodynamic lift on the forward hull as it moves (N per (m/s)^2 of forward speed). Pushes the bow up
+	 * at speed so it rides over swells instead of burying. At ~15 kn this carries roughly a third of the weight.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float PlaningLift = 45.f;
+
+	/** Largest planing lift as a fraction of the boat's weight, so jumps off wave crests don't launch it. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull", meta = (ClampMin = "0", ClampMax = "1"))
+	float MaxPlaningLiftFraction = 0.4f;
 
 	// --- Engine ---
 
@@ -206,4 +221,7 @@ private:
 
 	/** Index of the buoyancy pontoon nearest the propeller, used to read the water height there. */
 	int32 SternPontoonIndex = INDEX_NONE;
+
+	/** Index of a bow pontoon, used to read the water height at the bow. */
+	int32 BowPontoonIndex = INDEX_NONE;
 };

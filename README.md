@@ -4,7 +4,7 @@ Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLA
 
 ## Current state: milestone 1 (the boat)
 - A placeholder skiff with a physics-driven outboard motor, floating on the Water plugin ocean.
-- The ocean test map (2 km of open sea) builds itself the first time the editor opens (`Content/Python/init_unreal.py`). To rebuild it after changing that script, delete `Content/Riptide/Maps/Ocean_Test.umap` with the editor closed.
+- The ocean test map (2 km of open sea with a moderate 1-1.5 m swell) builds itself the first time the editor opens (`Content/Python/init_unreal.py`). To rebuild it after changing that script, delete `Content/Riptide/Maps/Ocean_Test.umap` with the editor closed.
 - Builds and runs on Unreal Engine 5.7 (Windows, Visual Studio 2022).
 
 ## Handling test
