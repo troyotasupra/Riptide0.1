@@ -12,3 +12,4 @@ DerivedDataCache/
 *.opensdf
 Plugins/*/Binaries/
 Plugins/*/Intermediate/
+__pycache__/
