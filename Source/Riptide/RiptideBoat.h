@@ -41,6 +41,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Boat")
 	void ApplyEngineDamage(float Amount);
 
+	/**
+	 * Holds the helm controls as if keys were held: Throttle moves the lever (-1..1), Steer swings the motor (-1..1).
+	 * For AI helmsmen and automated handling tests; players drive through input. Server only.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Boat")
+	void SetHelmInput(float Throttle, float Steer);
+
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetThrottleLever() const { return ThrottleLever; }
+
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetEngineOutput() const { return EngineOutput; }
+
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetFuelLiters() const { return FuelLiters; }
+
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UBoxComponent> HullBody;
@@ -73,9 +89,17 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
 	float LateralDrag = 900.f;
 
+	/** Water resistance to bobbing up and down (N per m/s). Higher = the hull settles faster after a wave. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float HeaveDamping = 3500.f;
+
 	/** How quickly the hull stops spinning, in 1/s. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
 	float YawDamping = 1.2f;
+
+	/** How quickly roll and pitch rocking dies out in the water, in 1/s. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float RockDamping = 2.5f;
 
 	// --- Engine ---
 

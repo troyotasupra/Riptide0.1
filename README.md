@@ -4,8 +4,17 @@ Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLA
 
 ## Current state: milestone 1 (the boat)
 - A placeholder skiff with a physics-driven outboard motor, floating on the Water plugin ocean.
-- The ocean test map builds itself the first time the editor opens (`Content/Python/init_unreal.py`).
-- Code has not been compiled yet. Expect a round of fixes on the first build.
+- The ocean test map (2 km of open sea) builds itself the first time the editor opens (`Content/Python/init_unreal.py`). To rebuild it after changing that script, delete `Content/Riptide/Maps/Ocean_Test.umap` with the editor closed.
+- Builds and runs on Unreal Engine 5.7 (Windows, Visual Studio 2022).
+
+## Handling test
+`Tools/boat_handling_test.py` plays Ocean_Test hands-free and checks the boat floats, stays upright, drives, and steers the right way. Run it with the editor closed:
+
+```
+UnrealEditor Riptide.uproject -nullrhi -unattended -nosplash -nosound -ExecCmds="py <project>/Tools/boat_handling_test.py"
+```
+
+The result is at the end of `Saved/Logs/Riptide.log` (search for `RiptideTest`). Swap `-nullrhi` for `-RenderOffscreen` to also save helm-camera screenshots to `Saved/Screenshots` and report the frame rate.
 
 ## Helm controls
 | Action | Keyboard / mouse | Gamepad |

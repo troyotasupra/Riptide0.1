@@ -13,3 +13,6 @@ DerivedDataCache/
 Plugins/*/Binaries/
 Plugins/*/Intermediate/
 __pycache__/
+
+# Built by Content/Python/init_unreal.py on first editor launch
+Content/Riptide/Maps/Ocean_Test.umap
