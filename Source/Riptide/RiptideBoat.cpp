@@ -1,4 +1,4 @@
-#include "DeadwaterBoat.h"
+#include "RiptideBoat.h"
 
 #include "BuoyancyComponent.h"
 #include "Camera/CameraComponent.h"
@@ -27,7 +27,7 @@ namespace
 	const FVector HullExtent(300.f, 110.f, 35.f);
 }
 
-ADeadwaterBoat::ADeadwaterBoat()
+ARiptideBoat::ARiptideBoat()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true;
@@ -100,7 +100,7 @@ ADeadwaterBoat::ADeadwaterBoat()
 	SternPontoonIndex = Buoyancy->BuoyancyData.Pontoons.Num() - 1;
 }
 
-void ADeadwaterBoat::BeginPlay()
+void ARiptideBoat::BeginPlay()
 {
 	Super::BeginPlay();
 
@@ -111,20 +111,20 @@ void ADeadwaterBoat::BeginPlay()
 	}
 }
 
-void ADeadwaterBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	DOREPLIFETIME(ADeadwaterBoat, ThrottleLever);
-	DOREPLIFETIME(ADeadwaterBoat, EngineOutput);
-	DOREPLIFETIME(ADeadwaterBoat, SteerAngleDeg);
-	DOREPLIFETIME(ADeadwaterBoat, FuelLiters);
-	DOREPLIFETIME(ADeadwaterBoat, EngineHealth);
+	DOREPLIFETIME(ARiptideBoat, ThrottleLever);
+	DOREPLIFETIME(ARiptideBoat, EngineOutput);
+	DOREPLIFETIME(ARiptideBoat, SteerAngleDeg);
+	DOREPLIFETIME(ARiptideBoat, FuelLiters);
+	DOREPLIFETIME(ARiptideBoat, EngineHealth);
 }
 
 // --- Input ---
 
-void ADeadwaterBoat::BuildInput()
+void ARiptideBoat::BuildInput()
 {
 	if (HelmMapping)
 	{
@@ -166,7 +166,7 @@ void ADeadwaterBoat::BuildInput()
 	HelmMapping->MapKey(LookAction, EKeys::Gamepad_Right2D);
 }
 
-void ADeadwaterBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+void ARiptideBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
@@ -183,41 +183,41 @@ void ADeadwaterBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 
 	if (UEnhancedInputComponent* Input = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
-		Input->BindAction(ThrottleAction, ETriggerEvent::Triggered, this, &ADeadwaterBoat::OnThrottle);
-		Input->BindAction(ThrottleAction, ETriggerEvent::Completed, this, &ADeadwaterBoat::OnThrottleReleased);
-		Input->BindAction(SteerAction, ETriggerEvent::Triggered, this, &ADeadwaterBoat::OnSteer);
-		Input->BindAction(SteerAction, ETriggerEvent::Completed, this, &ADeadwaterBoat::OnSteerReleased);
-		Input->BindAction(CutThrottleAction, ETriggerEvent::Started, this, &ADeadwaterBoat::OnCutThrottle);
-		Input->BindAction(LookAction, ETriggerEvent::Triggered, this, &ADeadwaterBoat::OnLook);
+		Input->BindAction(ThrottleAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnThrottle);
+		Input->BindAction(ThrottleAction, ETriggerEvent::Completed, this, &ARiptideBoat::OnThrottleReleased);
+		Input->BindAction(SteerAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnSteer);
+		Input->BindAction(SteerAction, ETriggerEvent::Completed, this, &ARiptideBoat::OnSteerReleased);
+		Input->BindAction(CutThrottleAction, ETriggerEvent::Started, this, &ARiptideBoat::OnCutThrottle);
+		Input->BindAction(LookAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnLook);
 	}
 }
 
-void ADeadwaterBoat::OnThrottle(const FInputActionValue& Value)
+void ARiptideBoat::OnThrottle(const FInputActionValue& Value)
 {
 	ThrottleInput = FMath::Clamp(Value.Get<float>(), -1.f, 1.f);
 }
 
-void ADeadwaterBoat::OnThrottleReleased(const FInputActionValue& Value)
+void ARiptideBoat::OnThrottleReleased(const FInputActionValue& Value)
 {
 	ThrottleInput = 0.f;
 }
 
-void ADeadwaterBoat::OnSteer(const FInputActionValue& Value)
+void ARiptideBoat::OnSteer(const FInputActionValue& Value)
 {
 	SteerInput = FMath::Clamp(Value.Get<float>(), -1.f, 1.f);
 }
 
-void ADeadwaterBoat::OnSteerReleased(const FInputActionValue& Value)
+void ARiptideBoat::OnSteerReleased(const FInputActionValue& Value)
 {
 	SteerInput = 0.f;
 }
 
-void ADeadwaterBoat::OnCutThrottle(const FInputActionValue& Value)
+void ARiptideBoat::OnCutThrottle(const FInputActionValue& Value)
 {
 	bCutThrottleRequested = true;
 }
 
-void ADeadwaterBoat::OnLook(const FInputActionValue& Value)
+void ARiptideBoat::OnLook(const FInputActionValue& Value)
 {
 	const FVector2D Delta = Value.Get<FVector2D>();
 	LookYaw = FMath::Clamp(LookYaw + Delta.X * LookSensitivity, -170.f, 170.f);
@@ -225,7 +225,7 @@ void ADeadwaterBoat::OnLook(const FInputActionValue& Value)
 	HelmCamera->SetRelativeRotation(FRotator(LookPitch, LookYaw, 0.f));
 }
 
-void ADeadwaterBoat::ServerSetControls_Implementation(float InThrottleInput, float InSteerInput, bool bInCutThrottle)
+void ARiptideBoat::ServerSetControls_Implementation(float InThrottleInput, float InSteerInput, bool bInCutThrottle)
 {
 	ThrottleInput = FMath::Clamp(InThrottleInput, -1.f, 1.f);
 	SteerInput = FMath::Clamp(InSteerInput, -1.f, 1.f);
@@ -234,7 +234,7 @@ void ADeadwaterBoat::ServerSetControls_Implementation(float InThrottleInput, flo
 
 // --- Simulation ---
 
-void ADeadwaterBoat::Tick(float DeltaSeconds)
+void ARiptideBoat::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
@@ -258,7 +258,7 @@ void ADeadwaterBoat::Tick(float DeltaSeconds)
 	}
 }
 
-void ADeadwaterBoat::UpdateControls(float DeltaSeconds)
+void ARiptideBoat::UpdateControls(float DeltaSeconds)
 {
 	if (bCutThrottleRequested)
 	{
@@ -274,7 +274,7 @@ void ADeadwaterBoat::UpdateControls(float DeltaSeconds)
 	SteerAngleDeg = FMath::FInterpConstantTo(SteerAngleDeg, TargetSteer, DeltaSeconds, SteerRateDeg);
 }
 
-void ADeadwaterBoat::UpdateEngine(float DeltaSeconds)
+void ARiptideBoat::UpdateEngine(float DeltaSeconds)
 {
 	float Target = ThrottleLever;
 
@@ -300,7 +300,7 @@ void ADeadwaterBoat::UpdateEngine(float DeltaSeconds)
 	FuelLiters = FMath::Max(0.f, FuelLiters - FMath::Abs(EngineOutput) * FuelBurnPerSecond * DeltaSeconds);
 }
 
-bool ADeadwaterBoat::IsPropellerSubmerged() const
+bool ARiptideBoat::IsPropellerSubmerged() const
 {
 	if (!Buoyancy || !Buoyancy->IsInWaterBody() || !Buoyancy->BuoyancyData.Pontoons.IsValidIndex(SternPontoonIndex))
 	{
@@ -311,7 +311,7 @@ bool ADeadwaterBoat::IsPropellerSubmerged() const
 	return Stern.bIsInWater && Propeller->GetComponentLocation().Z < Stern.WaterHeight;
 }
 
-void ADeadwaterBoat::ApplyThrust()
+void ARiptideBoat::ApplyThrust()
 {
 	if (FMath::IsNearlyZero(EngineOutput, 0.001f) || !IsPropellerSubmerged())
 	{
@@ -328,7 +328,7 @@ void ADeadwaterBoat::ApplyThrust()
 	HullBody->AddForceAtLocation(ThrustDir * ThrustN * NewtonsToUnreal, Propeller->GetComponentLocation());
 }
 
-void ADeadwaterBoat::ApplyHydrodynamics()
+void ARiptideBoat::ApplyHydrodynamics()
 {
 	if (!Buoyancy || !Buoyancy->IsInWaterBody())
 	{
@@ -352,12 +352,12 @@ void ADeadwaterBoat::ApplyHydrodynamics()
 	HullBody->AddTorqueInRadians(-Up * YawRate * YawDamping, NAME_None, true);
 }
 
-float ADeadwaterBoat::GetSpeedKnots() const
+float ARiptideBoat::GetSpeedKnots() const
 {
 	return HullBody->GetComponentVelocity().Size() * CmPerSecToKnots;
 }
 
-void ADeadwaterBoat::ApplyEngineDamage(float Amount)
+void ARiptideBoat::ApplyEngineDamage(float Amount)
 {
 	if (HasAuthority())
 	{
@@ -365,7 +365,7 @@ void ADeadwaterBoat::ApplyEngineDamage(float Amount)
 	}
 }
 
-void ADeadwaterBoat::DrawDebugHud() const
+void ARiptideBoat::DrawDebugHud() const
 {
 	if (!GEngine)
 	{
@@ -373,7 +373,7 @@ void ADeadwaterBoat::DrawDebugHud() const
 	}
 
 	// Temporary readout for tuning the handling; replaced by real gauges later.
-	const uint64 KeyBase = 0xDEAD0000ull;
+	const uint64 KeyBase = 0x52495054ull;
 	GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
 		FString::Printf(TEXT("Speed %.1f kn   Throttle %+.0f%%   Engine %+.0f%%"),
 			GetSpeedKnots(), ThrottleLever * 100.f, EngineOutput * 100.f));

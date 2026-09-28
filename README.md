@@ -1,4 +1,4 @@
-# Deadwater
+# Riptide
 
 Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLAN.md`.
 

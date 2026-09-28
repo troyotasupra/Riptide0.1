@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
-#include "DeadwaterBoat.generated.h"
+#include "RiptideBoat.generated.h"
 
 class UBoxComponent;
 class UStaticMeshComponent;
@@ -21,12 +21,12 @@ struct FInputActionValue;
  * swell, and slides through turns until the keel bites.
  */
 UCLASS()
-class DEADWATER_API ADeadwaterBoat : public APawn
+class RIPTIDE_API ARiptideBoat : public APawn
 {
 	GENERATED_BODY()
 
 public:
-	ADeadwaterBoat();
+	ARiptideBoat();
 
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;

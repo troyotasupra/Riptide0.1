@@ -1,8 +1,8 @@
 using UnrealBuildTool;
 
-public class Deadwater : ModuleRules
+public class Riptide : ModuleRules
 {
-	public Deadwater(ReadOnlyTargetRules Target) : base(Target)
+	public Riptide(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 

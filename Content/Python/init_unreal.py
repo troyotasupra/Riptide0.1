@@ -2,7 +2,7 @@
 
 import unreal
 
-MAP_PATH = "/Game/Deadwater/Maps/Ocean_Test"
+MAP_PATH = "/Game/Riptide/Maps/Ocean_Test"
 
 
 def _spawn(actor_class, location=(0.0, 0.0, 0.0), yaw=0.0, pitch=0.0):
@@ -23,7 +23,7 @@ def _spawn_ocean():
         if ocean:
             return ocean
     except Exception as err:  # noqa: BLE001 - fall back to a plain spawn
-        unreal.log_warning(f"Deadwater: ocean factory spawn failed ({err}), using plain spawn")
+        unreal.log_warning(f"Riptide: ocean factory spawn failed ({err}), using plain spawn")
     return _spawn(unreal.WaterBodyOcean)
 
 
@@ -33,7 +33,7 @@ def build_ocean_test_map():
     if unreal.EditorAssetLibrary.does_asset_exist(MAP_PATH):
         return
 
-    unreal.log("Deadwater: building ocean test map")
+    unreal.log("Riptide: building ocean test map")
     levels.new_level(MAP_PATH)
 
     sun = _spawn(unreal.DirectionalLight, (0, 0, 5000), yaw=-40.0, pitch=-35.0)
@@ -55,10 +55,10 @@ def build_ocean_test_map():
 
     levels.save_current_level()
     levels.load_level(MAP_PATH)
-    unreal.log("Deadwater: ocean test map ready")
+    unreal.log("Riptide: ocean test map ready")
 
 
 try:
     build_ocean_test_map()
 except Exception as err:  # noqa: BLE001 - never block the editor from opening
-    unreal.log_error(f"Deadwater: could not build ocean test map: {err}")
+    unreal.log_error(f"Riptide: could not build ocean test map: {err}")

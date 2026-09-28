@@ -1,4 +1,4 @@
-# Working title: **Deadwater**: game design plan
+# **Riptide**: game design plan
 
 A modern-day open-ocean survival and extraction game. It plays like Sea of Thieves, but the boats have engines, the pirates carry rifles, and the islands hide sealed military facilities.
 

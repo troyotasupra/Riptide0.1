@@ -5,7 +5,7 @@
 	"Description": "Co-op naval survival shooter",
 	"Modules": [
 		{
-			"Name": "Deadwater",
+			"Name": "Riptide",
 			"Type": "Runtime",
 			"LoadingPhase": "Default",
 			"AdditionalDependencies": [ "Engine" ]

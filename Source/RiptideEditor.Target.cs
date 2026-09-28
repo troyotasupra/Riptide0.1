@@ -1,12 +1,12 @@
 using UnrealBuildTool;
 
-public class DeadwaterEditorTarget : TargetRules
+public class RiptideEditorTarget : TargetRules
 {
-	public DeadwaterEditorTarget(TargetInfo Target) : base(Target)
+	public RiptideEditorTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Editor;
 		DefaultBuildSettings = BuildSettingsVersion.Latest;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Latest;
-		ExtraModuleNames.Add("Deadwater");
+		ExtraModuleNames.Add("Riptide");
 	}
 }
