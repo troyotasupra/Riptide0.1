@@ -147,7 +147,8 @@ Military-style bunkers with the same feel as the caves and bunkers in Sons of th
 - It turns base building into a real crew project: one mixes, two haul buckets, one keeps watch.
 
 ## Locked-in decisions
-- **Co-op crew of up to 4.** Friends share one boat: driver, gunner, and two more to repair, bail, navigate or go ashore. It should still be playable with fewer players.
+- **Co-op crew of up to 6.** Friends share one boat: driver, gunner, and the rest repair, bail, navigate or go ashore. Bigger crews can split across two boats. It should still be playable solo.
+- **Realistic art style.** Realistic water, lighting, terrain and models. The free low-poly models from the Godot version are placeholders until realistic ones replace them.
 - **Realistic boat handling.** Weight, momentum, wave behavior and engine limits all matter. Skill at driving the boat counts.
 - **Setting:** a made-up island chain with a tropical paradise look: clear turquoise water, white sand, palms, jungle and reefs. The paradise surface hides abandoned military bunkers underneath.
 - **First-person** everywhere, including at the helm.

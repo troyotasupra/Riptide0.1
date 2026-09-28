@@ -4,6 +4,7 @@ Riptide is a co-op survival game on a hostile modern sea, built in **Unreal Engi
 
 ## Who
 - **Troy** (`troyotasupra`, they/them) is the designer and playtester, and doesn't want to handle technical detail. Claude builds the game.
+- **Josh** (`JoshuaGessner`) is a developer on macOS. Everything has to build on both Windows and macOS, so never add Windows-only code or tools without a Mac equivalent. Assume Josh may be editing the same files.
 - Troy's PC: Windows 11, Ryzen 5 2600X, 32 GB RAM, RTX 3060. Target 1080p at 60 fps.
 
 ## Troy's rules

@@ -66,7 +66,7 @@ The Godot version (`troyotasupra/Riptide`, Godot 4.7, about 28,000 lines of GDSc
 
 These are about 110 MB. The Godot repo stored them without Git LFS, so this repo will take them through LFS.
 
-## Conflicts between the two plans, for Troy to settle
-- **Crew size:** the Godot build supports 1–6 players, and the new plan says up to 4.
-- **Art style:** Godot went stylized low-poly (Quaternius). Unreal makes realistic visuals much more reachable. Stylized keeps the free assets usable as they are.
-- **Second developer:** Josh (`JoshuaGessner`) worked on the Godot build on macOS. Unreal C++ on a Mac needs Xcode and a different setup, so decide whether Josh comes along.
+## Decisions (settled by Troy)
+- **Crew size:** up to 6 players.
+- **Art style:** realistic. The Quaternius low-poly models are placeholders until realistic ones replace them. The CC0 photo textures (Poly Haven, ambientCG) already fit.
+- **Josh comes along.** The project has to build and run on macOS as well as Windows.
