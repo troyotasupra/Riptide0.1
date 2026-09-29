@@ -30,6 +30,15 @@ public:
 		float DriftPerSecond = 0.f;
 		float LifeSeconds = 8.f;
 		float Opacity = 0.8f;
+		/** How far the trail meanders side to side, in cm: at birth and once fully aged. */
+		float WobbleAtBirth = 10.f;
+		float WobbleWhenOld = 80.f;
+		/** Length of one meander along the trail, in cm. */
+		float WobbleWavelength = 900.f;
+		/** How much the width swells and thins along the trail (0 = even, 0.5 = +/-50%). */
+		float WidthVariation = 0.35f;
+		/** How patchy the foam gets along the trail (0 = even, 1 = gaps). */
+		float Patchiness = 0.4f;
 	};
 
 	/** Adds a trail with the given style and returns its index. */
@@ -59,6 +68,8 @@ private:
 		FVector2D Position;
 		FVector2D Side;
 		float Height = 0.f;
+		/** Distance along the trail since it began, in cm; drives the meander and patchiness. */
+		float Distance = 0.f;
 		float Age = 0.f;
 		float Strength = 0.f;
 		bool bStartsStrip = false;
@@ -70,6 +81,9 @@ private:
 		TArray<FPoint> Points;
 		bool bEmitting = false;
 		FVector2D LastEmitted = FVector2D::ZeroVector;
+		float Distance = 0.f;
+		/** Random offset into the noise, so no two trails meander alike. */
+		float NoiseSeed = 0.f;
 	};
 
 	TArray<FTrail> Trails;

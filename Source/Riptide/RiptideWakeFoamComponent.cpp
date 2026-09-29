@@ -24,6 +24,7 @@ int32 URiptideWakeFoamComponent::AddTrail(const FTrailStyle& Style)
 {
 	FTrail& Trail = Trails.AddDefaulted_GetRef();
 	Trail.Style = Style;
+	Trail.NoiseSeed = FMath::FRandRange(0.f, 1000.f);
 	return Trails.Num() - 1;
 }
 
@@ -68,8 +69,13 @@ void URiptideWakeFoamComponent::UpdateTrail(int32 TrailIndex, float DeltaSeconds
 		Trail.Points.RemoveAt(0, 1, EAllowShrinking::No);
 		Trail.Points[0].bStartsStrip = true;
 	}
+	if (Trail.bEmitting)
+	{
+		Trail.Distance += FVector2D::Distance(Here, Trail.LastEmitted);
+	}
 	FPoint& Point = Trail.Points.AddDefaulted_GetRef();
 	Point.Position = Here;
+	Point.Distance = Trail.Distance;
 	Point.Side = FVector2D(Side.X, Side.Y).GetSafeNormal();
 	Point.Height = Location.Z;
 	Point.Strength = FMath::Clamp(Strength, 0.f, 1.f);
@@ -94,8 +100,19 @@ void URiptideWakeFoamComponent::RebuildMesh()
 		{
 			const FPoint& Point = Trail.Points[i];
 			const float Life01 = FMath::Clamp(Point.Age / Style.LifeSeconds, 0.f, 1.f);
-			const float HalfWidth = Style.StartHalfWidth + Style.GrowthPerSecond * Point.Age;
-			const FVector2D Centre2D = Point.Position + Point.Side * Style.DriftPerSecond * Point.Age;
+
+			// Nothing on water is straight: the trail meanders (more as it ages and drifts), swells and thins,
+			// and breaks into patches. Smooth noise along the trail's length, slowly shifting with age, keeps it
+			// flowing rather than jittery.
+			const float Along = Point.Distance / Style.WobbleWavelength + Trail.NoiseSeed;
+			const float Meander = FMath::PerlinNoise1D(Along + Point.Age * 0.15f);
+			// PerlinNoise1D spans -1..1.
+			const float Wobble = FMath::Lerp(Style.WobbleAtBirth, Style.WobbleWhenOld, Life01) * Meander;
+			const float Swell = 1.f + Style.WidthVariation * FMath::PerlinNoise1D(Along * 2.3f + 37.f);
+			const float Patch = 1.f - Style.Patchiness * FMath::Clamp(0.5f + FMath::PerlinNoise1D(Along * 3.1f + 71.f), 0.f, 1.f);
+
+			const float HalfWidth = (Style.StartHalfWidth + Style.GrowthPerSecond * Point.Age) * FMath::Max(Swell, 0.2f);
+			const FVector2D Centre2D = Point.Position + Point.Side * (Style.DriftPerSecond * Point.Age + Wobble);
 
 			// Sit on the moving water surface, waves included, when we know it; otherwise at the height the foam was made.
 			float Z = Point.Height;
@@ -112,7 +129,7 @@ void URiptideWakeFoamComponent::RebuildMesh()
 			const FVector Across(Point.Side * HalfWidth, 0.f);
 
 			// Fades out with age, and the strip's two ends fade in so it has no hard edges.
-			float Alpha = Style.Opacity * Point.Strength * FMath::Pow(1.f - Life01, 1.5f);
+			float Alpha = Style.Opacity * Point.Strength * FMath::Pow(1.f - Life01, 1.5f) * Patch;
 			const bool bEnd = Point.bStartsStrip || i + 1 == Trail.Points.Num() || Trail.Points[i + 1].bStartsStrip;
 			if (bEnd)
 			{

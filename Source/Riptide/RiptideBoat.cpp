@@ -201,20 +201,31 @@ void ARiptideBoat::StartWakeFoam()
 
 	// Churned water from the prop: a wide band that spreads and lingers.
 	URiptideWakeFoamComponent::FTrailStyle Churn;
-	Churn.StartHalfWidth = HullExtent.Y * 0.6f;
-	Churn.GrowthPerSecond = 35.f;
+	Churn.StartHalfWidth = HullExtent.Y * 0.8f;
+	Churn.GrowthPerSecond = 65.f;
 	Churn.LifeSeconds = 9.f;
 	Churn.Opacity = 0.7f;
+	Churn.WobbleAtBirth = 5.f;
+	Churn.WobbleWhenOld = 40.f;
+	Churn.WobbleWavelength = 1200.f;
+	Churn.WidthVariation = 0.3f;
+	Churn.Patchiness = 0.35f;
 	SternFoamTrail = WakeFoam->AddTrail(Churn);
 
 	// Bow wash: narrow lines peeling off each shoulder and drifting outward, making the wake's V. A boat's wake
 	// spreads at about 19.5 degrees each side: roughly 2.5 m/s outward at 15 kn.
 	URiptideWakeFoamComponent::FTrailStyle Wash;
 	Wash.StartHalfWidth = 20.f;
-	Wash.GrowthPerSecond = 15.f;
-	Wash.DriftPerSecond = 200.f;
+	Wash.GrowthPerSecond = 18.f;
+	Wash.DriftPerSecond = 300.f;
 	Wash.LifeSeconds = 6.f;
-	Wash.Opacity = 0.45f;
+	Wash.Opacity = 0.5f;
+	// Straight arms ramping outward, just slightly uneven and broken into fragments.
+	Wash.WobbleAtBirth = 5.f;
+	Wash.WobbleWhenOld = 35.f;
+	Wash.WobbleWavelength = 600.f;
+	Wash.WidthVariation = 0.5f;
+	Wash.Patchiness = 0.7f;
 	PortBowFoamTrail = WakeFoam->AddTrail(Wash);
 	StarboardBowFoamTrail = WakeFoam->AddTrail(Wash);
 
@@ -241,7 +252,7 @@ void ARiptideBoat::UpdateWakeFoam(float DeltaSeconds)
 
 	// Bow wash only once the hull is moving properly.
 	const float Wash = FMath::Clamp((GetSpeedKnots() - 3.f) / (FoamFullSpeedKnots - 3.f), 0.f, 1.f) * (bInWater ? 1.f : 0.f);
-	const FVector Shoulder(HullExtent.X * 0.5f, HullExtent.Y, WaterlineZ);
+	const FVector Shoulder(HullExtent.X * 0.8f, HullExtent.Y * 0.8f, WaterlineZ);
 	WakeFoam->UpdateTrail(PortBowFoamTrail, DeltaSeconds, Xf.TransformPosition(Shoulder * FVector(1.f, -1.f, 1.f)), -Right, Wash);
 	WakeFoam->UpdateTrail(StarboardBowFoamTrail, DeltaSeconds, Xf.TransformPosition(Shoulder), Right, Wash);
 
