@@ -14,6 +14,8 @@
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
+#include "Kismet/GameplayStatics.h"
+#include "UObject/StructOnScope.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -85,6 +87,11 @@ ARiptideBoat::ARiptideBoat()
 	HelmCamera->SetRelativeLocation(FVector(-HullExtent.X * 0.5f, 0.f, HullExtent.Z + 150.f));
 	HelmCamera->bUsePawnControlRotation = false;
 
+	// Under the hull bottom, so the wake simulation sees it below the surface.
+	WakeSource = CreateDefaultSubobject<USceneComponent>(TEXT("WakeSource"));
+	WakeSource->SetupAttachment(HullBody);
+	WakeSource->SetRelativeLocation(FVector(0.f, 0.f, -HullExtent.Z));
+
 	// Weight sits low and aft (engine, fuel, crew on the floor), which keeps the hull from rolling over.
 	HullBody->BodyInstance.COMNudge = FVector(-30.f, 0.f, -30.f);
 
@@ -138,6 +145,96 @@ void ARiptideBoat::BeginPlay()
 	{
 		FuelLiters = FuelCapacityLiters;
 	}
+
+	// The wake is purely visual, so every machine registers its own copy of the boat.
+	RegisterWithWakeSimulation();
+}
+
+void ARiptideBoat::RegisterWithWakeSimulation()
+{
+	// The Water plugin's fluid simulation (BP_FluidSim_01) ripples the water surface around the local player.
+	// It's a Blueprint, so its "Register Dynamic Force" function and FluidForceDynamic struct are reached
+	// through reflection, matching the struct's fields by their name prefix.
+	static const TCHAR* SimClassPath = TEXT("/Water/FluidSimulation/Blueprints/BP_FluidSim_01.BP_FluidSim_01_C");
+	UClass* SimClass = LoadClass<AActor>(nullptr, SimClassPath);
+	AActor* Sim = SimClass ? UGameplayStatics::GetActorOfClass(this, SimClass) : nullptr;
+	if (!Sim)
+	{
+		return;
+	}
+
+	UFunction* Register = Sim->FindFunction(TEXT("Register Dynamic Force"));
+	if (!Register)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Riptide: wake simulation has no 'Register Dynamic Force'; no wake for %s"), *GetName());
+		return;
+	}
+
+	auto SetNumber = [](FProperty* Prop, void* Container, double Value)
+	{
+		if (FNumericProperty* Num = CastField<FNumericProperty>(Prop))
+		{
+			void* Ptr = Num->ContainerPtrToValuePtr<void>(Container);
+			if (Num->IsFloatingPoint())
+			{
+				Num->SetFloatingPointPropertyValue(Ptr, Value);
+			}
+		}
+	};
+	auto SetObject = [](FProperty* Prop, void* Container, UObject* Value)
+	{
+		if (FObjectPropertyBase* Obj = CastField<FObjectPropertyBase>(Prop))
+		{
+			Obj->SetObjectPropertyValue(Obj->ContainerPtrToValuePtr<void>(Container), Value);
+		}
+	};
+
+	FStructOnScope Params(Register);
+	uint8* ParamMemory = Params.GetStructMemory();
+	bool bFilledForce = false;
+	for (TFieldIterator<FProperty> It(Register); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
+	{
+		FProperty* Param = *It;
+		const FString ParamName = Param->GetName();
+		if (FStructProperty* ForceParam = CastField<FStructProperty>(Param))
+		{
+			void* Force = ForceParam->ContainerPtrToValuePtr<void>(ParamMemory);
+			for (TFieldIterator<FProperty> Field(ForceParam->Struct); Field; ++Field)
+			{
+				const FString FieldName = Field->GetName();
+				if (FieldName.StartsWith(TEXT("ForceRadius")))
+				{
+					SetNumber(*Field, Force, WakeRadius);
+				}
+				else if (FieldName.StartsWith(TEXT("ForceStrength")))
+				{
+					SetNumber(*Field, Force, WakeStrength);
+				}
+				else if (FieldName.StartsWith(TEXT("ForceComponent")))
+				{
+					SetObject(*Field, Force, WakeSource);
+					bFilledForce = true;
+				}
+			}
+		}
+		else if (ParamName.StartsWith(TEXT("Tracked")))
+		{
+			SetObject(Param, ParamMemory, WakeSource);
+		}
+		else if (ParamName.StartsWith(TEXT("WaterLevel")))
+		{
+			// Sea level. The test maps put the ocean surface at Z = 0.
+			SetNumber(Param, ParamMemory, 0.0);
+		}
+	}
+
+	if (!bFilledForce)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Riptide: wake simulation's force struct didn't match; no wake for %s"), *GetName());
+		return;
+	}
+	Sim->ProcessEvent(Register, ParamMemory);
+	UE_LOG(LogTemp, Log, TEXT("Riptide: %s registered with the wake simulation"), *GetName());
 }
 
 void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -336,8 +433,10 @@ bool ARiptideBoat::IsPropellerSubmerged() const
 		return false;
 	}
 
+	// Compare the prop with the water surface at the stern directly. The stern pontoon itself can sit
+	// clear of the water while the prop, which hangs lower, is still under.
 	const FSphericalPontoon& Stern = Buoyancy->BuoyancyData.Pontoons[SternPontoonIndex];
-	return Stern.bIsInWater && Propeller->GetComponentLocation().Z < Stern.WaterHeight;
+	return Propeller->GetComponentLocation().Z < Stern.WaterHeight;
 }
 
 void ARiptideBoat::ApplyThrust()

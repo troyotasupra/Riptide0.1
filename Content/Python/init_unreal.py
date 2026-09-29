@@ -80,6 +80,24 @@ def _set_swell(ocean):
     unreal.log(f"Riptide: swell up to {ocean.get_water_body_component().get_max_wave_height():.0f} cm")
 
 
+# The Water plugin's fluid simulation ripples the ocean surface around the player; boats push their wake into it.
+WAKE_SIM_CLASS = "/Water/FluidSimulation/Blueprints/BP_FluidSim_01.BP_FluidSim_01_C"
+
+
+def _spawn_wake_sim(ocean):
+    sim_class = unreal.load_class(None, WAKE_SIM_CLASS)
+    if not sim_class:
+        unreal.log_warning("Riptide: water fluid simulation not found, boats will leave no wake")
+        return
+    sim = _spawn(sim_class)
+    sim.set_editor_property("WaterBody", ocean)
+    sim.set_editor_property("Follow Player ", True)  # the Blueprint's variable name has a trailing space
+    # A 40 m patch lets the wake spread out behind the boat. Extra damping fades the wake's side waves
+    # before they steepen into dark creases.
+    sim.set_editor_property("Simulation World Size", 4096.0)
+    sim.set_editor_property("Damping", 0.15)
+
+
 def build_ocean_test_map():
     levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 
@@ -104,6 +122,7 @@ def build_ocean_test_map():
     ocean = _spawn_ocean()
     _open_up_sea(zone, ocean)
     _set_swell(ocean)
+    _spawn_wake_sim(ocean)
 
     # The boat spawns here and drops onto the water.
     _spawn(unreal.PlayerStart, (0, 0, 150))

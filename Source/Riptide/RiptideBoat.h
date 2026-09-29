@@ -77,6 +77,18 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UCameraComponent> HelmCamera;
 
+	/** Point under the hull that pushes the water plugin's wake simulation, if the level has one. */
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<USceneComponent> WakeSource;
+
+	/** Radius of the hull's push on the wake simulation, in cm. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float WakeRadius = 250.f;
+
+	/** How hard the hull pushes the wake simulation. 1 is the simulation's standard force. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float WakeStrength = 1.5f;
+
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UBuoyancyComponent> Buoyancy;
 
@@ -182,6 +194,7 @@ private:
 	void ApplyThrust();
 	void ApplyHydrodynamics();
 	void DrawDebugHud() const;
+	void RegisterWithWakeSimulation();
 
 	void OnThrottle(const FInputActionValue& Value);
 	void OnThrottleReleased(const FInputActionValue& Value);
