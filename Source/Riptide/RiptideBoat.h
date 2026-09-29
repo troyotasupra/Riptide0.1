@@ -87,6 +87,39 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UCameraComponent> HelmCamera;
 
+	// The wake is the Water plugin's fluid simulation (BP_FluidSim_01): a ripple solver on a patch of water that
+	// follows the player. The hull pushes it with Epic's boat force (a hull-shaped push plus foam), so the waves
+	// and foam form a real V behind the boat. The push's strength comes from the hull's speed; how hard that
+	// disturbs the water is set by HeightScale and FoamScale on MI_WakeForce (Content/Python/init_unreal.py).
+
+	/** Point at the hull's waterline that pushes the wake simulation. */
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Wake")
+	TObjectPtr<USceneComponent> WakeSource;
+
+	/** Material the wake simulation draws the hull's push with. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	TSoftObjectPtr<UMaterialInterface> WakeForceMaterial;
+
+	/** Half the length of the hull's footprint on the wake simulation, in cm. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float WakeRadius = 300.f;
+
+	/** Size of the patch of water the wake simulation covers around the player, in cm. Bigger makes a longer
+	 * wake at a coarser grid (the simulation is 1024 cells across). */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float WakeSimulationSize = 8192.f;
+
+	/** How fast ripples cross the simulation, in grid cells per step (at most 1). With the patch size this sets
+	 * the ripple speed, and the V opens wider the closer that gets to the boat's speed. 0.45 on an 80 m patch is
+	 * about 3.2 m/s, giving a V close to a real wake at cruising speed. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float WakeSimulationWaveSpeed = 0.45f;
+
+	/** How quickly the simulation's ripples die out. Low keeps the V's arms trailing well behind the boat;
+	 * high (the simulation's own 0.05 and up) smothers them. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float WakeSimulationDamping = 0.02f;
+
 	/** White foam on the water: churned water behind the transom and wash peeling off the bow. */
 	UPROPERTY(VisibleAnywhere, Category = "Boat|Wake")
 	TObjectPtr<URiptideWakeFoamComponent> WakeFoam;
@@ -273,6 +306,8 @@ private:
 	void ApplyThrust();
 	void ApplyHydrodynamics();
 	void DrawDebugHud() const;
+	void RegisterWithWakeSimulation();
+	AActor* SpawnWakeSimulation(UClass* SimClass);
 	void StartSounds();
 	void UpdateSounds(float DeltaSeconds);
 	void StartWakeFoam();
@@ -325,8 +360,6 @@ private:
 	TObjectPtr<USoundAttenuation> SoundFalloff;
 
 	int32 SternFoamTrail = INDEX_NONE;
-	int32 PortBowFoamTrail = INDEX_NONE;
-	int32 StarboardBowFoamTrail = INDEX_NONE;
 	float ChurnLevel = 0.f;
 
 	bool bEngineSoundRunning = false;

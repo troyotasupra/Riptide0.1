@@ -155,6 +155,66 @@ def _sampler_type_for(texture):
 # Bump when the material recipe below changes, so every machine rebuilds it on its next launch.
 WAKE_FOAM_VERSION = "2"
 
+# The hull's push on the Water plugin's wake simulation. Epic's boat force material draws a hull-shaped push
+# (from T_BoatForceFoam, turned to the boat's heading) into the simulation's red channel and foam into green,
+# scaled by F, which the simulation sets from the hull's speed. For a boat this size that piles the water into
+# metre-high hills, so M_WakeForce is a copy of Epic's material with the output scaled by HeightScale (push)
+# and FoamScale (foam), and MI_WakeForce sets those two values.
+WAKE_FORCE_SOURCE = "/Water/FluidSimulation/Materials/Forces/M_Fluid_Sim_Force_Boat_Component"
+WAKE_FORCE_VERSION = "2"
+WAKE_FORCE_SETTINGS = {"HeightScale": 0.025, "FoamScale": 1.0}
+
+
+def make_wake_force_material():
+    mel = unreal.MaterialEditingLibrary
+    assets = unreal.EditorAssetLibrary
+    base_path = f"{MATERIALS_PATH}/M_WakeForce"
+    if assets.does_asset_exist(base_path) and \
+            assets.get_metadata_tag(unreal.load_asset(base_path), "RiptideVersion") != WAKE_FORCE_VERSION:
+        assets.delete_asset(f"{MATERIALS_PATH}/MI_WakeForce")
+        assets.delete_asset(base_path)
+    if not assets.does_asset_exist(base_path):
+        unreal.log("Riptide: creating wake force material")
+        base = assets.duplicate_asset(WAKE_FORCE_SOURCE, base_path)
+        output = mel.get_material_property_input_node(base, unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+        height = mel.create_material_expression(base, unreal.MaterialExpressionScalarParameter, 400, 300)
+        height.set_editor_property("parameter_name", "HeightScale")
+        height.set_editor_property("default_value", 1.0)
+        foam = mel.create_material_expression(base, unreal.MaterialExpressionScalarParameter, 400, 420)
+        foam.set_editor_property("parameter_name", "FoamScale")
+        foam.set_editor_property("default_value", 1.0)
+        # (HeightScale, FoamScale, 1): the output is RGB with the push in red and foam in green.
+        scales_rg = mel.create_material_expression(base, unreal.MaterialExpressionAppendVector, 600, 350)
+        one = mel.create_material_expression(base, unreal.MaterialExpressionConstant, 600, 480)
+        one.set_editor_property("r", 1.0)
+        scales = mel.create_material_expression(base, unreal.MaterialExpressionAppendVector, 700, 400)
+        scaled = mel.create_material_expression(base, unreal.MaterialExpressionMultiply, 850, 200)
+        mel.connect_material_expressions(height, "", scales_rg, "A")
+        mel.connect_material_expressions(foam, "", scales_rg, "B")
+        mel.connect_material_expressions(scales_rg, "", scales, "A")
+        mel.connect_material_expressions(one, "", scales, "B")
+        mel.connect_material_expressions(output, "", scaled, "A")
+        mel.connect_material_expressions(scales, "", scaled, "B")
+        mel.connect_material_property(scaled, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+        mel.recompile_material(base)
+        assets.set_metadata_tag(base, "RiptideVersion", WAKE_FORCE_VERSION)
+        assets.save_asset(base_path, only_if_is_dirty=False)
+
+    path = f"{MATERIALS_PATH}/MI_WakeForce"
+    if not assets.does_asset_exist(path):
+        unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            "MI_WakeForce", MATERIALS_PATH, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+    mi = unreal.load_asset(path)
+    changed = mi.get_editor_property("parent") != unreal.load_asset(base_path)
+    if changed:
+        mel.set_material_instance_parent(mi, unreal.load_asset(base_path))
+    for name, value in WAKE_FORCE_SETTINGS.items():
+        if abs(mel.get_material_instance_scalar_parameter_value(mi, name) - value) > 1e-5:
+            mel.set_material_instance_scalar_parameter_value(mi, name, value)
+            changed = True
+    if changed:
+        assets.save_asset(path, only_if_is_dirty=False)
+
 
 def make_materials():
     """M_WakeFoam: white foam for boat wakes. The foam texture is mapped in world space (so it doesn't stretch
@@ -264,6 +324,7 @@ except Exception as err:  # noqa: BLE001 - never block the editor from opening
 
 try:
     make_materials()
+    make_wake_force_material()
 except Exception as err:  # noqa: BLE001 - never block the editor from opening
     unreal.log_error(f"Riptide: could not create materials: {err}")
 

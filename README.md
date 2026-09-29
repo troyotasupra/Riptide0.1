@@ -5,7 +5,7 @@ Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLA
 ## Current state: milestone 1 (the boat)
 - A placeholder skiff with a physics-driven outboard motor, floating on the Water plugin ocean.
 - The ocean test map (2 km of open sea with a moderate 1-1.5 m swell) builds itself the first time the editor opens (`Content/Python/init_unreal.py`). To rebuild it after changing that script, delete `Content/Riptide/Maps/Ocean_Test.umap` with the editor closed.
-- The boat leaves a white foam wake: churned water behind the transom and wash lines spreading from the bow in a V. The foam rides the swell and fades over several seconds (`RiptideWakeFoamComponent`, material built by `init_unreal.py`).
+- The boat leaves a real wake: its hull pushes the Water plugin's fluid simulation (Epic's boat force, scaled for a small hull), so waves and foam spread behind it in a V; white prop churn trails from the transom (`RiptideWakeFoamComponent`). Materials are built by `init_unreal.py`.
 - Sound: the engine revs with the throttle and races when the prop leaves the water; water wash rises with speed; the bow slaps into waves; ocean ambience all around. Sounds are imported from `SourceAssets/Audio` when the editor opens (credits in `Docs/CREDITS.md`).
 - Builds and runs on Unreal Engine 5.7 (Windows, Visual Studio 2022).
 
