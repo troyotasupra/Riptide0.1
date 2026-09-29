@@ -8,7 +8,7 @@ public class Riptide : ModuleRules
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
-			"Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Water"
+			"Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Water", "ProceduralMeshComponent", "Niagara"
 		});
 	}
 }

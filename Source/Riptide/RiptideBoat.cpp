@@ -16,9 +16,13 @@
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
 #include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/App.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
+#include "RiptideWakeFoamComponent.h"
+#include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
-#include "UObject/StructOnScope.h"
 #include "Net/UnrealNetwork.h"
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
@@ -94,10 +98,12 @@ ARiptideBoat::ARiptideBoat()
 	HelmCamera->SetRelativeLocation(FVector(-HullExtent.X * 0.5f, 0.f, HullExtent.Z + 150.f));
 	HelmCamera->bUsePawnControlRotation = false;
 
-	// Under the hull bottom, so the wake simulation sees it below the surface.
-	WakeSource = CreateDefaultSubobject<USceneComponent>(TEXT("WakeSource"));
-	WakeSource->SetupAttachment(HullBody);
-	WakeSource->SetRelativeLocation(FVector(0.f, 0.f, -HullExtent.Z));
+	// Foam is laid in world space; the component ignores the hull's transform.
+	WakeFoam = CreateDefaultSubobject<URiptideWakeFoamComponent>(TEXT("WakeFoam"));
+	WakeFoam->SetupAttachment(HullBody);
+	WakeFoamMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Riptide/Materials/M_WakeFoam.M_WakeFoam")));
+	// No bow spray effect yet: the engine's Niagara templates make sparks, not spray. SprayAtBow does nothing
+	// until BowSpraySystem is set to a proper spray effect.
 
 	// The engine sounds from the motor; the wash from the hull at the waterline.
 	EngineAudio = CreateDefaultSubobject<UAudioComponent>(TEXT("EngineAudio"));
@@ -176,49 +182,85 @@ void ARiptideBoat::BeginPlay()
 		FuelLiters = FuelCapacityLiters;
 	}
 
-	// The wake and sounds are cosmetic, so every machine runs its own for each boat.
-	RegisterWithWakeSimulation();
+	// The wake foam and sounds are cosmetic, so every machine runs its own for each boat.
 	StartSounds();
+	StartWakeFoam();
 }
 
-AActor* ARiptideBoat::SpawnWakeSimulation(UClass* SimClass)
+void ARiptideBoat::StartWakeFoam()
 {
-	// Each machine runs its own simulation around its own player, so it's created locally rather than placed
-	// in the level. It renders into textures, so machines that can't render (dedicated servers, headless test
-	// runs) skip it; its setup divides by the render size and crashes without a renderer.
 	if (!FApp::CanEverRender())
 	{
-		return nullptr;
+		return;
 	}
-	AActor* Ocean = UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass());
-	if (!Ocean)
+	WakeFoam->SetMaterial(0, WakeFoamMaterial.LoadSynchronous());
+	if (AWaterBodyOcean* Ocean = Cast<AWaterBodyOcean>(UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass())))
 	{
-		return nullptr;
+		WakeFoam->SetWaterBody(Ocean->GetWaterBodyComponent());
 	}
 
-	// Settings go in before the Blueprint's construction script runs, which sizes its render targets from them.
-	AActor* Sim = GetWorld()->SpawnActorDeferred<AActor>(SimClass, FTransform(GetActorLocation()));
-	if (!Sim)
+	// Churned water from the prop: a wide band that spreads and lingers.
+	URiptideWakeFoamComponent::FTrailStyle Churn;
+	Churn.StartHalfWidth = HullExtent.Y * 0.6f;
+	Churn.GrowthPerSecond = 35.f;
+	Churn.LifeSeconds = 9.f;
+	Churn.Opacity = 0.7f;
+	SternFoamTrail = WakeFoam->AddTrail(Churn);
+
+	// Bow wash: narrow lines peeling off each shoulder and drifting outward, making the wake's V. A boat's wake
+	// spreads at about 19.5 degrees each side: roughly 2.5 m/s outward at 15 kn.
+	URiptideWakeFoamComponent::FTrailStyle Wash;
+	Wash.StartHalfWidth = 20.f;
+	Wash.GrowthPerSecond = 15.f;
+	Wash.DriftPerSecond = 200.f;
+	Wash.LifeSeconds = 6.f;
+	Wash.Opacity = 0.45f;
+	PortBowFoamTrail = WakeFoam->AddTrail(Wash);
+	StarboardBowFoamTrail = WakeFoam->AddTrail(Wash);
+
+	BowSpraySystem.LoadSynchronous();
+}
+
+void ARiptideBoat::UpdateWakeFoam(float DeltaSeconds)
+{
+	if (SternFoamTrail == INDEX_NONE)
 	{
-		return nullptr;
+		return;
 	}
-	auto Set = [Sim](const TCHAR* Name, TFunctionRef<void(FProperty*, void*)> Apply)
+
+	const FTransform& Xf = HullBody->GetComponentTransform();
+	const FVector Right = FVector::VectorPlaneProject(Xf.GetUnitAxis(EAxis::Y), FVector::UpVector).GetSafeNormal();
+	const bool bInWater = Buoyancy && Buoyancy->IsInWaterBody();
+	const float Speed01 = bInWater ? FMath::Clamp(GetSpeedKnots() / FoamFullSpeedKnots, 0.f, 1.f) : 0.f;
+
+	// Prop churn: from moving through the water, and from the prop turning even at low speed. It builds quickly
+	// but dies away slowly, so the prop lifting clear on a swell for a moment thins the trail instead of breaking it.
+	const float ChurnTarget = IsPropellerSubmerged() ? FMath::Max(Speed01, 0.35f * FMath::Abs(EngineOutput)) : 0.f;
+	ChurnLevel = FMath::FInterpTo(ChurnLevel, ChurnTarget, DeltaSeconds, ChurnTarget > ChurnLevel ? 8.f : 1.f);
+	WakeFoam->UpdateTrail(SternFoamTrail, DeltaSeconds, Xf.TransformPosition(FVector(-HullExtent.X, 0.f, WaterlineZ)), Right, ChurnLevel);
+
+	// Bow wash only once the hull is moving properly.
+	const float Wash = FMath::Clamp((GetSpeedKnots() - 3.f) / (FoamFullSpeedKnots - 3.f), 0.f, 1.f) * (bInWater ? 1.f : 0.f);
+	const FVector Shoulder(HullExtent.X * 0.5f, HullExtent.Y, WaterlineZ);
+	WakeFoam->UpdateTrail(PortBowFoamTrail, DeltaSeconds, Xf.TransformPosition(Shoulder * FVector(1.f, -1.f, 1.f)), -Right, Wash);
+	WakeFoam->UpdateTrail(StarboardBowFoamTrail, DeltaSeconds, Xf.TransformPosition(Shoulder), Right, Wash);
+
+	WakeFoam->RebuildMesh();
+}
+
+void ARiptideBoat::SprayAtBow(float Strength)
+{
+	UNiagaraSystem* Spray = BowSpraySystem.Get();
+	if (!Spray || !FApp::CanEverRender())
 	{
-		if (FProperty* Prop = Sim->GetClass()->FindPropertyByName(Name))
-		{
-			Apply(Prop, Prop->ContainerPtrToValuePtr<void>(Sim));
-		}
-		else
-		{
-			UE_LOG(LogRiptideBoat, Warning, TEXT("Wake simulation has no '%s' setting"), Name);
-		}
-	};
-	Set(TEXT("WaterBody"), [Ocean](FProperty* P, void* V) { if (FObjectPropertyBase* O = CastField<FObjectPropertyBase>(P)) { O->SetObjectPropertyValue(V, Ocean); } });
-	Set(TEXT("Follow Player "), [](FProperty* P, void* V) { if (FBoolProperty* B = CastField<FBoolProperty>(P)) { B->SetPropertyValue(V, true); } });  // trailing space is in the Blueprint's name
-	Set(TEXT("Simulation World Size"), [this](FProperty* P, void* V) { if (FNumericProperty* N = CastField<FNumericProperty>(P)) { N->SetFloatingPointPropertyValue(V, WakeSimulationSize); } });
-	Set(TEXT("Damping"), [this](FProperty* P, void* V) { if (FNumericProperty* N = CastField<FNumericProperty>(P)) { N->SetFloatingPointPropertyValue(V, WakeSimulationDamping); } });
-	Sim->FinishSpawning(FTransform(GetActorLocation()));
-	return Sim;
+		return;
+	}
+	// Thrown forward and up off the bow, bigger for a harder hit.
+	const FTransform& Xf = HullBody->GetComponentTransform();
+	// Starts just ahead of the stem at the waterline, so it bursts out of the water rather than the deck.
+	const FVector Bow = Xf.TransformPosition(FVector(HullExtent.X + 30.f, 0.f, WaterlineZ));
+	const FRotator Up = FRotator(55.f, GetActorRotation().Yaw, 0.f);
+	UNiagaraFunctionLibrary::SpawnSystemAtLocation(this, Spray, Bow, Up, FVector(FMath::Lerp(2.f, 3.5f, Strength)));
 }
 
 void ARiptideBoat::StartSounds()
@@ -315,104 +357,10 @@ void ARiptideBoat::UpdateSounds(float DeltaSeconds)
 			const FVector Bow = HullBody->GetComponentTransform().TransformPosition(FVector(HullExtent.X * 0.8f, 0.f, WaterlineZ));
 			UGameplayStatics::PlaySoundAtLocation(this, Slap, Bow, SlapVolume, FMath::FRandRange(0.9f, 1.1f), 0.f, SoundFalloff);
 		}
+		SprayAtBow(Strength);
 		SlapCooldownLeft = SlapCooldown;
 		UE_LOG(LogRiptideBoat, Verbose, TEXT("Hull slap at %.0f cm/s, volume %.2f"), ClosingSpeed, SlapVolume);
 	}
-}
-
-void ARiptideBoat::RegisterWithWakeSimulation()
-{
-	// The Water plugin's fluid simulation (BP_FluidSim_01) ripples the water surface around the local player.
-	// It's a Blueprint, so its "Register Dynamic Force" function and FluidForceDynamic struct are reached
-	// through reflection, matching the struct's fields by their name prefix.
-	static const TCHAR* SimClassPath = TEXT("/Water/FluidSimulation/Blueprints/BP_FluidSim_01.BP_FluidSim_01_C");
-	UClass* SimClass = LoadClass<AActor>(nullptr, SimClassPath);
-	if (!SimClass)
-	{
-		return;
-	}
-	AActor* Sim = UGameplayStatics::GetActorOfClass(this, SimClass);
-	if (!Sim)
-	{
-		Sim = SpawnWakeSimulation(SimClass);
-	}
-	if (!Sim)
-	{
-		return;
-	}
-
-	UFunction* Register = Sim->FindFunction(TEXT("Register Dynamic Force"));
-	if (!Register)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Riptide: wake simulation has no 'Register Dynamic Force'; no wake for %s"), *GetName());
-		return;
-	}
-
-	auto SetNumber = [](FProperty* Prop, void* Container, double Value)
-	{
-		if (FNumericProperty* Num = CastField<FNumericProperty>(Prop))
-		{
-			void* Ptr = Num->ContainerPtrToValuePtr<void>(Container);
-			if (Num->IsFloatingPoint())
-			{
-				Num->SetFloatingPointPropertyValue(Ptr, Value);
-			}
-		}
-	};
-	auto SetObject = [](FProperty* Prop, void* Container, UObject* Value)
-	{
-		if (FObjectPropertyBase* Obj = CastField<FObjectPropertyBase>(Prop))
-		{
-			Obj->SetObjectPropertyValue(Obj->ContainerPtrToValuePtr<void>(Container), Value);
-		}
-	};
-
-	FStructOnScope Params(Register);
-	uint8* ParamMemory = Params.GetStructMemory();
-	bool bFilledForce = false;
-	for (TFieldIterator<FProperty> It(Register); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
-	{
-		FProperty* Param = *It;
-		const FString ParamName = Param->GetName();
-		if (FStructProperty* ForceParam = CastField<FStructProperty>(Param))
-		{
-			void* Force = ForceParam->ContainerPtrToValuePtr<void>(ParamMemory);
-			for (TFieldIterator<FProperty> Field(ForceParam->Struct); Field; ++Field)
-			{
-				const FString FieldName = Field->GetName();
-				if (FieldName.StartsWith(TEXT("ForceRadius")))
-				{
-					SetNumber(*Field, Force, WakeRadius);
-				}
-				else if (FieldName.StartsWith(TEXT("ForceStrength")))
-				{
-					SetNumber(*Field, Force, WakeStrength);
-				}
-				else if (FieldName.StartsWith(TEXT("ForceComponent")))
-				{
-					SetObject(*Field, Force, WakeSource);
-					bFilledForce = true;
-				}
-			}
-		}
-		else if (ParamName.StartsWith(TEXT("Tracked")))
-		{
-			SetObject(Param, ParamMemory, WakeSource);
-		}
-		else if (ParamName.StartsWith(TEXT("WaterLevel")))
-		{
-			// Sea level. The test maps put the ocean surface at Z = 0.
-			SetNumber(Param, ParamMemory, 0.0);
-		}
-	}
-
-	if (!bFilledForce)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Riptide: wake simulation's force struct didn't match; no wake for %s"), *GetName());
-		return;
-	}
-	Sim->ProcessEvent(Register, ParamMemory);
-	UE_LOG(LogTemp, Log, TEXT("Riptide: %s registered with the wake simulation"), *GetName());
 }
 
 void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -557,6 +505,7 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 	}
 
 	UpdateSounds(DeltaSeconds);
+	UpdateWakeFoam(DeltaSeconds);
 
 	if (IsLocallyControlled())
 	{

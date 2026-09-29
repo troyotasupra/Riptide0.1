@@ -18,3 +18,5 @@ __pycache__/
 Content/Riptide/Maps/Ocean_Test.umap
 # Imported by Content/Python/init_unreal.py from SourceAssets/Audio on editor launch
 Content/Riptide/Audio/
+# Created by Content/Python/init_unreal.py on editor launch
+Content/Riptide/Materials/

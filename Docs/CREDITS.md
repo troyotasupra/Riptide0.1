@@ -15,4 +15,4 @@ Apart from the engine excerpts, the files are unedited. Levels are set when the 
 
 ## Engine content
 
-The ocean, wake simulation and placeholder shapes come with Unreal Engine (the Water plugin and engine basic shapes).
+The ocean, the wake's foam texture (`T_WaterFlow_01_Foam_Tiled`) and the placeholder shapes come with Unreal Engine (the Water plugin and engine basic shapes).

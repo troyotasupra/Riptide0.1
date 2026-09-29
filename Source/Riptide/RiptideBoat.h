@@ -5,6 +5,9 @@
 #include "RiptideBoat.generated.h"
 
 class UAudioComponent;
+class UMaterialInterface;
+class UNiagaraSystem;
+class URiptideWakeFoamComponent;
 class UBoxComponent;
 class UStaticMeshComponent;
 class UBuoyancyComponent;
@@ -64,6 +67,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	float GetBowFreeboardCm() const;
 
+	/** Throws spray off the bow, as when it slaps into a wave. Strength 0..1 sets how big. */
+	UFUNCTION(BlueprintCallable, Category = "Boat")
+	void SprayAtBow(float Strength);
+
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UBoxComponent> HullBody;
@@ -80,26 +87,20 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UCameraComponent> HelmCamera;
 
-	/** Point under the hull that pushes the water plugin's wake simulation, if the level has one. */
-	UPROPERTY(VisibleAnywhere, Category = "Boat")
-	TObjectPtr<USceneComponent> WakeSource;
+	/** White foam on the water: churned water behind the transom and wash peeling off the bow. */
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Wake")
+	TObjectPtr<URiptideWakeFoamComponent> WakeFoam;
 
-	/** Radius of the hull's push on the wake simulation, in cm. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
-	float WakeRadius = 250.f;
+	TSoftObjectPtr<UMaterialInterface> WakeFoamMaterial;
 
-	/** How hard the hull pushes the wake simulation. 1 is the simulation's standard force. */
+	/** Speed at which the foam is at its thickest. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
-	float WakeStrength = 1.5f;
+	float FoamFullSpeedKnots = 12.f;
 
-	/** Size of the patch of water the wake simulation covers around the player, in cm, if the boat creates it. */
+	/** Spray thrown up when the bow slaps into a wave. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
-	float WakeSimulationSize = 4096.f;
-
-	/** How quickly the wake simulation's ripples die out, if the boat creates it. Higher fades the wake's side waves
-	 * before they steepen into dark creases. */
-	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
-	float WakeSimulationDamping = 0.15f;
+	TSoftObjectPtr<UNiagaraSystem> BowSpraySystem;
 
 	// --- Sound ---
 	// Levels are set on the sound assets themselves (see Content/Python/init_unreal.py), so volume 1 here is
@@ -272,10 +273,10 @@ private:
 	void ApplyThrust();
 	void ApplyHydrodynamics();
 	void DrawDebugHud() const;
-	void RegisterWithWakeSimulation();
-	AActor* SpawnWakeSimulation(UClass* SimClass);
 	void StartSounds();
 	void UpdateSounds(float DeltaSeconds);
+	void StartWakeFoam();
+	void UpdateWakeFoam(float DeltaSeconds);
 
 	void OnThrottle(const FInputActionValue& Value);
 	void OnThrottleReleased(const FInputActionValue& Value);
@@ -322,6 +323,11 @@ private:
 	/** Distance falloff shared by the boat's sounds, so other boats fade with distance. */
 	UPROPERTY(Transient)
 	TObjectPtr<USoundAttenuation> SoundFalloff;
+
+	int32 SternFoamTrail = INDEX_NONE;
+	int32 PortBowFoamTrail = INDEX_NONE;
+	int32 StarboardBowFoamTrail = INDEX_NONE;
+	float ChurnLevel = 0.f;
 
 	bool bEngineSoundRunning = false;
 	float EngineRevs = 0.f;

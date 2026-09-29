@@ -137,6 +137,86 @@ def _set_swell(ocean):
     unreal.log(f"Riptide: swell up to {ocean.get_water_body_component().get_max_wave_height():.0f} cm")
 
 
+MATERIALS_PATH = "/Game/Riptide/Materials"
+FOAM_TEXTURE = "/Water/Textures/Foam/T_WaterFlow_01_Foam_Tiled"
+
+
+def _sampler_type_for(texture):
+    """Texture samplers must match the texture's compression or the material won't compile."""
+    compression = texture.get_editor_property("compression_settings")
+    return {
+        unreal.TextureCompressionSettings.TC_GRAYSCALE: unreal.MaterialSamplerType.SAMPLERTYPE_GRAYSCALE,
+        unreal.TextureCompressionSettings.TC_MASKS: unreal.MaterialSamplerType.SAMPLERTYPE_MASKS,
+        unreal.TextureCompressionSettings.TC_NORMALMAP: unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL,
+        unreal.TextureCompressionSettings.TC_ALPHA: unreal.MaterialSamplerType.SAMPLERTYPE_ALPHA,
+    }.get(compression, unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
+
+
+# Bump when the material recipe below changes, so every machine rebuilds it on its next launch.
+WAKE_FOAM_VERSION = "2"
+
+
+def make_materials():
+    """M_WakeFoam: white foam for boat wakes. The foam texture is mapped in world space (so it doesn't stretch
+    along a trail), each vertex's alpha fades it out as the foam ages, and it softens toward the trail's edges
+    (the mesh's U runs 0 to 1 across the trail)."""
+    path = f"{MATERIALS_PATH}/M_WakeFoam"
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        existing = unreal.load_asset(path)
+        if unreal.EditorAssetLibrary.get_metadata_tag(existing, "RiptideVersion") == WAKE_FOAM_VERSION:
+            return
+        unreal.EditorAssetLibrary.delete_asset(path)
+    unreal.log("Riptide: creating wake foam material")
+    mel = unreal.MaterialEditingLibrary
+    mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        "M_WakeFoam", MATERIALS_PATH, unreal.Material, unreal.MaterialFactoryNew())
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    mat.set_editor_property("two_sided", True)
+
+    world = mel.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, -900, 0)
+    xy = mel.create_material_expression(mat, unreal.MaterialExpressionComponentMask, -750, 0)
+    xy.set_editor_property("r", True)
+    xy.set_editor_property("g", True)
+    tile = mel.create_material_expression(mat, unreal.MaterialExpressionDivide, -600, 0)
+    tile.set_editor_property("const_b", 400.0)  # one texture tile per 4 m
+    texture = unreal.load_asset(FOAM_TEXTURE)
+    foam = mel.create_material_expression(mat, unreal.MaterialExpressionTextureSample, -450, 0)
+    foam.set_editor_property("texture", texture)
+    foam.set_editor_property("sampler_type", _sampler_type_for(texture))
+    fade = mel.create_material_expression(mat, unreal.MaterialExpressionVertexColor, -250, 200)
+    foam_fade = mel.create_material_expression(mat, unreal.MaterialExpressionMultiply, -150, 80)
+    # Soft sides: sin(pi * u) is 0 at both edges of the trail and 1 down its middle.
+    uv = mel.create_material_expression(mat, unreal.MaterialExpressionTextureCoordinate, -750, 350)
+    across = mel.create_material_expression(mat, unreal.MaterialExpressionComponentMask, -600, 350)
+    across.set_editor_property("r", True)
+    to_angle = mel.create_material_expression(mat, unreal.MaterialExpressionMultiply, -450, 350)
+    to_angle.set_editor_property("const_b", 3.14159)
+    sides = mel.create_material_expression(mat, unreal.MaterialExpressionSine, -300, 350)
+    sides.set_editor_property("period", 6.28318)  # period in the input's units: plain sin(x)
+    opacity = mel.create_material_expression(mat, unreal.MaterialExpressionMultiply, -30, 150)
+    white = mel.create_material_expression(mat, unreal.MaterialExpressionConstant3Vector, -80, -150)
+    white.set_editor_property("constant", unreal.LinearColor(0.92, 0.96, 1.0, 1.0))
+    rough = mel.create_material_expression(mat, unreal.MaterialExpressionConstant, -80, -250)
+    rough.set_editor_property("r", 0.8)
+
+    mel.connect_material_expressions(world, "", xy, "")
+    mel.connect_material_expressions(xy, "", tile, "A")
+    mel.connect_material_expressions(tile, "", foam, "UVs")
+    mel.connect_material_expressions(foam, "R", foam_fade, "A")
+    mel.connect_material_expressions(fade, "A", foam_fade, "B")
+    mel.connect_material_expressions(uv, "", across, "")
+    mel.connect_material_expressions(across, "", to_angle, "A")
+    mel.connect_material_expressions(to_angle, "", sides, "")
+    mel.connect_material_expressions(foam_fade, "", opacity, "A")
+    mel.connect_material_expressions(sides, "", opacity, "B")
+    mel.connect_material_property(opacity, "", unreal.MaterialProperty.MP_OPACITY)
+    mel.connect_material_property(white, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    mel.connect_material_property(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    mel.recompile_material(mat)
+    unreal.EditorAssetLibrary.set_metadata_tag(mat, "RiptideVersion", WAKE_FOAM_VERSION)
+    unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+
+
 def build_ocean_test_map():
     levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 
@@ -181,6 +261,11 @@ try:
     import_sounds()
 except Exception as err:  # noqa: BLE001 - never block the editor from opening
     unreal.log_error(f"Riptide: could not import sounds: {err}")
+
+try:
+    make_materials()
+except Exception as err:  # noqa: BLE001 - never block the editor from opening
+    unreal.log_error(f"Riptide: could not create materials: {err}")
 
 try:
     build_ocean_test_map()
