@@ -11,7 +11,7 @@ then sums them and measures loudness and peak with measure_loudness.py.
 
   python Tools/model_boat_mix.py <folder of WAVs exported from the imported sounds>
 
-The WAVs are named after the source files (engine_outboard.wav, hull_wash.wav, ocean_waves.wav, hull_slap_08.wav).
+The WAVs are named after the source files (engine_low.wav, engine_high.wav, hull_wash.wav, ocean_waves.wav, hull_slap_08.wav).
 """
 import math
 import os
@@ -26,18 +26,20 @@ CENTRE_PAN = math.sqrt(0.5)
 
 # Measured source levels and targets, as in init_unreal.py.
 LEVELS = {  # file: (measured LUFS, measured peak dBFS, target LUFS)
-    "engine_outboard": (-14.1, -9.8, -22.0),
-    "hull_wash": (-22.1, -13.8, -24.0),
+    "engine_low": (-24.7, -13.4, -24.0),
+    "engine_high": (-17.9, -7.0, -24.0),
+    "hull_wash": (-22.1, -13.8, -26.0),
     "ocean_waves": (-9.3, 0.0, -28.0),
     "hull_slap_08": (-14.5, -0.5, -22.0),
 }
 PEAK_CEILING_DBFS = -8.0
 
-# Runtime settings seen in the handling test (engine volume/pitch, wash volume/pitch), and slap strengths.
+# Runtime settings seen in the handling test: engine layer (file, volume, pitch), wash (volume, pitch), slap strengths.
+# At idle only the low-rev recording plays, at its own pitch; at full throttle only the high-rev one.
 SCENARIOS = {
-    "at rest, idling": {"engine": (0.40, 0.75), "wash": (0.0, 0.85), "slaps": []},
-    "full throttle, typical slaps": {"engine": (1.0, 1.90), "wash": (0.97, 1.14), "slaps": [(4.0, 0.48), (11.0, 0.34), (16.0, 0.48)]},
-    "full throttle, hardest slap": {"engine": (1.0, 1.90), "wash": (1.0, 1.15), "slaps": [(4.0, 1.0), (11.0, 1.0)]},
+    "at rest, idling": {"engine": ("engine_low", 0.40, 1.0), "wash": (0.0, 0.85), "slaps": []},
+    "full throttle, typical slaps": {"engine": ("engine_high", 1.0, 1.0), "wash": (0.97, 1.14), "slaps": [(4.0, 0.48), (11.0, 0.34), (16.0, 0.48)]},
+    "full throttle, hardest slap": {"engine": ("engine_high", 1.0, 1.0), "wash": (1.0, 1.15), "slaps": [(4.0, 1.0), (11.0, 1.0)]},
 }
 
 
@@ -70,7 +72,7 @@ def looped(mono, rate, pitch, n_out, rate_out):
 def main(folder):
     rate = 48000
     n = SECONDS * rate
-    engine, engine_rate = load_mono(folder, "engine_outboard", rate)
+    engines = {name: load_mono(folder, name, rate) for name in ("engine_low", "engine_high")}
     wash, wash_rate = load_mono(folder, "hull_wash", rate)
     slap, slap_rate = load_mono(folder, "hull_slap_08", rate)
     ocean_ch, ocean_rate = ml.read(os.path.join(folder, "ocean_waves.wav"))
@@ -79,11 +81,12 @@ def main(folder):
         ocean = ocean * 2
 
     for title, s in SCENARIOS.items():
-        ev, ep = s["engine"]
+        ename, ev, ep = s["engine"]
         wv, wp = s["wash"]
+        engine, engine_rate = engines[ename]
         eng = looped(engine, engine_rate, ep, n, rate)
         wsh = looped(wash, wash_rate, wp, n, rate)
-        centre = [asset_volume("engine_outboard") * ev * a + asset_volume("hull_wash") * wv * b for a, b in zip(eng, wsh)]
+        centre = [asset_volume(ename) * ev * a + asset_volume("hull_wash") * wv * b for a, b in zip(eng, wsh)]
         for at, strength in s["slaps"]:
             one = looped(slap, slap_rate, 1.0, int(len(slap) * rate / slap_rate), rate)
             start = int(at * rate)

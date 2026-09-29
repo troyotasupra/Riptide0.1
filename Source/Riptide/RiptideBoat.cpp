@@ -103,6 +103,9 @@ ARiptideBoat::ARiptideBoat()
 	EngineAudio = CreateDefaultSubobject<UAudioComponent>(TEXT("EngineAudio"));
 	EngineAudio->SetupAttachment(MotorMesh);
 	EngineAudio->bAutoActivate = false;
+	EngineHighAudio = CreateDefaultSubobject<UAudioComponent>(TEXT("EngineHighAudio"));
+	EngineHighAudio->SetupAttachment(MotorMesh);
+	EngineHighAudio->bAutoActivate = false;
 	WashAudio = CreateDefaultSubobject<UAudioComponent>(TEXT("WashAudio"));
 	WashAudio->SetupAttachment(HullBody);
 	WashAudio->SetRelativeLocation(FVector(0.f, 0.f, WaterlineZ));
@@ -110,7 +113,8 @@ ARiptideBoat::ARiptideBoat()
 
 	// The sounds are imported by Content/Python/init_unreal.py when the editor opens, so they're referenced
 	// by path and loaded at BeginPlay rather than looked up here.
-	EngineSound = TSoftObjectPtr<USoundBase>(FSoftObjectPath(TEXT("/Game/Riptide/Audio/S_Engine_Outboard.S_Engine_Outboard")));
+	EngineSound = TSoftObjectPtr<USoundBase>(FSoftObjectPath(TEXT("/Game/Riptide/Audio/S_Engine_Low.S_Engine_Low")));
+	EngineHighSound = TSoftObjectPtr<USoundBase>(FSoftObjectPath(TEXT("/Game/Riptide/Audio/S_Engine_High.S_Engine_High")));
 	WashSound = TSoftObjectPtr<USoundBase>(FSoftObjectPath(TEXT("/Game/Riptide/Audio/S_Hull_Wash.S_Hull_Wash")));
 	for (const TCHAR* Slap : { TEXT("04"), TEXT("06"), TEXT("08"), TEXT("13"), TEXT("15") })
 	{
@@ -234,8 +238,10 @@ void ARiptideBoat::StartSounds()
 	Falloff.FalloffDistance = 15000.f;
 
 	EngineAudio->AttenuationSettings = SoundFalloff;
+	EngineHighAudio->AttenuationSettings = SoundFalloff;
 	WashAudio->AttenuationSettings = SoundFalloff;
 	EngineAudio->SetSound(EngineSound.LoadSynchronous());
+	EngineHighAudio->SetSound(EngineHighSound.LoadSynchronous());
 	WashAudio->SetSound(WashSound.LoadSynchronous());
 	WashAudio->SetVolumeMultiplier(0.f);
 	WashAudio->Play();
@@ -258,20 +264,32 @@ void ARiptideBoat::UpdateSounds(float DeltaSeconds)
 	if (bRunning != bEngineSoundRunning)
 	{
 		bEngineSoundRunning = bRunning;
-		if (bRunning)
+		for (UAudioComponent* Layer : { EngineAudio.Get(), EngineHighAudio.Get() })
 		{
-			EngineAudio->FadeIn(0.5f);
-		}
-		else
-		{
-			EngineAudio->FadeOut(1.5f, 0.f);
+			if (bRunning)
+			{
+				Layer->FadeIn(0.5f);
+			}
+			else
+			{
+				Layer->FadeOut(1.5f, 0.f);
+			}
 		}
 	}
 	const float Output = FMath::Abs(EngineOutput);
 	const float TargetRevs = FMath::Min(1.f, Output * (IsPropellerSubmerged() ? 1.f : 1.f + PropOutOverRev));
 	EngineRevs = FMath::FInterpTo(EngineRevs, TargetRevs, DeltaSeconds, 6.f);
-	EngineAudio->SetPitchMultiplier(FMath::Lerp(EngineIdlePitch, EngineFullPitch, EngineRevs));
-	EngineAudio->SetVolumeMultiplier(FMath::Lerp(EngineIdleVolume, 1.f, Output));
+
+	// Engine speed moves between idle and full on a musical (log) scale. Each recording is pitched to that speed,
+	// and the two crossfade at equal power by where the speed sits between them.
+	const float Hz = EngineIdleHz * FMath::Pow(EngineFullHz / EngineIdleHz, EngineRevs);
+	const float HighWeight = FMath::Clamp(
+		FMath::Loge(Hz / EngineLowRecordingHz) / FMath::Loge(EngineHighRecordingHz / EngineLowRecordingHz), 0.f, 1.f);
+	const float Volume = FMath::Lerp(EngineIdleVolume, 1.f, Output);
+	EngineAudio->SetPitchMultiplier(Hz / EngineLowRecordingHz);
+	EngineHighAudio->SetPitchMultiplier(Hz / EngineHighRecordingHz);
+	EngineAudio->SetVolumeMultiplier(Volume * FMath::Max(0.f, FMath::Cos(HighWeight * UE_HALF_PI)));
+	EngineHighAudio->SetVolumeMultiplier(Volume * FMath::Max(0.f, FMath::Sin(HighWeight * UE_HALF_PI)));
 
 	// Wash: water rushing past the hull, rising with speed. Silent out of the water.
 	const bool bInWater = Buoyancy && Buoyancy->IsInWaterBody();
@@ -291,14 +309,14 @@ void ARiptideBoat::UpdateSounds(float DeltaSeconds)
 	if (bHadFreeboard && bInWater && SlapCooldownLeft <= 0.f && ClosingSpeed > SlapMinSpeed && Freeboard < 25.f && HullSlapSounds.Num() > 0)
 	{
 		const float Strength = FMath::Clamp((ClosingSpeed - SlapMinSpeed) / (SlapFullSpeed - SlapMinSpeed), 0.f, 1.f);
-		const float Volume = FMath::Lerp(0.25f, 1.f, Strength);
+		const float SlapVolume = FMath::Lerp(0.25f, 1.f, Strength);
 		if (USoundBase* Slap = HullSlapSounds[FMath::RandRange(0, HullSlapSounds.Num() - 1)].Get())
 		{
 			const FVector Bow = HullBody->GetComponentTransform().TransformPosition(FVector(HullExtent.X * 0.8f, 0.f, WaterlineZ));
-			UGameplayStatics::PlaySoundAtLocation(this, Slap, Bow, Volume, FMath::FRandRange(0.9f, 1.1f), 0.f, SoundFalloff);
+			UGameplayStatics::PlaySoundAtLocation(this, Slap, Bow, SlapVolume, FMath::FRandRange(0.9f, 1.1f), 0.f, SoundFalloff);
 		}
 		SlapCooldownLeft = SlapCooldown;
-		UE_LOG(LogRiptideBoat, Verbose, TEXT("Hull slap at %.0f cm/s, volume %.2f"), ClosingSpeed, Volume);
+		UE_LOG(LogRiptideBoat, Verbose, TEXT("Hull slap at %.0f cm/s, volume %.2f"), ClosingSpeed, SlapVolume);
 	}
 }
 

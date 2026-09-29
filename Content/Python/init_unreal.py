@@ -10,11 +10,12 @@ AUDIO_PATH = "/Game/Riptide/Audio"
 # Sounds, imported from SourceAssets/Audio (credited in Docs/CREDITS.md). Each is levelled so that at volume 1
 # it plays at its target loudness, measured with Tools/measure_loudness.py:
 #   asset name: (source file, loops, measured LUFS, measured peak dBFS, target LUFS)
-# Targets are for the loudest moment in play: the engine at full throttle, the wash at top speed, the hardest
+# Targets are for the loudest moment in play: each engine layer at full volume, the wash at top speed, the hardest
 # hull slap. The ocean is a quiet bed under everything. No sound's peak goes above PEAK_CEILING_DBFS.
 SOUNDS = {
-    "S_Engine_Outboard": ("engine_outboard.ogg", True, -14.1, -9.8, -22.0),
-    "S_Hull_Wash": ("hull_wash.ogg", True, -22.1, -13.8, -24.0),
+    "S_Engine_Low": ("engine_low.wav", True, -24.7, -13.4, -24.0),
+    "S_Engine_High": ("engine_high.wav", True, -17.9, -7.0, -24.0),
+    "S_Hull_Wash": ("hull_wash.ogg", True, -22.1, -13.8, -26.0),
     "S_Ocean_Ambience": ("ocean_waves.mp3", True, -9.3, 0.0, -28.0),
     "S_Hull_Slap_04": ("hull_slap_04.ogg", False, -16.4, -1.0, -22.0),
     "S_Hull_Slap_06": ("hull_slap_06.ogg", False, -15.5, -1.6, -22.0),

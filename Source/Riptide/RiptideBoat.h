@@ -105,8 +105,14 @@ protected:
 	// Levels are set on the sound assets themselves (see Content/Python/init_unreal.py), so volume 1 here is
 	// the loudest each should get: the engine at full throttle, the wash at top speed.
 
+	// The engine is two recordings of a real outboard, one at low revs and one at high revs. Both are pitched to the
+	// same engine speed and crossfaded, so the motor sounds right across the whole throttle range.
+
 	UPROPERTY(VisibleAnywhere, Category = "Boat|Sound")
 	TObjectPtr<UAudioComponent> EngineAudio;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Sound")
+	TObjectPtr<UAudioComponent> EngineHighAudio;
 
 	UPROPERTY(VisibleAnywhere, Category = "Boat|Sound")
 	TObjectPtr<UAudioComponent> WashAudio;
@@ -115,18 +121,28 @@ protected:
 	TSoftObjectPtr<USoundBase> EngineSound;
 
 	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	TSoftObjectPtr<USoundBase> EngineHighSound;
+
+	/** The engine's firing pitch in the low- and high-rev recordings (Hz), found from their spectra. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	float EngineLowRecordingHz = 25.6f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	float EngineHighRecordingHz = 73.f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
 	TSoftObjectPtr<USoundBase> WashSound;
 
 	/** Played at random when the bow slams into a wave. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
 	TArray<TSoftObjectPtr<USoundBase>> HullSlapSounds;
 
-	/** Engine loop pitch at idle and at full revs. */
+	/** Engine firing pitch at idle and at full revs (Hz). */
 	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
-	float EngineIdlePitch = 0.75f;
+	float EngineIdleHz = 25.6f;
 
 	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
-	float EngineFullPitch = 1.9f;
+	float EngineFullHz = 73.f;
 
 	/** Engine loop volume at idle, as a fraction of full throttle. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Sound", meta = (ClampMin = "0", ClampMax = "1"))
