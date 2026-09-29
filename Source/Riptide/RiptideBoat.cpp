@@ -2,6 +2,7 @@
 
 #include "BuoyancyComponent.h"
 #include "Camera/CameraComponent.h"
+#include "Components/AudioComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/CollisionProfile.h"
@@ -15,9 +16,15 @@
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/App.h"
+#include "WaterBodyOceanActor.h"
 #include "UObject/StructOnScope.h"
 #include "Net/UnrealNetwork.h"
+#include "Sound/SoundAttenuation.h"
+#include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogRiptideBoat, Log, All);
 
 namespace
 {
@@ -92,6 +99,25 @@ ARiptideBoat::ARiptideBoat()
 	WakeSource->SetupAttachment(HullBody);
 	WakeSource->SetRelativeLocation(FVector(0.f, 0.f, -HullExtent.Z));
 
+	// The engine sounds from the motor; the wash from the hull at the waterline.
+	EngineAudio = CreateDefaultSubobject<UAudioComponent>(TEXT("EngineAudio"));
+	EngineAudio->SetupAttachment(MotorMesh);
+	EngineAudio->bAutoActivate = false;
+	WashAudio = CreateDefaultSubobject<UAudioComponent>(TEXT("WashAudio"));
+	WashAudio->SetupAttachment(HullBody);
+	WashAudio->SetRelativeLocation(FVector(0.f, 0.f, WaterlineZ));
+	WashAudio->bAutoActivate = false;
+
+	// The sounds are imported by Content/Python/init_unreal.py when the editor opens, so they're referenced
+	// by path and loaded at BeginPlay rather than looked up here.
+	EngineSound = TSoftObjectPtr<USoundBase>(FSoftObjectPath(TEXT("/Game/Riptide/Audio/S_Engine_Outboard.S_Engine_Outboard")));
+	WashSound = TSoftObjectPtr<USoundBase>(FSoftObjectPath(TEXT("/Game/Riptide/Audio/S_Hull_Wash.S_Hull_Wash")));
+	for (const TCHAR* Slap : { TEXT("04"), TEXT("06"), TEXT("08"), TEXT("13"), TEXT("15") })
+	{
+		HullSlapSounds.Add(TSoftObjectPtr<USoundBase>(FSoftObjectPath(
+			FString::Printf(TEXT("/Game/Riptide/Audio/S_Hull_Slap_%s.S_Hull_Slap_%s"), Slap, Slap))));
+	}
+
 	// Weight sits low and aft (engine, fuel, crew on the floor), which keeps the hull from rolling over.
 	HullBody->BodyInstance.COMNudge = FVector(-30.f, 0.f, -30.f);
 
@@ -146,8 +172,134 @@ void ARiptideBoat::BeginPlay()
 		FuelLiters = FuelCapacityLiters;
 	}
 
-	// The wake is purely visual, so every machine registers its own copy of the boat.
+	// The wake and sounds are cosmetic, so every machine runs its own for each boat.
 	RegisterWithWakeSimulation();
+	StartSounds();
+}
+
+AActor* ARiptideBoat::SpawnWakeSimulation(UClass* SimClass)
+{
+	// Each machine runs its own simulation around its own player, so it's created locally rather than placed
+	// in the level. It renders into textures, so machines that can't render (dedicated servers, headless test
+	// runs) skip it; its setup divides by the render size and crashes without a renderer.
+	if (!FApp::CanEverRender())
+	{
+		return nullptr;
+	}
+	AActor* Ocean = UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass());
+	if (!Ocean)
+	{
+		return nullptr;
+	}
+
+	// Settings go in before the Blueprint's construction script runs, which sizes its render targets from them.
+	AActor* Sim = GetWorld()->SpawnActorDeferred<AActor>(SimClass, FTransform(GetActorLocation()));
+	if (!Sim)
+	{
+		return nullptr;
+	}
+	auto Set = [Sim](const TCHAR* Name, TFunctionRef<void(FProperty*, void*)> Apply)
+	{
+		if (FProperty* Prop = Sim->GetClass()->FindPropertyByName(Name))
+		{
+			Apply(Prop, Prop->ContainerPtrToValuePtr<void>(Sim));
+		}
+		else
+		{
+			UE_LOG(LogRiptideBoat, Warning, TEXT("Wake simulation has no '%s' setting"), Name);
+		}
+	};
+	Set(TEXT("WaterBody"), [Ocean](FProperty* P, void* V) { if (FObjectPropertyBase* O = CastField<FObjectPropertyBase>(P)) { O->SetObjectPropertyValue(V, Ocean); } });
+	Set(TEXT("Follow Player "), [](FProperty* P, void* V) { if (FBoolProperty* B = CastField<FBoolProperty>(P)) { B->SetPropertyValue(V, true); } });  // trailing space is in the Blueprint's name
+	Set(TEXT("Simulation World Size"), [this](FProperty* P, void* V) { if (FNumericProperty* N = CastField<FNumericProperty>(P)) { N->SetFloatingPointPropertyValue(V, WakeSimulationSize); } });
+	Set(TEXT("Damping"), [this](FProperty* P, void* V) { if (FNumericProperty* N = CastField<FNumericProperty>(P)) { N->SetFloatingPointPropertyValue(V, WakeSimulationDamping); } });
+	Sim->FinishSpawning(FTransform(GetActorLocation()));
+	return Sim;
+}
+
+void ARiptideBoat::StartSounds()
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	// Other boats fade out over 150 m; at the helm (within 5 m of the motor) it's full volume.
+	SoundFalloff = NewObject<USoundAttenuation>(this);
+	FSoundAttenuationSettings& Falloff = SoundFalloff->Attenuation;
+	Falloff.bAttenuate = true;
+	Falloff.bSpatialize = true;
+	Falloff.AttenuationShape = EAttenuationShape::Sphere;
+	Falloff.AttenuationShapeExtents = FVector(500.f, 0.f, 0.f);
+	Falloff.FalloffDistance = 15000.f;
+
+	EngineAudio->AttenuationSettings = SoundFalloff;
+	WashAudio->AttenuationSettings = SoundFalloff;
+	EngineAudio->SetSound(EngineSound.LoadSynchronous());
+	WashAudio->SetSound(WashSound.LoadSynchronous());
+	WashAudio->SetVolumeMultiplier(0.f);
+	WashAudio->Play();
+	for (const TSoftObjectPtr<USoundBase>& Slap : HullSlapSounds)
+	{
+		Slap.LoadSynchronous();
+	}
+}
+
+void ARiptideBoat::UpdateSounds(float DeltaSeconds)
+{
+	if (!SoundFalloff)
+	{
+		return;
+	}
+
+	// Engine: runs while it has fuel and isn't dead. Pitch and volume follow the actual engine output (so a
+	// sputter is heard as a dip), and it races when the prop leaves the water and loses its load.
+	const bool bRunning = FuelLiters > 0.f && EngineHealth > 0.f;
+	if (bRunning != bEngineSoundRunning)
+	{
+		bEngineSoundRunning = bRunning;
+		if (bRunning)
+		{
+			EngineAudio->FadeIn(0.5f);
+		}
+		else
+		{
+			EngineAudio->FadeOut(1.5f, 0.f);
+		}
+	}
+	const float Output = FMath::Abs(EngineOutput);
+	const float TargetRevs = FMath::Min(1.f, Output * (IsPropellerSubmerged() ? 1.f : 1.f + PropOutOverRev));
+	EngineRevs = FMath::FInterpTo(EngineRevs, TargetRevs, DeltaSeconds, 6.f);
+	EngineAudio->SetPitchMultiplier(FMath::Lerp(EngineIdlePitch, EngineFullPitch, EngineRevs));
+	EngineAudio->SetVolumeMultiplier(FMath::Lerp(EngineIdleVolume, 1.f, Output));
+
+	// Wash: water rushing past the hull, rising with speed. Silent out of the water.
+	const bool bInWater = Buoyancy && Buoyancy->IsInWaterBody();
+	const float SpeedFraction = bInWater ? FMath::Clamp(GetSpeedKnots() / WashFullSpeedKnots, 0.f, 1.f) : 0.f;
+	WashAudio->SetVolumeMultiplier(FMath::Pow(SpeedFraction, 1.5f));
+	WashAudio->SetPitchMultiplier(FMath::Lerp(0.85f, 1.15f, SpeedFraction));
+
+	// Hull slap: the bow dropping into the water (or a wave rising into it) fast enough, near the surface.
+	// Louder the harder it hits.
+	// Measured only between two frames spent in the water: before that the bow's water reading isn't valid.
+	const float Freeboard = GetBowFreeboardCm();
+	const bool bHadFreeboard = bHaveBowFreeboard;
+	const float ClosingSpeed = bHadFreeboard ? (PrevBowFreeboard - Freeboard) / FMath::Max(DeltaSeconds, 1e-3f) : 0.f;
+	PrevBowFreeboard = Freeboard;
+	bHaveBowFreeboard = bInWater;
+	SlapCooldownLeft -= DeltaSeconds;
+	if (bHadFreeboard && bInWater && SlapCooldownLeft <= 0.f && ClosingSpeed > SlapMinSpeed && Freeboard < 25.f && HullSlapSounds.Num() > 0)
+	{
+		const float Strength = FMath::Clamp((ClosingSpeed - SlapMinSpeed) / (SlapFullSpeed - SlapMinSpeed), 0.f, 1.f);
+		const float Volume = FMath::Lerp(0.25f, 1.f, Strength);
+		if (USoundBase* Slap = HullSlapSounds[FMath::RandRange(0, HullSlapSounds.Num() - 1)].Get())
+		{
+			const FVector Bow = HullBody->GetComponentTransform().TransformPosition(FVector(HullExtent.X * 0.8f, 0.f, WaterlineZ));
+			UGameplayStatics::PlaySoundAtLocation(this, Slap, Bow, Volume, FMath::FRandRange(0.9f, 1.1f), 0.f, SoundFalloff);
+		}
+		SlapCooldownLeft = SlapCooldown;
+		UE_LOG(LogRiptideBoat, Verbose, TEXT("Hull slap at %.0f cm/s, volume %.2f"), ClosingSpeed, Volume);
+	}
 }
 
 void ARiptideBoat::RegisterWithWakeSimulation()
@@ -157,7 +309,15 @@ void ARiptideBoat::RegisterWithWakeSimulation()
 	// through reflection, matching the struct's fields by their name prefix.
 	static const TCHAR* SimClassPath = TEXT("/Water/FluidSimulation/Blueprints/BP_FluidSim_01.BP_FluidSim_01_C");
 	UClass* SimClass = LoadClass<AActor>(nullptr, SimClassPath);
-	AActor* Sim = SimClass ? UGameplayStatics::GetActorOfClass(this, SimClass) : nullptr;
+	if (!SimClass)
+	{
+		return;
+	}
+	AActor* Sim = UGameplayStatics::GetActorOfClass(this, SimClass);
+	if (!Sim)
+	{
+		Sim = SpawnWakeSimulation(SimClass);
+	}
 	if (!Sim)
 	{
 		return;
@@ -377,6 +537,8 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 		ApplyThrust();
 		ApplyHydrodynamics();
 	}
+
+	UpdateSounds(DeltaSeconds);
 
 	if (IsLocallyControlled())
 	{

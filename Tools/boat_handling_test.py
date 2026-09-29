@@ -31,6 +31,11 @@ LOG_EVERY = 1.0
 RENDERING = "-nullrhi" not in unreal.SystemLibrary.get_command_line().lower()
 SHOTS = [(13.0, "at_rest"), (30.0, "full_ahead"), (38.0, "hard_right")]
 
+# Set RIPTIDE_TEST_AUDIO=1 to log the boat's sounds (playing, volume, pitch) every 10 s. Launch with
+# -DeterministicAudio so the game mixes audio without playing it out loud. Those volumes and pitches feed
+# Tools/model_boat_mix.py, which checks the loudness of the mix.
+AUDIO_LOG = bool(os.environ.get("RIPTIDE_TEST_AUDIO"))
+
 state = {"ticks": 0, "started": False, "boat": None, "next_log": 0.0, "samples": [], "handle": None,
          "frame_times": [], "shots_taken": 0, "bow": {}}
 
@@ -61,6 +66,12 @@ def sample(boat, t, phase):
     log("t=%5.1f %-13s z=%7.1f pitch=%6.1f roll=%6.1f yaw=%7.1f speed=%5.1fkn lever=%+.2f engine=%+.2f prop=%s fuel=%.2f"
         % (t, phase, s["z"], s["pitch"], s["roll"], s["yaw"], s["kn"], s["lever"], s["engine"],
            "wet" if s["prop"] else "DRY", s["fuel"]))
+    if AUDIO_LOG and int(t) % 10 == 0:
+        for audio in boat.get_components_by_class(unreal.AudioComponent):
+            sound = audio.get_editor_property("sound")
+            log("  audio %s: sound=%s playing=%s volume=%.2f pitch=%.2f" % (
+                audio.get_name(), sound.get_name() if sound else None, audio.is_playing(),
+                audio.get_editor_property("volume_multiplier"), audio.get_editor_property("pitch_multiplier")))
 
 
 def in_phase(name):

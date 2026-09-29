@@ -5,6 +5,8 @@ Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLA
 ## Current state: milestone 1 (the boat)
 - A placeholder skiff with a physics-driven outboard motor, floating on the Water plugin ocean.
 - The ocean test map (2 km of open sea with a moderate 1-1.5 m swell) builds itself the first time the editor opens (`Content/Python/init_unreal.py`). To rebuild it after changing that script, delete `Content/Riptide/Maps/Ocean_Test.umap` with the editor closed.
+- The boat pushes a wake into the water (the Water plugin's fluid simulation, created by the boat at runtime).
+- Sound: the engine revs with the throttle and races when the prop leaves the water; water wash rises with speed; the bow slaps into waves; ocean ambience all around. Sounds are imported from `SourceAssets/Audio` when the editor opens (credits in `Docs/CREDITS.md`).
 - Builds and runs on Unreal Engine 5.7 (Windows, Visual Studio 2022).
 
 ## Handling test
@@ -15,6 +17,11 @@ UnrealEditor Riptide.uproject -nullrhi -unattended -nosplash -nosound -ExecCmds=
 ```
 
 The result is at the end of `Saved/Logs/Riptide.log` (search for `RiptideTest`). Swap `-nullrhi` for `-RenderOffscreen` to also save helm-camera screenshots to `Saved/Screenshots` and report the frame rate.
+
+## Sound levels
+Each sound is levelled on import to a target loudness, with peaks held below -8 dBFS (the table in `Content/Python/init_unreal.py`). The full mix sits around -22 LUFS at full throttle and -26 LUFS at rest, with peaks no higher than -11 dBFS. That's inside the common -24 ±2 LUFS guideline for games. To check after changing sounds:
+- `Tools/measure_loudness.py` measures WAV files (peak, RMS, LUFS). To get WAVs, export the imported sounds from the editor.
+- `Tools/model_boat_mix.py` rebuilds the boat's mix from those WAVs and measures it at rest and at full throttle.
 
 ## Helm controls
 | Action | Keyboard / mouse | Gamepad |

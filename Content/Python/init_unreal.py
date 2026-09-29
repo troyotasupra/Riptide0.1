@@ -1,8 +1,64 @@
-"""Runs automatically when the editor opens. Builds the ocean test map the first time."""
+"""Runs automatically when the editor opens. Imports the game's sounds and builds the ocean test map the first time."""
+
+import os
 
 import unreal
 
 MAP_PATH = "/Game/Riptide/Maps/Ocean_Test"
+AUDIO_PATH = "/Game/Riptide/Audio"
+
+# Sounds, imported from SourceAssets/Audio (credited in Docs/CREDITS.md). Each is levelled so that at volume 1
+# it plays at its target loudness, measured with Tools/measure_loudness.py:
+#   asset name: (source file, loops, measured LUFS, measured peak dBFS, target LUFS)
+# Targets are for the loudest moment in play: the engine at full throttle, the wash at top speed, the hardest
+# hull slap. The ocean is a quiet bed under everything. No sound's peak goes above PEAK_CEILING_DBFS.
+SOUNDS = {
+    "S_Engine_Outboard": ("engine_outboard.ogg", True, -14.1, -9.8, -22.0),
+    "S_Hull_Wash": ("hull_wash.ogg", True, -22.1, -13.8, -24.0),
+    "S_Ocean_Ambience": ("ocean_waves.mp3", True, -9.3, 0.0, -28.0),
+    "S_Hull_Slap_04": ("hull_slap_04.ogg", False, -16.4, -1.0, -22.0),
+    "S_Hull_Slap_06": ("hull_slap_06.ogg", False, -15.5, -1.6, -22.0),
+    "S_Hull_Slap_08": ("hull_slap_08.ogg", False, -14.5, -0.5, -22.0),
+    "S_Hull_Slap_13": ("hull_slap_13.ogg", False, -18.5, -3.1, -22.0),
+    "S_Hull_Slap_15": ("hull_slap_15.ogg", False, -17.8, -1.3, -22.0),
+}
+PEAK_CEILING_DBFS = -8.0
+
+
+def _sound_volume(measured_lufs, measured_peak, target_lufs):
+    """Linear volume that brings a sound to its target loudness without its peak passing the ceiling."""
+    gain_db = min(target_lufs - measured_lufs, PEAK_CEILING_DBFS - measured_peak)
+    return 10.0 ** (gain_db / 20.0)
+
+
+def import_sounds():
+    source_dir = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()), "SourceAssets", "Audio")
+    tasks = []
+    for name, (filename, _loops, _lufs, _peak, _target) in SOUNDS.items():
+        if not unreal.EditorAssetLibrary.does_asset_exist(f"{AUDIO_PATH}/{name}"):
+            task = unreal.AssetImportTask()
+            task.filename = os.path.join(source_dir, filename)
+            task.destination_path = AUDIO_PATH
+            task.destination_name = name
+            task.automated = True
+            task.save = False
+            tasks.append(task)
+    if tasks:
+        unreal.log(f"Riptide: importing {len(tasks)} sounds")
+        unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
+
+    # Levels are applied every launch, so retuning a target above takes effect without a reimport.
+    for name, (_filename, loops, lufs, peak, target) in SOUNDS.items():
+        path = f"{AUDIO_PATH}/{name}"
+        sound = unreal.load_asset(path)
+        if not sound:
+            unreal.log_error(f"Riptide: sound {name} failed to import")
+            continue
+        volume = round(_sound_volume(lufs, peak, target), 4)
+        if sound.get_editor_property("looping") != loops or abs(sound.get_editor_property("volume") - volume) > 1e-4:
+            sound.set_editor_property("looping", loops)
+            sound.set_editor_property("volume", volume)
+            unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
 
 
 def _spawn(actor_class, location=(0.0, 0.0, 0.0), yaw=0.0, pitch=0.0):
@@ -80,24 +136,6 @@ def _set_swell(ocean):
     unreal.log(f"Riptide: swell up to {ocean.get_water_body_component().get_max_wave_height():.0f} cm")
 
 
-# The Water plugin's fluid simulation ripples the ocean surface around the player; boats push their wake into it.
-WAKE_SIM_CLASS = "/Water/FluidSimulation/Blueprints/BP_FluidSim_01.BP_FluidSim_01_C"
-
-
-def _spawn_wake_sim(ocean):
-    sim_class = unreal.load_class(None, WAKE_SIM_CLASS)
-    if not sim_class:
-        unreal.log_warning("Riptide: water fluid simulation not found, boats will leave no wake")
-        return
-    sim = _spawn(sim_class)
-    sim.set_editor_property("WaterBody", ocean)
-    sim.set_editor_property("Follow Player ", True)  # the Blueprint's variable name has a trailing space
-    # A 40 m patch lets the wake spread out behind the boat. Extra damping fades the wake's side waves
-    # before they steepen into dark creases.
-    sim.set_editor_property("Simulation World Size", 4096.0)
-    sim.set_editor_property("Damping", 0.15)
-
-
 def build_ocean_test_map():
     levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 
@@ -122,7 +160,13 @@ def build_ocean_test_map():
     ocean = _spawn_ocean()
     _open_up_sea(zone, ocean)
     _set_swell(ocean)
-    _spawn_wake_sim(ocean)
+    # The wake simulation isn't placed here: each boat creates it at runtime (see ARiptideBoat).
+
+    # The sea all around: plays everywhere at the same level, not from a point.
+    ambience = _spawn(unreal.AmbientSound)
+    ambience_audio = ambience.get_component_by_class(unreal.AudioComponent)
+    ambience_audio.set_editor_property("sound", unreal.load_asset(f"{AUDIO_PATH}/S_Ocean_Ambience"))
+    ambience_audio.set_editor_property("allow_spatialization", False)
 
     # The boat spawns here and drops onto the water.
     _spawn(unreal.PlayerStart, (0, 0, 150))
@@ -131,6 +175,11 @@ def build_ocean_test_map():
     levels.load_level(MAP_PATH)
     unreal.log("Riptide: ocean test map ready")
 
+
+try:
+    import_sounds()
+except Exception as err:  # noqa: BLE001 - never block the editor from opening
+    unreal.log_error(f"Riptide: could not import sounds: {err}")
 
 try:
     build_ocean_test_map()

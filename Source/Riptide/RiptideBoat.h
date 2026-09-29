@@ -4,10 +4,13 @@
 #include "GameFramework/Pawn.h"
 #include "RiptideBoat.generated.h"
 
+class UAudioComponent;
 class UBoxComponent;
 class UStaticMeshComponent;
 class UBuoyancyComponent;
 class UCameraComponent;
+class USoundAttenuation;
+class USoundBase;
 class UInputAction;
 class UInputMappingContext;
 struct FInputActionValue;
@@ -88,6 +91,65 @@ protected:
 	/** How hard the hull pushes the wake simulation. 1 is the simulation's standard force. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
 	float WakeStrength = 1.5f;
+
+	/** Size of the patch of water the wake simulation covers around the player, in cm, if the boat creates it. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float WakeSimulationSize = 4096.f;
+
+	/** How quickly the wake simulation's ripples die out, if the boat creates it. Higher fades the wake's side waves
+	 * before they steepen into dark creases. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float WakeSimulationDamping = 0.15f;
+
+	// --- Sound ---
+	// Levels are set on the sound assets themselves (see Content/Python/init_unreal.py), so volume 1 here is
+	// the loudest each should get: the engine at full throttle, the wash at top speed.
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Sound")
+	TObjectPtr<UAudioComponent> EngineAudio;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Sound")
+	TObjectPtr<UAudioComponent> WashAudio;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	TSoftObjectPtr<USoundBase> EngineSound;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	TSoftObjectPtr<USoundBase> WashSound;
+
+	/** Played at random when the bow slams into a wave. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	TArray<TSoftObjectPtr<USoundBase>> HullSlapSounds;
+
+	/** Engine loop pitch at idle and at full revs. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	float EngineIdlePitch = 0.75f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	float EngineFullPitch = 1.9f;
+
+	/** Engine loop volume at idle, as a fraction of full throttle. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound", meta = (ClampMin = "0", ClampMax = "1"))
+	float EngineIdleVolume = 0.4f;
+
+	/** Extra revs when the prop comes out of the water and the engine races, as a fraction of full revs. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound", meta = (ClampMin = "0", ClampMax = "1"))
+	float PropOutOverRev = 0.3f;
+
+	/** Speed at which the hull wash reaches full volume. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	float WashFullSpeedKnots = 16.f;
+
+	/** How fast the bow must meet the water for a slap (cm/s), and the speed of the loudest slap. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	float SlapMinSpeed = 120.f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	float SlapFullSpeed = 450.f;
+
+	/** Shortest gap between slaps, in seconds. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
+	float SlapCooldown = 0.35f;
 
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UBuoyancyComponent> Buoyancy;
@@ -195,6 +257,9 @@ private:
 	void ApplyHydrodynamics();
 	void DrawDebugHud() const;
 	void RegisterWithWakeSimulation();
+	AActor* SpawnWakeSimulation(UClass* SimClass);
+	void StartSounds();
+	void UpdateSounds(float DeltaSeconds);
 
 	void OnThrottle(const FInputActionValue& Value);
 	void OnThrottleReleased(const FInputActionValue& Value);
@@ -237,4 +302,14 @@ private:
 
 	/** Index of a bow pontoon, used to read the water height at the bow. */
 	int32 BowPontoonIndex = INDEX_NONE;
+
+	/** Distance falloff shared by the boat's sounds, so other boats fade with distance. */
+	UPROPERTY(Transient)
+	TObjectPtr<USoundAttenuation> SoundFalloff;
+
+	bool bEngineSoundRunning = false;
+	float EngineRevs = 0.f;
+	float PrevBowFreeboard = 0.f;
+	bool bHaveBowFreeboard = false;
+	float SlapCooldownLeft = 0.f;
 };
