@@ -401,9 +401,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
 	float SprayFullKnots = 28.f;
 
-	/** Spray clouds per second off each side of the bow at full speed. */
+	/** Spray droplets per second flying off each side's chine at full speed. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
-	float BowSprayRate = 450.f;
+	float BowSprayRate = 1400.f;
 
 	/** Whitewater clouds per second boiling up behind the props at full speed and throttle. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
@@ -697,10 +697,31 @@ private:
 	void UpdateSpray(float DeltaSeconds);
 	void SetUpLockers();
 
-	/** Half the hull's width at its waterline, at X along it (cm). */
-	static float WaterlineHalfBeam(float X);
+	/** The hull's cross-section at X along it, in the boat's frame (riptide_boat_mesh.py's station): the chine's
+	 * half-width and height, and the keel's height (cm). */
+	static void HullSection(float X, float& OutChineY, float& OutChineZ, float& OutKeelZ);
 
-	float BowSprayOwed = 0.f;
+	/** Where each side's chine meets the sea this frame, sampled bow to stern: the spray comes off there. */
+	struct FChineSample
+	{
+		float X = 0.f;
+		FVector Chine = FVector::ZeroVector;   // world
+		FVector Keel = FVector::ZeroVector;    // world
+		float SeaZ = 0.f;
+		float KeelDepth = 0.f;                 // how far the keel there is under the sea (cm); <= 0 is clear of it
+		float ChineDepth = 0.f;                // the same for the chine
+	};
+	static constexpr int32 ChineSamples = 20;
+	void SampleChines(FChineSample (&Out)[2][ChineSamples]) const;
+
+	/** Each station's chine depth last frame, for how fast the hull is driving down into the sea there. */
+	float PrevChineDepth[2][ChineSamples] = {};
+	bool bHaveChineDepths = false;
+
+	/** The ocean, found once (GetSeaSurfaceZ is asked many times a frame). */
+	mutable TWeakObjectPtr<class AWaterBodyOcean> CachedOcean;
+
+	float BowSprayOwed[2] = { 0.f, 0.f };
 
 	/** The sea's height under the hull last frame, for how fast it's rising or falling. */
 	float PrevSeaZ = 0.f;

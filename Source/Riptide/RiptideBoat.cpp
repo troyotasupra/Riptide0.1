@@ -555,13 +555,49 @@ void ARiptideBoat::SetUpLockers()
 	Stock(Anchor, TEXT("rope"), 20);
 }
 
-float ARiptideBoat::WaterlineHalfBeam(float X)
+void ARiptideBoat::HullSection(float X, float& OutChineY, float& OutChineZ, float& OutKeelZ)
 {
-	// The hull's planform (riptide_boat_mesh.py's station): full beam aft, narrowing to the stem; the waterline runs
-	// a little inside the sheer.
+	// riptide_boat_mesh.py's station(): full beam aft, narrowing to the stem; a deep V whose keel and chines sweep
+	// up into the bow.
 	const float T = FMath::Clamp((X + HullExtent.X) / (2.f * HullExtent.X), 0.f, 1.f);
 	const float SheerHalf = T < 0.35f ? HullExtent.Y : HullExtent.Y * FMath::Pow(FMath::Max(0.f, FMath::Cos((T - 0.35f) / 0.65f * UE_HALF_PI)), 0.75f);
-	return SheerHalf * 0.82f;
+	const float SheerZ = DeckZ + 55.f + 45.f * FMath::Pow(T, 2.2f);
+	OutKeelZ = -42.f + 30.f * FMath::Pow(FMath::SmoothStep(0.62f, 1.f, T), 1.3f) + 50.f * FMath::SmoothStep(0.93f, 1.f, T);
+	OutChineY = SheerHalf * (0.88f - 0.1f * FMath::SmoothStep(0.6f, 1.f, T));
+	OutChineZ = FMath::Min(-24.f + 34.f * FMath::SmoothStep(0.55f, 1.f, T), SheerZ - 6.f);
+}
+
+void ARiptideBoat::SampleChines(FChineSample (&Out)[2][ChineSamples]) const
+{
+	const FTransform& Xf = HullBody->GetComponentTransform();
+	for (int32 i = 0; i < ChineSamples; ++i)
+	{
+		const float X = FMath::Lerp(HullExtent.X - 10.f, -HullExtent.X + 10.f, i / float(ChineSamples - 1));
+		float ChineY, ChineZ, KeelZ;
+		HullSection(X, ChineY, ChineZ, KeelZ);
+		const FVector Keel = Xf.TransformPosition(FVector(X, 0.f, KeelZ));
+		for (int32 S = 0; S < 2; ++S)
+		{
+			FChineSample& Sample = Out[S][i];
+			Sample.X = X;
+			Sample.Keel = Keel;
+			Sample.Chine = Xf.TransformPosition(FVector(X, (S == 0 ? -1.f : 1.f) * ChineY, ChineZ));
+			Sample.SeaZ = GetSeaSurfaceZ(Sample.Chine);
+			Sample.KeelDepth = Sample.SeaZ - Keel.Z;
+			Sample.ChineDepth = Sample.SeaZ - Sample.Chine.Z;
+		}
+	}
+}
+
+/** Where water leaving the hull at a station starts from: its waterline on the V of the bottom, or on the topsides if
+ * the sea is over the chine there. Just outside the skin. */
+static FVector SprayOrigin(const FVector& Keel, const FVector& Chine, float SeaZ, const FVector& Out)
+{
+	const float Up = Chine.Z - Keel.Z;
+	const float F = FMath::Abs(Up) > 1.f ? FMath::Clamp((SeaZ - Keel.Z) / Up, 0.f, 1.f) : 1.f;
+	FVector Origin = FMath::Lerp(Keel, Chine, F) + Out * 6.f;
+	Origin.Z = FMath::Max(Origin.Z, SeaZ);
+	return Origin;
 }
 
 void ARiptideBoat::SprayAtBow(float Strength)
@@ -570,31 +606,40 @@ void ARiptideBoat::SprayAtBow(float Strength)
 	{
 		return;
 	}
-	// The bow slamming into a wave: water bursts out of both sides of the forward hull, crashing outward and up in
-	// a sheet that breaks into droplets, with a cloud of mist hanging behind it. Bigger and higher for a harder hit
-	// (and faster boat); carried forward with the boat.
+	// The bow slamming down into a wave. The water it lands on has nowhere to go but out from under the hull: it
+	// bursts out sideways from both sides of the forward bottom, wherever the hull meets the sea, in a sheet that
+	// fans out low and wide and breaks into droplets, with mist hanging where it was. It isn't carried along with
+	// the boat: it's the sea's water, shoved aside, so the boat runs on past it. Bigger for a harder hit.
 	const FTransform& Xf = HullBody->GetComponentTransform();
-	const FVector HullVelocity = HullBody->GetPhysicsLinearVelocity();
-	const float Speed01 = FMath::Clamp(GetSpeedKnots() / SprayFullKnots, 0.f, 1.2f);
-	const float Power = FMath::Clamp(Strength * (0.4f + 0.8f * Speed01), 0.f, 1.2f);
 	const FVector Right = Xf.GetUnitAxis(EAxis::Y);
-	for (const float Side : { -1.f, 1.f })
+	const float Speed01 = FMath::Clamp(GetSpeedKnots() / SprayFullKnots, 0.f, 1.2f);
+	const float Power = FMath::Clamp(Strength * (0.35f + 0.75f * Speed01), 0.f, 1.2f);
+	FChineSample Samples[2][ChineSamples];
+	SampleChines(Samples);
+	for (int32 S = 0; S < 2; ++S)
 	{
-		for (int32 Point = 0; Point < 8; ++Point)
+		const float Side = S == 0 ? -1.f : 1.f;
+		for (int32 i = 0; i < ChineSamples; ++i)
 		{
-			const float X = FMath::Lerp(100.f, 270.f, Point / 7.f);
-			const FVector Origin = Xf.TransformPosition(FVector(X, Side * WaterlineHalfBeam(X), WaterlineZ + 8.f));
-			const float SeaZ = GetSeaSurfaceZ(Origin);
-			// Further forward, the water is thrown higher and flatter out.
-			const float Fwd = Point / 7.f;
-			const FVector Throw = HullVelocity * 0.8f + Right * Side * FMath::Lerp(500.f, 1300.f, Power)
-				+ FVector::UpVector * FMath::Lerp(500.f, 1400.f, Power) * FMath::Lerp(0.7f, 1.1f, Fwd);
-			Spray->ThrowSpray(Origin, Throw, FMath::Lerp(250.f, 500.f, Power), FMath::RoundToInt(FMath::Lerp(30.f, 90.f, Power)),
-				10.f, FMath::Lerp(28.f, 45.f, Power), FMath::Lerp(1.2f, 2.0f, Power), SeaZ, 1.f, 0.05f);
-			if (Point % 2 == 0)
+			const FChineSample& At = Samples[S][i];
+			// The forward half of the bottom, where it's in the sea or just about to be.
+			if (At.X < -60.f || At.KeelDepth <= 0.f || At.ChineDepth < -25.f)
 			{
-				Spray->ThrowSpray(Origin, HullVelocity * 0.55f + Right * Side * 350.f + FVector::UpVector * FMath::Lerp(300.f, 700.f, Power),
-					200.f, FMath::RoundToInt(FMath::Lerp(1.f, 3.f, Power)), 100.f, FMath::Lerp(220.f, 380.f, Power), 2.0f, SeaZ, 0.15f, 0.f);
+				continue;
+			}
+			const FVector Origin = SprayOrigin(At.Keel, At.Chine, At.SeaZ, Right * Side);
+			const float Fwd01 = FMath::Clamp((At.X + 60.f) / (HullExtent.X + 60.f), 0.f, 1.f);
+			const float Immersed = FMath::Clamp((At.ChineDepth + 25.f) / 40.f, 0.3f, 1.f);
+			// Mostly out, some up (more where the flare is steeper, forward), with only a little of the boat's way on.
+			const FVector Throw = GetDeckPointVelocity(Origin) * 0.2f
+				+ Right * Side * FMath::Lerp(300.f, 800.f, Power) * Immersed
+				+ FVector::UpVector * FMath::Lerp(180.f, 560.f, Power) * FMath::Lerp(0.6f, 1.f, Fwd01) * Immersed;
+			Spray->ThrowSpray(Origin, Throw, FMath::Lerp(100.f, 240.f, Power), FMath::RoundToInt(FMath::Lerp(14.f, 45.f, Power * Immersed)),
+				4.5f, FMath::Lerp(13.f, 20.f, Power), FMath::Lerp(0.9f, 1.5f, Power), At.SeaZ, 0.8f, 0.06f);
+			if (i % 3 == 0)
+			{
+				Spray->ThrowSpray(Origin + FVector::UpVector * 20.f, Throw * 0.35f, 80.f, 1, 80.f, FMath::Lerp(200.f, 320.f, Power),
+					1.8f, At.SeaZ, FMath::Lerp(0.06f, 0.14f, Power), 0.f);
 			}
 		}
 	}
@@ -604,59 +649,119 @@ void ARiptideBoat::UpdateSpray(float DeltaSeconds)
 {
 	if (!Spray || !FApp::CanEverRender() || !Buoyancy || !Buoyancy->IsInWaterBody())
 	{
+		bHaveChineDepths = false;
 		return;
 	}
 	const FTransform& Xf = HullBody->GetComponentTransform();
+	const FVector Fwd = Xf.GetUnitAxis(EAxis::X);
+	const FVector Right = Xf.GetUnitAxis(EAxis::Y);
 	const FVector HullVelocity = HullBody->GetPhysicsLinearVelocity();
-	const float ForwardKnots = FVector::DotProduct(HullVelocity, Xf.GetUnitAxis(EAxis::X)) * CmPerSecToKnots;
+	const float ForwardKnots = FVector::DotProduct(HullVelocity, Fwd) * CmPerSecToKnots;
 	const float Speed01 = FMath::Clamp((ForwardKnots - SprayStartKnots) / (SprayFullKnots - SprayStartKnots), 0.f, 1.2f);
 	if (Speed01 <= 0.f)
 	{
-		BowSprayOwed = 0.f;
+		BowSprayOwed[0] = BowSprayOwed[1] = 0.f;
 		SternSprayOwed = 0.f;
+		bHaveChineDepths = false;
 		return;
 	}
-	const FVector Right = Xf.GetUnitAxis(EAxis::Y);
 
-	// Bow: the bow wave peels off the forward hull in a sheet, thrown out sideways and up by the strakes and chines.
-	// Heavier with speed, and heaviest while the bow is driving down into the water.
-	const float Driving = FMath::Clamp(-HullVelocity.Z / 150.f, 0.f, 1.f);
-	BowSprayOwed += BowSprayRate * FMath::Pow(Speed01, 1.5f) * (1.f + 2.f * Driving) * DeltaSeconds;
-	int32 Bow = FMath::FloorToInt(BowSprayOwed);
-	BowSprayOwed -= Bow;
-	for (; Bow > 0; Bow -= 4)
+	// Spray off a planing hull comes from its spray root: the line where the sea first meets the bottom. The water
+	// there is shoved out from under the V, runs up to the chine and leaves it as a thin sheet. Relative to the boat
+	// it leaves at about the speed the water is going past, angled out 15-30 degrees from straight aft, and only a
+	// little up, because the reverse chine is there to throw it flat. So on the sea it flies out sideways at about
+	// a third of the boat's speed, hardly carried forward at all, and lands 2-4 m out while the boat runs on past
+	// it: a low wing of spray streaming off each side, starting where the hull meets the water. That root moves:
+	// forward when the bow drops into a trough, aft (and the spray stops) when the bow flies off a crest. Where the
+	// hull is driving down into the sea the water is thrown harder and higher.
+	FChineSample Samples[2][ChineSamples];
+	SampleChines(Samples);
+	float Closing[2][ChineSamples];
+	for (int32 S = 0; S < 2; ++S)
 	{
-		for (const float Side : { -1.f, 1.f })
+		for (int32 i = 0; i < ChineSamples; ++i)
 		{
-			const float X = FMath::FRandRange(90.f, 230.f);
-			const FVector Origin = Xf.TransformPosition(FVector(X, Side * WaterlineHalfBeam(X), WaterlineZ + 8.f));
-			// A flat fan thrown out wide and a metre or so up, arcing back down into the sea.
-			const FVector Throw = HullVelocity * 0.88f + Right * Side * FMath::Lerp(500.f, 900.f, Speed01)
-				+ FVector::UpVector * FMath::Lerp(280.f, 560.f, Speed01) * (1.f + 0.8f * Driving);
-			Spray->ThrowSpray(Origin, Throw, 220.f, FMath::Min(Bow, 4), 9.f, FMath::Lerp(22.f, 32.f, Speed01), 1.0f,
-				GetSeaSurfaceZ(Origin), 1.f, 0.05f);
-			if (FMath::FRand() < 0.04f)
+			Closing[S][i] = bHaveChineDepths ? (Samples[S][i].ChineDepth - PrevChineDepth[S][i]) / FMath::Max(DeltaSeconds, 1e-3f) : 0.f;
+			PrevChineDepth[S][i] = Samples[S][i].ChineDepth;
+		}
+	}
+	bHaveChineDepths = true;
+
+	for (int32 S = 0; S < 2; ++S)
+	{
+		const float Side = S == 0 ? -1.f : 1.f;
+		int32 Root = INDEX_NONE;
+		for (int32 i = 0; i < ChineSamples; ++i)
+		{
+			if (Samples[S][i].KeelDepth > 0.f)
 			{
-				Spray->ThrowSpray(Origin, HullVelocity * 0.6f + Right * Side * 300.f + FVector::UpVector * 200.f, 150.f, 1,
-					60.f, 170.f, 1.4f, GetSeaSurfaceZ(Origin), 0.12f, 0.f);
+				Root = i;
+				break;
 			}
+		}
+		if (Root == INDEX_NONE)
+		{
+			BowSprayOwed[S] = 0.f;     // this side is out of the water
+			continue;
+		}
+		// How much water it's pushing aside: how deep the bottom is a metre or so aft of the root, and how hard that
+		// part of the hull is coming down onto the sea.
+		const int32 Loaded = FMath::Min(Root + 3, ChineSamples - 1);
+		const float Load = FMath::Clamp(Samples[S][Loaded].KeelDepth / 30.f, 0.4f, 1.6f);
+		float Plunge = 0.f;
+		for (int32 i = Root; i <= Loaded; ++i)
+		{
+			Plunge = FMath::Max(Plunge, FMath::Clamp(Closing[S][i] / 250.f, 0.f, 1.5f));
+		}
+		BowSprayOwed[S] += BowSprayRate * FMath::Pow(Speed01, 1.5f) * Load * (1.f + 1.5f * Plunge) * DeltaSeconds;
+		const int32 Count = FMath::Min(FMath::FloorToInt(BowSprayOwed[S]), 60);
+		BowSprayOwed[S] -= FMath::FloorToInt(BowSprayOwed[S]);
+
+		for (int32 n = 0; n < Count; ++n)
+		{
+			// Anywhere along the first metre of wetted chine.
+			const float Along = FMath::FRand() * 3.f;
+			const int32 A = FMath::Min(Root + FMath::FloorToInt(Along), ChineSamples - 1);
+			const int32 B = FMath::Min(A + 1, ChineSamples - 1);
+			const float F = FMath::Frac(Along);
+			const FChineSample& SA = Samples[S][A];
+			const FChineSample& SB = Samples[S][B];
+			const float SeaZ = FMath::Lerp(SA.SeaZ, SB.SeaZ, F);
+			const float ChineDepth = FMath::Lerp(SA.ChineDepth, SB.ChineDepth, F);
+			const FVector Origin = SprayOrigin(FMath::Lerp(SA.Keel, SB.Keel, F), FMath::Lerp(SA.Chine, SB.Chine, F), SeaZ, Right * Side);
+			const FVector PointVelocity = GetDeckPointVelocity(Origin);
+			const float U = FMath::Max(0.f, FVector::DotProduct(PointVelocity, Fwd));
+			const float Angle = FMath::DegreesToRadians(FMath::FRandRange(15.f, 30.f));
+			// Flat off a dry chine; climbing higher up the topsides when the sea is over it; highest driving down.
+			const float Lift = FMath::FRandRange(0.08f, 0.2f) + 0.15f * FMath::Clamp(ChineDepth / 20.f, 0.f, 1.f) + 0.2f * Plunge;
+			const FVector Throw = PointVelocity - Fwd * U * FMath::Cos(Angle) + Right * Side * U * FMath::Sin(Angle)
+				+ FVector::UpVector * U * Lift;
+			Spray->ThrowSpray(Origin, Throw, 0.05f * U, 1, 3.5f, FMath::Lerp(9.f, 14.f, Speed01), 0.9f, SeaZ, 0.7f, 0.06f);
+		}
+		// A haze of fine mist hanging over the sheet at speed, left behind where it formed.
+		if (FMath::FRand() < DeltaSeconds * 10.f * Speed01 * Load)
+		{
+			const FChineSample& At = Samples[S][FMath::Min(Root + FMath::RandRange(0, 4), ChineSamples - 1)];
+			const FVector Origin = SprayOrigin(At.Keel, At.Chine, At.SeaZ, Right * Side) + Right * Side * 60.f + FVector::UpVector * 15.f;
+			Spray->ThrowSpray(Origin, HullVelocity * 0.25f + Right * Side * 220.f + FVector::UpVector * 60.f, 60.f, 1, 60.f, 200.f, 1.4f,
+				At.SeaZ, 0.07f, 0.f);
 		}
 	}
 
-	// Stern: the props churn the water behind the transom into tumbling whitewater and mist, left behind the boat.
+	// Stern: each prop churns up a low mound of whitewater behind its motor, tumbling and left behind the boat.
 	SternSprayOwed += SternSprayRate * Speed01 * GetDriveFraction() * DeltaSeconds;
 	int32 Stern = FMath::FloorToInt(SternSprayOwed);
 	SternSprayOwed -= Stern;
 	for (; Stern > 0; --Stern)
 	{
-		const float Y = FMath::FRandRange(-100.f, 100.f);
-		const FVector Origin = Xf.TransformPosition(FVector(-HullExtent.X - FMath::FRandRange(40.f, 120.f), Y, WaterlineZ + 5.f));
-		const FVector Throw = HullVelocity * 0.35f + Right * Y * 2.f + FVector::UpVector * FMath::FRandRange(150.f, 380.f);
-		Spray->ThrowSpray(Origin, Throw, 140.f, 1, 12.f, 40.f, 0.8f, GetSeaSurfaceZ(Origin), 0.9f, 0.03f);
+		const float Y = (FMath::RandBool() ? -1.f : 1.f) * FMath::Abs(OutboardPivot.Y) + FMath::FRandRange(-25.f, 25.f);
+		const FVector Origin = Xf.TransformPosition(FVector(-HullExtent.X - FMath::FRandRange(60.f, 160.f), Y, WaterlineZ + 5.f));
+		const FVector Throw = HullVelocity * 0.35f + Right * Y * 1.5f + FVector::UpVector * FMath::FRandRange(100.f, 260.f);
+		Spray->ThrowSpray(Origin, Throw, 120.f, 1, 12.f, 36.f, 0.8f, GetSeaSurfaceZ(Origin), 0.85f, 0.03f);
 		if (FMath::FRand() < 0.05f)
 		{
-			Spray->ThrowSpray(Origin, HullVelocity * 0.3f + FVector::UpVector * 150.f, 100.f, 1, 80.f, 220.f, 1.5f,
-				GetSeaSurfaceZ(Origin), 0.12f, 0.f);
+			Spray->ThrowSpray(Origin, HullVelocity * 0.3f + FVector::UpVector * 120.f, 90.f, 1, 80.f, 200.f, 1.5f,
+				GetSeaSurfaceZ(Origin), 0.1f, 0.f);
 		}
 	}
 }
@@ -1716,7 +1821,11 @@ float ARiptideBoat::GetBowFreeboardCm() const
 
 float ARiptideBoat::GetSeaSurfaceZ(FVector Location) const
 {
-	if (const AWaterBodyOcean* Ocean = Cast<AWaterBodyOcean>(UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass())))
+	if (!CachedOcean.IsValid())
+	{
+		CachedOcean = Cast<AWaterBodyOcean>(UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass()));
+	}
+	if (const AWaterBodyOcean* Ocean = CachedOcean.Get())
 	{
 		const auto Query = Ocean->GetWaterBodyComponent()->TryQueryWaterInfoClosestToWorldLocation(
 			Location, EWaterBodyQueryFlags::ComputeLocation | EWaterBodyQueryFlags::IncludeWaves);

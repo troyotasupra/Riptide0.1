@@ -256,11 +256,13 @@ def _hull(m):
         pts = [(STERN_X, side * s0["chine_b"] * f, s0["keel_z"] + (s0["chine_z"] - s0["keel_z"]) * f ** 0.9)
                for f in (0.25, 0.5, 0.75, 1.0)]
         pts.append((STERN_X, side * (s0["chine_b"] + (s0["sheer_b"] - s0["chine_b"]) * 0.35), s0["chine_z"] + 1.0))
+        # Up the topsides' edge through the same middle point they have, so the transom meets them with no slit.
+        pts.append((STERN_X, side * s0["sheer_b"] * 0.99, (s0["chine_z"] + s0["sheer_z"]) / 2))
         return pts
-    # Where the topsides' edge crosses the sill's height.
-    shelf = transom_side(1.0)[-1]
-    f = (SILL_Z - shelf[2]) / (s0["sheer_z"] - shelf[2])
-    sill_b = shelf[1] + (s0["sheer_b"] - shelf[1]) * f
+    # Where the topsides' edge crosses the sill's height (between that middle point and the sheer).
+    mid = transom_side(1.0)[-1]
+    f = (SILL_Z - mid[2]) / (s0["sheer_z"] - mid[2])
+    sill_b = mid[1] + (s0["sheer_b"] - mid[1]) * f
     lower = ([(STERN_X, 0.0, s0["keel_z"])] + transom_side(1.0) + [(STERN_X, sill_b, SILL_Z), (STERN_X, -sill_b, SILL_Z)]
              + list(reversed(transom_side(-1.0))))
     aft = lambda p: (p[0] + 50.0, 0.0, p[2])
@@ -343,12 +345,48 @@ def _deck_z_at(x):
     return station((x - STERN_X) / LENGTH)["deck_z"]
 
 
-def _cleat(m, x, y, z):
-    """A mooring cleat, horns fore and aft: a tie-off point."""
-    m.box((x - 5.0, y - 2.0, z), (x + 5.0, y + 2.0, z + 1.0), "Frame")
-    for dx in (-3.5, 3.5):
-        m.tube([(x + dx, y, z + 1.0), (x + dx, y, z + 5.0)], 1.1, "Frame", sides=8)
-    m.tube([(x - 9.0, y, z + 5.5), (x + 9.0, y, z + 5.5)], 1.3, "Frame", sides=8)
+def _frame(origin, forward, up_hint=(0.0, 0.0, 1.0)):
+    """A local frame at origin: s along `forward`, r across, h up (square to forward). Returns a function mapping a
+    local (s, r, h) point into the boat."""
+    f = norm(forward)
+    r = norm(cross(up_hint, f))
+    u = cross(f, r)
+    return lambda p: tuple(origin[a] + p[0] * f[a] + p[1] * r[a] + p[2] * u[a] for a in range(3))
+
+
+def _obox(m, T, lo, hi, material):
+    """A box given in a local frame T (see _frame)."""
+    x0, y0, z0 = lo
+    x1, y1, z1 = hi
+    c = T(((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2))
+    for f in ([(x0, y0, z0), (x0, y1, z0), (x0, y1, z1), (x0, y0, z1)], [(x1, y0, z0), (x1, y1, z0), (x1, y1, z1), (x1, y0, z1)],
+              [(x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1)], [(x0, y1, z0), (x1, y1, z0), (x1, y1, z1), (x0, y1, z1)],
+              [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0)], [(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]):
+        m._part([T(p) for p in f], [(0, 1, 2), (0, 2, 3)], material, outward_hint=lambda p: c)
+
+
+def _cleat(m, T):
+    """A 25 cm mooring cleat in the local frame T (horns along s): a tie-off point. An oval base, two raked legs,
+    and horns that thin toward their tips and turn up a little, so a line can't slip off."""
+    _obox(m, T, (-7.0, -2.4, 0.0), (7.0, 2.4, 1.0), "Frame")
+    for s in (-4.0, 4.0):
+        m.tube([T((s, 0.0, 0.8)), T((s * 1.15, 0.0, 4.4))], 1.35, "Frame", sides=8)
+    horn = [T((s, 0.0, 5.2 + 0.012 * s * s)) for s in (-12.5, -10.0, -6.0, 0.0, 6.0, 10.0, 12.5)]
+    m.tube(horn, 1.25, "Frame", sides=8)
+    for end in (horn[0], horn[-1]):
+        _ball(m, end, 1.25, "Frame", rows=4, cols=8)
+
+
+def _gunwale_frame(t, side, inset):
+    """The local frame on the gunwale cap at station t, `inset` cm in from the sheer: along the gunwale as it curves
+    in toward the bow and sweeps up, square to the cap (which runs straight across the boat at each station)."""
+    a, b = station(max(0.0, t - 0.004)), station(min(1.0, t + 0.004))
+    st = station(t)
+    forward = (b["x"] - a["x"], side * (b["sheer_b"] - a["sheer_b"]), b["sheer_z"] - a["sheer_z"])
+    up = norm(cross(forward, (0.0, 1.0, 0.0)))
+    if up[2] < 0:
+        up = (-up[0], -up[1], -up[2])
+    return _frame((st["x"], side * (st["sheer_b"] - inset), st["sheer_z"]), forward, up)
 
 
 def _deck_hatch(m, x0, x1, hy, handle=True):
@@ -379,13 +417,14 @@ def _fittings(m):
     bp = station(0.975)
     m.box((bp["x"] - 6.0, -5.0, bp["sheer_z"]), (bp["x"] + 6.0, 5.0, bp["sheer_z"] + 0.6), "Trim")
 
-    # Cleats: bow pair, midship (spring) pair and stern pair on the stern box's corners.
+    # Cleats: bow pair, midship (spring) pair on the gunwale caps, lying along the gunwale as it curves and rises,
+    # and the stern pair on the stern box's top, outboard of its hatches.
     for t in (0.87, 0.49):
-        st = station(t)
         for side in (1.0, -1.0):
-            _cleat(m, st["x"], side * (st["sheer_b"] - 3.0), st["sheer_z"])
+            _cleat(m, _gunwale_frame(t, side, 3.6))
+    s0 = station(0.0)
     for side in (1.0, -1.0):
-        _cleat(m, STERN_X + 22.0, side * (station(0.0)["sheer_b"] - 18.0), station(0.0)["sheer_z"])
+        _cleat(m, _frame((STERN_X + 33.0, side * (s0["sheer_b"] - 13.0), s0["sheer_z"]), (1.0, 0.0, 0.0)))
     # Tow post (samson post) on the foredeck, just aft of the anchor locker.
     tx = 345.0
     tz = _deck_z_at(tx)
@@ -405,9 +444,10 @@ def _fittings(m):
 
     # Weapon mount sockets: one on the foredeck behind the tow post, one at each aft corner of the cockpit.
     for x, y, z in ((315.0, 0.0, _deck_z_at(315.0)),
-                    (-315.0, station(0.1)["sheer_b"] - 3.0, station(0.1)["sheer_z"]),
-                    (-315.0, -(station(0.1)["sheer_b"] - 3.0), station(0.1)["sheer_z"])):
-        m.box((x - 6.0, y - 6.0, z), (x + 6.0, y + 6.0, z + 1.2), "Frame")
+                    (-315.0, station(0.1)["sheer_b"] - 3.8, station(0.1)["sheer_z"]),
+                    (-315.0, -(station(0.1)["sheer_b"] - 3.8), station(0.1)["sheer_z"])):
+        hw = 6.0 if y == 0.0 else 3.8          # the gunwale's sockets sit on its 6 cm cap
+        m.box((x - 6.0, y - hw, z), (x + 6.0, y + hw, z + 1.2), "Frame")
         m.tube([(x, y, z + 1.2), (x, y, z + 14.0)], 3.2, "Frame", sides=12)
 
     # The life ring in its holder on the console's front face, where it's to hand from the foredeck and the helm.
@@ -438,21 +478,23 @@ def _fittings(m):
     for side in (1.0, -1.0):
         m.box((BULKHEAD_X - 0.5, side * 60.0 - 8.0, DECK_Z), (BULKHEAD_X + 0.3, side * 60.0 + 8.0, DECK_Z + 6.0), "Trim")
     fs = station(0.2)
-    m.tube([(fs["x"], fs["sheer_b"] - 3.0, fs["sheer_z"]), (fs["x"], fs["sheer_b"] - 3.0, fs["sheer_z"] + 0.8)], 3.0, "Frame", sides=12)
+    m.tube([(fs["x"], fs["sheer_b"] - 3.6, fs["sheer_z"]), (fs["x"], fs["sheer_b"] - 3.6, fs["sheer_z"] + 0.8)], 2.4, "Frame", sides=12)
 
-    # Transom: hydraulic trim tabs at the bottom corners, and the boarding ladder folded up on the port side.
+    # Transom: hydraulic trim tabs hinged along the bottom edge between the motors and the corners, following the
+    # V of the bottom and set down a few degrees, each worked by a ram from a mount higher up the transom. Clear of
+    # the motors' lower units at full lock and trim, and of the ladder.
     s0 = station(0.0)
     for side in (1.0, -1.0):
-        y0, y1 = side * 75.0, side * 110.0
-        m.box((STERN_X - 24.0, min(y0, y1), -28.0), (STERN_X, max(y0, y1), -26.5), "Frame")
-        m.tube([(STERN_X - 1.0, side * 92.0, 5.0), (STERN_X - 16.0, side * 92.0, -26.0)], 2.0, "Trim", sides=8)
-    # The boarding ladder reaches into the water, so a swimmer can climb out (ARiptideBoat's ladder foot), with a
-    # grab handle over the top of the transom.
+        _trim_tab(m, s0, side, 60.0, 88.0)
+    # The boarding ladder reaches into the water, so a swimmer can climb out (ARiptideBoat's ladder foot): two
+    # stainless rails on standoffs off the transom's port corner, flat treads, and a grab handle over the top.
+    lx = STERN_X - 4.0
     for y in (-114.0, -94.0):
-        m.tube([(STERN_X - 4.0, y, -45.0), (STERN_X - 4.0, y, 72.0), (STERN_X + 2.0, y, 80.0), (STERN_X + 14.0, y, 80.0)],
-               1.2, "Frame", sides=8)
+        m.tube([(lx, y, -45.0), (lx, y, 72.0), (STERN_X + 2.0, y, 80.0), (STERN_X + 14.0, y, 80.0)], 1.2, "Frame", sides=8)
+        for z in (8.0, 58.0):
+            m.box((lx, y - 1.0, z - 2.0), (STERN_X, y + 1.0, z + 2.0), "Frame")
     for z in (-38.0, -22.0, -6.0, 10.0, 26.0, 42.0, 58.0):
-        m.tube([(STERN_X - 4.0, -114.0, z), (STERN_X - 4.0, -94.0, z)], 1.0, "Frame", sides=6)
+        m.box((lx - 2.2, -113.0, z - 0.7), (lx + 2.2, -95.0, z + 0.7), "Frame")
     # Bilge pump outlets on the hull sides, aft.
     for x in (-300.0, -200.0):
         st = station((x - STERN_X) / LENGTH)
@@ -469,6 +511,40 @@ def _fittings(m):
                 z = st["keel_z"] + (st["chine_z"] - st["keel_z"]) * (f ** 0.9) - 1.0
                 path.append((st["x"], side * y, z))
             m.tube(path, 1.6, "Aluminium", sides=5)
+
+
+def _bottom_z(s, y):
+    """Height of the hull's bottom at half-width y in section s (the V from the keel out to the chine)."""
+    f = min(1.0, abs(y) / s["chine_b"])
+    return s["keel_z"] + (s["chine_z"] - s["keel_z"]) * f ** 0.9
+
+
+def _trim_tab(m, s0, side, y0, y1, length=23.0, drop_deg=6.0, thick=0.8):
+    """One trim tab on the transom's bottom edge from half-width y0 to y1."""
+    drop = length * math.tan(math.radians(drop_deg))
+    ys = [side * (y0 + (y1 - y0) * i / 4.0) for i in range(5)]
+    hinge = [(STERN_X, y, _bottom_z(s0, y)) for y in ys]
+    trail = [(STERN_X - length, y, _bottom_z(s0, y) - drop) for y in ys]
+    top = [hinge, trail]
+    bottom = [[(p[0], p[1], p[2] - thick) for p in row] for row in top]
+    m.grid(top, "Frame", outward_hint=lambda p: (p[0], p[1], p[2] - 20.0))
+    m.grid(bottom, "Frame", outward_hint=lambda p: (p[0], p[1], p[2] + 20.0))
+    for row_a, row_b in ((trail, [(p[0], p[1], p[2] - thick) for p in trail]),):
+        m.grid([row_a, row_b], "Frame", outward_hint=lambda p: (p[0] + 20.0, p[1], p[2]))
+    for i in (0, -1):
+        _quad(m, hinge[i], trail[i], (trail[i][0], trail[i][1], trail[i][2] - thick), (hinge[i][0], hinge[i][1], hinge[i][2] - thick),
+              "Frame", (STERN_X - length / 2, 0.0, hinge[i][2]))
+    m.tube([(STERN_X - 0.8, p[1], p[2] - 0.3) for p in hinge], 0.9, "Frame", sides=6)
+    # The ram: its cylinder on a bracket up the transom, its rod down to a clevis on the tab's top.
+    ym = side * 0.5 * (y0 + y1)
+    zm = _bottom_z(s0, ym)
+    upper = (STERN_X - 3.5, ym, zm + 30.0)
+    lower = (STERN_X - length * 0.6, ym, zm - drop * 0.6 + 1.2)
+    mid = tuple(upper[a] + (lower[a] - upper[a]) * 0.55 for a in range(3))
+    m.box((STERN_X - 2.0, ym - 3.0, zm + 27.0), (STERN_X, ym + 3.0, zm + 33.0), "Trim")
+    m.tube([upper, mid], 2.2, "Trim", sides=10)
+    m.tube([mid, lower], 0.8, "Frame", sides=6)
+    m.box((lower[0] - 2.0, ym - 1.5, lower[2] - 1.2), (lower[0] + 2.0, ym + 1.5, lower[2] + 0.6), "Frame")
 
 
 def _quad(m, a, b, c, d, material, facing):
@@ -489,7 +565,7 @@ def _stern_box(m, s0):
     for side in (1.0, -1.0):
         _quad(m, (x0 - TRANSOM_THICK, side * WELL_HALF, top), (x1, side * WELL_HALF, top), (x1, side * inner, top),
               (x0 - TRANSOM_THICK, side * inner, top), "Deck", (-360.0, side * 90.0, top + 100.0))
-        hy0, hy1 = side * (WELL_HALF + 10.0), side * (inner - 8.0)
+        hy0, hy1 = side * (WELL_HALF + 8.0), side * (inner - 16.0)      # outboard of it, the stern cleat
         m.box((x0 + 6.0, min(hy0, hy1), top), (x1 - 8.0, max(hy0, hy1), top + 0.8), "Trim")
     # Splashwell: floor, sides, the bulkhead's back, and the inside of the transom up to the sill.
     well_centre = ((x0 + x1) / 2, 0.0, (WELL_FLOOR_Z + top) / 2)
@@ -705,47 +781,135 @@ def build_radar_array():
     return m
 
 
-def build_outboard():
-    """A big outboard. Origin = the tilt tube at the top of its clamp bracket (which is a separate model, fixed to the
-    transom): the motor trims and steers about it. The prop sits at (-45, 0, -100) (ARiptideBoat's PropInOutboard)."""
-    m = Mesh()
-    # Cowling: rounded box, sloping back.
-    rows = []
-    for zi, (z, sx, sy, xoff) in enumerate([(30.0, 30.0, 26.0, 0.0), (45.0, 34.0, 30.0, -2.0), (75.0, 34.0, 30.0, -4.0),
-                                             (95.0, 30.0, 26.0, -6.0), (104.0, 22.0, 18.0, -8.0), (108.0, 10.0, 8.0, -8.0)]):
-        row = []
-        for i in range(20):
-            a = 2 * math.pi * i / 20
-            row.append((-30.0 + xoff + sx * math.cos(a), sy * 0.95 * math.sin(a), z))
-        rows.append(row)
-    m.grid(rows, "Cowling", outward_hint=lambda p: (-32.0, 0.0, p[2]), close_rows=True)
-    m.fan([p for p in rows[0]], "Cowling", outward_hint=lambda p: (-32.0, 0.0, 60.0))
-    m.fan([p for p in rows[-1]], "Cowling", outward_hint=lambda p: (-32.0, 0.0, 60.0))
-    # Swivel bracket: hangs from the tilt tube and carries the motor (the clamp bracket stays on the transom).
-    m.box((-13.0, -9.0, -1.0), (-7.0, 9.0, 28.0), "Trim")
-    # Midsection leg down to the gearcase.
-    m.prism([(-14.0, 32.0), (-36.0, 32.0), (-34.0, -60.0), (-16.0, -60.0)], -8.0, 8.0, "Cowling")
-    # Gearcase torpedo, skeg, and anti-ventilation plate.
-    torpedo = []
-    for xi in range(9):
-        x = -2.0 - 44.0 * xi / 8
-        r = 8.0 * math.sin(math.pi * (0.15 + 0.85 * xi / 8)) + 1.0
-        torpedo.append([(x, r * math.cos(a), -75.0 + r * math.sin(a)) for a in [2 * math.pi * i / 12 for i in range(12)]])
-    m.grid(torpedo, "Trim", outward_hint=lambda p: (p[0], 0.0, -75.0), close_rows=True)
-    m.prism([(-30.0, -80.0), (-12.0, -80.0), (-18.0, -98.0), (-26.0, -98.0)], -1.5, 1.5, "Trim")
-    m.box((-44.0, -16.0, -58.0), (-8.0, 16.0, -55.0), "Cowling")
-    # Propeller: three blades on a hub.
-    m.tube([(-46.0, 0.0, -75.0), (-54.0, 0.0, -75.0)], 4.0, "Prop", sides=10)
-    for k in range(3):
-        a = 2 * math.pi * k / 3
+def _foil_ring(z, le_x, chord, thick, n=10):
+    """A horizontal slice through a streamlined leg: a symmetric foil (NACA 00xx, closed tail) with its leading edge
+    forward at le_x (+X, toward the boat), `chord` long and `thick` at its widest, as a closed ring of points."""
+    def half(xc):
+        return 5.0 * thick * (0.2969 * math.sqrt(xc) - 0.126 * xc - 0.3516 * xc ** 2 + 0.2843 * xc ** 3 - 0.1036 * xc ** 4)
+    xcs = [0.5 * (1.0 - math.cos(math.pi * i / n)) for i in range(n + 1)]          # bunched at nose and tail
+    upper = [(le_x - chord * xc, half(xc), z) for xc in xcs]
+    lower = [(le_x - chord * xc, -half(xc), z) for xc in reversed(xcs[1:-1])]
+    return upper + lower
+
+
+def _superellipse_ring(z, cx, sx, sy, n=3.0, count=24):
+    """A rounded-rectangle slice (a cowling's): half-length sx, half-width sy, centred at x = cx."""
+    pts = []
+    for i in range(count):
+        a = 2 * math.pi * i / count
         c, s = math.cos(a), math.sin(a)
-        blade = [(-48.0, 4.0 * c, -75.0 + 4.0 * s), (-52.0, 4.0 * c, -75.0 + 4.0 * s),
-                 (-54.0, 17.0 * math.cos(a + 0.25), -75.0 + 17.0 * math.sin(a + 0.25)),
-                 (-47.0, 17.0 * math.cos(a - 0.1), -75.0 + 17.0 * math.sin(a - 0.1))]
-        m._part(blade, [(0, 1, 2), (0, 2, 3)], "Prop")
-        m._part(list(reversed(blade)), [(0, 1, 2), (0, 2, 3)], "Prop")
-    # Built around its old steering point; move it so the origin is the tilt tube, 5 cm aft of the transom at the sill.
-    m.verts = [((p[0] + 5.0, p[1], p[2] - 25.0), n, uv) for p, n, uv in m.verts]
+        pts.append((cx + sx * math.copysign(abs(c) ** (2.0 / n), c), sy * math.copysign(abs(s) ** (2.0 / n), s), z))
+    return pts
+
+
+def _loft(m, rings, material, centre_x, cap_bottom=False, cap_top=False):
+    """A closed surface through horizontal rings (each the same number of points), optionally capped."""
+    m.grid(rings, material, outward_hint=lambda p: (centre_x, 0.0, p[2]), close_rows=True)
+    if cap_bottom:
+        m.fan(rings[0], material, outward_hint=lambda p: (centre_x, 0.0, p[2] + 10.0))
+    if cap_top:
+        m.fan(rings[-1], material, outward_hint=lambda p: (centre_x, 0.0, p[2] - 10.0))
+
+
+# The outboard's lower unit, in its own frame (origin at the tilt tube, the transom's outer face at X = +5): a 25 in
+# shaft puts the anti-ventilation plate 64 cm under the clamp, 2-3 cm below the hull's bottom at the motor, and the
+# prop's centre 22 cm under the plate, so its tips just clear it.
+PLATE_Z = -78.0
+PROP_CENTRE = (-45.0, 0.0, -100.0)      # the boat's PropInOutboard
+PROP_RADIUS = 19.0                       # a 15 in x 19 in stainless three-blade
+
+
+def build_outboard():
+    """A big outboard (a 300 hp V8 on a 25 in shaft). Origin = the tilt tube at the top of its clamp bracket (a
+    separate model, fixed to the transom): the motor trims and steers about it. The prop sits at PROP_CENTRE."""
+    m = Mesh()
+    pz = PLATE_Z
+    # Cowling: flat-sided and round-cornered, tallest at the back, over a lower cowl (the chaps) that narrows down
+    # into the midsection. A black split line where the top cowl lifts off.
+    chaps = [_superellipse_ring(z, cx, sx, sy) for z, cx, sx, sy in (
+        (-16.0, -24.0, 20.0, 9.0), (-6.0, -25.0, 27.0, 19.0), (4.0, -26.0, 30.0, 25.0))]
+    _loft(m, chaps, "Cowling", -26.0, cap_bottom=True)
+    top = [_superellipse_ring(z, cx, sx, sy) for z, cx, sx, sy in (
+        (4.0, -26.0, 30.0, 25.0), (12.0, -26.0, 33.5, 28.0), (46.0, -27.0, 34.0, 28.5), (64.0, -28.5, 31.5, 26.5),
+        (74.0, -30.0, 26.0, 21.5), (80.0, -31.0, 17.0, 13.5), (82.5, -31.5, 7.0, 5.0))]
+    _loft(m, top, "Cowling", -27.0, cap_top=True)
+    split = _superellipse_ring(8.0, -26.0, 32.3, 26.8)
+    m.tube(split + [split[0]], 0.8, "Trim", sides=6)
+    # Air intake grille across the top of the back, and the latch at the front.
+    for i in range(4):
+        z = 58.0 + 3.0 * i
+        m.box((-62.0 + 0.4 * i, -12.0, z), (-60.0 + 0.4 * i, 12.0, z + 1.2), "Trim")
+    m.box((6.8, -5.0, 20.0), (7.8, 5.0, 24.0), "Trim")
+
+    # Steering: the swivel bracket hangs off the tilt tube and carries the steering tube; the motor rides on rubber
+    # mounts on it, just in front of the midsection.
+    for y in (-11.0, 11.0):
+        m.box((-6.0, y - 2.0, -4.0), (1.0, y + 2.0, 4.0), "Trim")
+    m.box((-6.0, -10.0, -3.0), (-2.0, 10.0, 3.0), "Trim")
+    m.tube([(-4.5, 0.0, -24.0), (-4.5, 0.0, 3.0)], 3.5, "Trim", sides=10)
+    m.box((-10.0, -6.0, -24.0), (-3.0, 6.0, -18.0), "Trim")
+
+    # Midsection: the driveshaft housing, a streamlined leg from inside the chaps down to the plate.
+    mid = [_foil_ring(z, le, c, t) for z, le, c, t in (
+        (-12.0, -8.0, 36.0, 13.0), (-40.0, -7.0, 35.0, 12.0), (pz + 1.0, -6.0, 34.0, 11.0))]
+    _loft(m, mid, "Cowling", -24.0)
+
+    # Anti-ventilation plate: widest over the prop, round at the back, its front wrapped round the leg.
+    half_outline = [(-5.0, 0.0), (-9.0, 5.0), (-18.0, 9.5), (-30.0, 13.0), (-42.0, 14.0), (-51.0, 12.0), (-56.0, 7.0),
+                    (-57.5, 0.0)]
+    outline = half_outline + [(x, -y) for x, y in reversed(half_outline[1:-1])]
+    z0, z1 = pz, pz + 1.6
+    m.fan([(x, y, z1) for x, y in outline], "Cowling", outward_hint=lambda p: (p[0], p[1], p[2] - 10.0))
+    m.fan([(x, y, z0) for x, y in outline], "Cowling", outward_hint=lambda p: (p[0], p[1], p[2] + 10.0))
+    m.grid([[(x, y, z0), (x, y, z1)] for x, y in outline + [outline[0]]], "Cowling", outward_hint=lambda p: (-30.0, 0.0, p[2]))
+    # Its trim-tab anode under the back of the plate.
+    m.prism([(-40.0, pz), (-50.0, pz), (-49.0, pz - 5.0), (-42.0, pz - 5.0)], -1.0, 1.0, "Prop")
+
+    # Gearcase: the strut from the plate down to the torpedo (thinner than the leg), as one piece with it.
+    cx, cy, cz = PROP_CENTRE
+    strut = [_foil_ring(z, le, c, t) for z, le, c, t in (
+        (pz + 0.5, -6.0, 34.0, 9.0), (pz - 12.0, -5.0, 33.0, 8.0), (cz + 2.0, -4.0, 32.0, 7.0))]
+    _loft(m, strut, "Cowling", -22.0)
+    # Water intakes on its sides.
+    for side in (1.0, -1.0):
+        m.box((-22.0, min(side * 3.4, side * 4.2), pz - 13.0), (-12.0, max(side * 3.4, side * 4.2), pz - 5.0), "Trim")
+    # Torpedo: the bullet that holds the gears, nose forward, running back into the prop hub.
+    torpedo = []
+    for i in range(13):
+        f = i / 12.0
+        x = 3.0 - 41.0 * f
+        r = 7.5 * math.sin(math.pi / 2 * min(1.0, f / 0.3)) ** 0.5 if f < 0.6 else 7.5 - 2.2 * (f - 0.6) / 0.4
+        r = max(r, 0.8)
+        torpedo.append([(x, r * math.cos(a), cz + r * math.sin(a)) for a in [2 * math.pi * j / 14 for j in range(14)]])
+    m.grid(torpedo, "Cowling", outward_hint=lambda p: (p[0], 0.0, cz), close_rows=True)
+    m.fan(torpedo[0], "Cowling", outward_hint=lambda p: (p[0] - 10.0, 0.0, cz))
+    # Skeg under it, raked back, reaching just below the prop's tips to guard them.
+    m.prism([(-10.0, cz - 5.0), (-37.0, cz - 5.0), (-36.0, cz - PROP_RADIUS - 5.0), (-28.0, cz - PROP_RADIUS - 6.5)], -1.3, 1.3,
+            "Cowling")
+
+    # Propeller: hub, exhaust through its centre, and three pitched, skewed blades.
+    m.tube([(-38.0, 0.0, cz), (-45.0, 0.0, cz), (-51.0, 0.0, cz)], 5.3, "Prop", sides=14)
+    _cone(m, (-51.0, 0.0, cz), (-54.0, 0.0, cz), 5.3, 4.2, "Prop", sides=14)
+    m.fan([(-54.0, 4.2 * math.cos(a), cz + 4.2 * math.sin(a)) for a in [2 * math.pi * j / 14 for j in range(14)]], "Trim",
+          outward_hint=lambda p: (-40.0, 0.0, cz))
+    pitch = 48.0
+    hub_r = 5.0
+    for k in range(3):
+        base = 2 * math.pi * k / 3 + 0.4
+        rows = []
+        for u in (0.0, 0.2, 0.4, 0.6, 0.8, 0.93, 1.0):
+            r = hub_r + (PROP_RADIUS - hub_r) * u
+            chord = 7.0 + 13.0 * math.sin(math.pi * u) ** 0.7 if u < 1.0 else 3.0
+            skew = 0.35 * u * u                            # the blades sweep back against the turn
+            rake = -2.5 * u                                # and lean aft
+            row = []
+            for j in range(5):
+                dphi = (j / 4.0 - 0.5) * chord / r
+                x = cx + rake - dphi * pitch / (2 * math.pi)
+                row.append((x, r * math.cos(base + skew + dphi), cz + r * math.sin(base + skew + dphi)))
+            rows.append(row)
+        m.grid(rows, "Prop")
+        m.grid([list(reversed(row)) for row in rows], "Prop")
     return m
 
 
