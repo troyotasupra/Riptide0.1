@@ -58,14 +58,26 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Boat")
 	void SetHelmInput(float Throttle, float Steer);
 
+	/** Holds the trim switch as if pressed: 1 trims the motors out (bow up), -1 trims them in (bow down). Server only. */
+	UFUNCTION(BlueprintCallable, Category = "Boat")
+	void SetTrimInput(float Trim);
+
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	float GetThrottleLever() const { return ThrottleLever; }
+
+	/** Motor trim in degrees: positive is trimmed out (bow up), negative trimmed in (bow down). */
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetTrimDeg() const { return TrimDeg; }
 
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	float GetEngineOutput() const { return EngineOutput; }
 
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	float GetFuelLiters() const { return FuelLiters; }
+
+	/** Height of the sea's surface, waves included, at a point (Z = 0 if there's no ocean). */
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetSeaSurfaceZ(FVector Location) const;
 
 	/** Height of the bow's deck edge above the water there, in cm. Negative means the bow is under. */
 	UFUNCTION(BlueprintPure, Category = "Boat")
@@ -326,6 +338,38 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
 	float SteerRateDeg = 70.f;
 
+	// Trim tilts both motors on their transom brackets. Trimmed out, the lower units swing aft and the props push
+	// slightly down on the stern, so the bow rides higher (faster, but the props ride nearer the surface and can
+	// ventilate). Trimmed in, they push the stern up and hold the bow down (for getting onto the plane, or head seas).
+
+	/** Furthest trimmed in (negative) and out (positive), in degrees. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
+	float MinTrimDeg = -6.f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
+	float MaxTrimDeg = 16.f;
+
+	/** How fast the trim moves while the switch is held, in degrees per second. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
+	float TrimRateDeg = 5.f;
+
+	/**
+	 * Pitching moment per degree of trim at TrimFullEffectKnots and full throttle, in N*m (positive trim lifts the
+	 * bow). Tilting the thrust alone hardly moves a heavy hull; on a real boat trim mostly works through the hull's
+	 * planing lift, so this grows with speed. At 2500 and cruising speed, fully out lifts the bow about 5 degrees
+	 * (measured on flat water).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
+	float TrimMomentPerDeg = 2500.f;
+
+	/** The same for trimming in (bow down). Trimmed in, the bow is pressed onto the water rather than lifted off it, so
+	 * the hull doesn't run out of grip and it can work harder: fully in drops the bow about 3 degrees. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
+	float TrimInMomentPerDeg = 5500.f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
+	float TrimFullEffectKnots = 15.f;
+
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
 	float FuelCapacityLiters = 40.f;
 
@@ -351,6 +395,10 @@ protected:
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category = "Boat|State")
 	float SteerAngleDeg = 0.f;
 
+	/** Motor trim, from MinTrimDeg to MaxTrimDeg. It stays where it's left. */
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category = "Boat|State")
+	float TrimDeg = 0.f;
+
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category = "Boat|State")
 	float FuelLiters = 0.f;
 
@@ -372,6 +420,16 @@ private:
 	void ApplyHydrodynamics();
 	void DrawDebugHud() const;
 	bool IsPropSubmerged(const USceneComponent* Prop) const;
+
+	/** Reads the sea at each prop and decides whether it's biting: out once it's clear of the surface by PropDryMargin,
+	 * back in once it's under again, so a prop skimming the surface doesn't flicker in and out every frame. */
+	void UpdatePropImmersion();
+
+	/** How the outboards sit on their brackets: tilted by the trim, then swung by the steering. */
+	FQuat GetOutboardRotation() const;
+
+	/** Turns and tilts the outboard models, and moves the props with them. */
+	void PoseOutboards();
 	void RegisterWithWakeSimulation();
 	AActor* SpawnWakeSimulation(UClass* SimClass);
 	void StartSounds();
@@ -386,12 +444,14 @@ private:
 	void OnCutThrottle(const FInputActionValue& Value);
 	void OnLook(const FInputActionValue& Value);
 	void OnLeaveHelm(const FInputActionValue& Value);
+	void OnTrim(const FInputActionValue& Value);
+	void OnTrimReleased(const FInputActionValue& Value);
 
 	UFUNCTION(Server, Reliable)
 	void ServerLeaveHelm();
 
 	UFUNCTION(Server, Unreliable)
-	void ServerSetControls(float InThrottleInput, float InSteerInput, bool bInCutThrottle);
+	void ServerSetControls(float InThrottleInput, float InSteerInput, float InTrimInput, bool bInCutThrottle);
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> HelmMapping;
@@ -411,12 +471,16 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> LeaveHelmAction;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> TrimAction;
+
 	UPROPERTY(Replicated, Transient)
 	TObjectPtr<ARiptideCharacter> Helmsman;
 
 	// Raw input from whoever is at the helm. On the server these come from ServerSetControls.
 	float ThrottleInput = 0.f;
 	float SteerInput = 0.f;
+	float TrimInput = 0.f;
 	bool bCutThrottleRequested = false;
 
 	float LookYaw = 0.f;
@@ -424,6 +488,12 @@ private:
 
 	/** Remaining time the engine is cut out by a sputter. */
 	float SputterTimeLeft = 0.f;
+
+	/** Whether each prop (port, starboard) is in the water, from UpdatePropImmersion. */
+	bool bPropWet[2] = { true, true };
+
+	/** How far above the surface (cm) a prop has to rise before it counts as out of the water. */
+	float PropDryMargin = 4.f;
 
 	/** Index of the buoyancy pontoon nearest the propeller, used to read the water height there. */
 	int32 SternPontoonIndex = INDEX_NONE;
@@ -434,6 +504,9 @@ private:
 	/** Distance falloff shared by the boat's sounds, so other boats fade with distance. */
 	UPROPERTY(Transient)
 	TObjectPtr<USoundAttenuation> SoundFalloff;
+
+	/** The wake simulation this boat created, which it carries along with it. */
+	TWeakObjectPtr<AActor> WakeSimulation;
 
 	int32 SternFoamTrail = INDEX_NONE;
 	float ChurnLevel = 0.f;

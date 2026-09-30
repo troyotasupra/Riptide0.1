@@ -17,7 +17,8 @@ import math
 LENGTH = 790.0           # stern at X = -395, stem at X = +395
 HALF_BEAM = 130.0
 STERN_X = -395.0
-STATIONS = 60            # lengthwise resolution of the hull
+STATIONS = 60
+DECK_Z = 20.0            # the cockpit deck, 35 cm above the waterline (self-bailing, and clear of the swell)            # lengthwise resolution of the hull
 
 
 def smoothstep(a, b, x):
@@ -33,12 +34,12 @@ def station(t):
     else:
         u = (t - 0.35) / 0.65
         sheer_b = HALF_BEAM * max(0.0, math.cos(u * math.pi / 2)) ** 0.75
-    sheer_z = 60.0 + 45.0 * t ** 2.2                       # knee-high bulwarks aft, sweeping up to a proud bow
+    sheer_z = DECK_Z + 55.0 + 45.0 * t ** 2.2              # knee-high bulwarks aft, sweeping up to a proud bow
     keel_z = -42.0 + 30.0 * smoothstep(0.62, 1.0, t) ** 1.3 + 50.0 * smoothstep(0.93, 1.0, t)
     chine_b = sheer_b * (0.88 - 0.1 * smoothstep(0.6, 1.0, t))
     chine_z = -24.0 + 34.0 * smoothstep(0.55, 1.0, t)       # chine sweeps up into the bow
     chine_z = min(chine_z, sheer_z - 6.0)
-    deck_z = 5.0 + 14.0 * smoothstep(0.7, 1.0, t)
+    deck_z = DECK_Z + 14.0 * smoothstep(0.7, 1.0, t)
     return {"sheer_b": sheer_b, "sheer_z": sheer_z, "keel_z": keel_z, "chine_b": chine_b, "chine_z": chine_z,
             "deck_z": deck_z, "x": STERN_X + LENGTH * t}
 
@@ -209,14 +210,15 @@ def _hull(m):
         wall = [[(s["x"], side * max(0.0, s["sheer_b"] - 6.0), s["sheer_z"]),
                  (s["x"], side * max(0.0, s["sheer_b"] - 6.0), s["deck_z"])] for s in secs[:-2]]
         m.grid(wall, "HullInside", outward_hint=lambda p: (p[0], side * 500.0, p[2]))
-        # Gunwale cap closing the top of the shell.
+        # Gunwale cap closing the top of the shell, right to the stem, where the two sides meet (and the bow platform
+        # fills between their inner edges).
         cap = [[(s["x"], side * s["sheer_b"], s["sheer_z"]), (s["x"], side * max(0.0, s["sheer_b"] - 6.0), s["sheer_z"])]
-               for s in secs[:-2]]
+               for s in secs]
         m.grid(cap, "Aluminium", outward_hint=lambda p: (p[0], p[1], p[2] - 50.0))
 
         # Fender collar: a thick black rubber band around the gunwale (like a patrol boat's foam collar).
         collar = []
-        for s in secs[:-1]:
+        for s in secs:
             b, z = s["sheer_b"], s["sheer_z"]
             collar.append([(s["x"], side * (b - 1.0), z + 4.0), (s["x"], side * (b + 7.0), z + 1.0),
                            (s["x"], side * (b + 9.0), z - 6.0), (s["x"], side * (b + 7.0), z - 13.0),
@@ -246,9 +248,22 @@ def _hull(m):
            (se["x"], max(0.0, se["sheer_b"] - 6.0), se["sheer_z"]), (se["x"], -max(0.0, se["sheer_b"] - 6.0), se["sheer_z"])],
           "HullInside", outward_hint=lambda p: (p[0] + 50.0, 0.0, p[2]))
 
+    # Bow platform (the anchor locker's lid) closing the stem over the end of the deck at gunwale height, so the bow
+    # reads as solid from inside the boat rather than showing the backs of the hull's outer faces.
+    tip = secs[-1]
+    rim = [(s["x"], max(0.0, s["sheer_b"] - 6.0), s["sheer_z"]) for s in secs[-3:-1]]
+    outline = [(se["x"], -rim[0][1], rim[0][2]), (rim[1][0], -rim[1][1], rim[1][2]), (tip["x"], 0.0, tip["sheer_z"]),
+               (rim[1][0], rim[1][1], rim[1][2]), (se["x"], rim[0][1], rim[0][2])]
+    m.fan(outline, "Deck", outward_hint=lambda p: (p[0], p[1], p[2] - 50.0))
+    # Its edges down to the hull sides, so there's no gap under the lid where the walls stop.
+    for side in (1.0, -1.0):
+        edge = [[(x, side * y, z), (x, side * y, z - 30.0)] for x, y, z in
+                [(se["x"], rim[0][1], rim[0][2]), (rim[1][0], rim[1][1], rim[1][2]), (tip["x"], 0.0, tip["sheer_z"])]]
+        m.grid(edge, "HullInside", outward_hint=lambda p: (p[0], side * 500.0, p[2]))
+
 
 def _console(m):
-    deck = 5.0
+    deck = DECK_Z
     top = deck + 112.0
     # Console: raked front, flat top behind the windscreen, and a dash sloping down toward the helm.
     profile = [(-45.0, deck), (35.0, deck), (35.0, deck + 70.0), (5.0, top), (-20.0, top), (-45.0, deck + 95.0)]
@@ -256,9 +271,10 @@ def _console(m):
     _windscreen(m, top)
     _dash_and_wheel(m, deck)
 
-    # Leaning post behind the helm, with a padded bolster.
-    m.box((-160.0, -40.0, deck), (-130.0, 40.0, deck + 70.0), "Console")
-    m.box((-162.0, -42.0, deck + 70.0), (-128.0, 42.0, deck + 92.0), "Cushion")
+    # Leaning post behind the helm, with a padded bolster. It leaves about 75 cm to stand in behind the wheel, room
+    # to stay clear of it with the boat pitching.
+    m.box((-175.0, -40.0, deck), (-145.0, 40.0, deck + 70.0), "Console")
+    m.box((-177.0, -42.0, deck + 70.0), (-143.0, 42.0, deck + 92.0), "Cushion")
 
 
 def _windscreen(m, base_z):
@@ -321,8 +337,8 @@ def _dash_and_wheel(m, deck):
     tilt = math.radians(35.0)
     axis = (-math.cos(tilt), 0.0, math.sin(tilt))      # the wheel faces back and up
     up = (math.sin(tilt), 0.0, math.cos(tilt))          # in the wheel's plane, pointing up
-    centre = (-57.0, 0.0, deck + 88.0)
-    hub_in = (centre[0] - axis[0] * 14.0, 0.0, centre[2] - axis[2] * 14.0)
+    centre = (-53.0, 0.0, deck + 88.0)
+    hub_in = (centre[0] - axis[0] * 10.0, 0.0, centre[2] - axis[2] * 10.0)
     m.tube([hub_in, centre], 2.2, "Trim", sides=8)
     radius = 18.0
 
@@ -335,8 +351,8 @@ def _dash_and_wheel(m, deck):
 
 
 def _t_top(m):
-    deck = 5.0
-    top = 225.0
+    deck = DECK_Z
+    top = DECK_Z + 220.0
     # Legs close in against the console and leaning post, leaving the side decks clear to walk.
     legs = [(-150.0, 48.0), (-150.0, -48.0), (20.0, 48.0), (20.0, -48.0)]
     for x, y in legs:

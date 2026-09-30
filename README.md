@@ -3,7 +3,7 @@
 Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLAN.md`.
 
 ## Current state: milestone 1 (the boat), and walking its deck from milestone 2
-- A full-size 26 ft (7.9 m, 2.6 m beam) aluminium centre-console patrol boat (deep-V hull, fender collar, T-top, bow rail) with twin outboards that swing as they steer, floating on the Water plugin ocean. Each motor pushes only while its own prop is in the water. The model is our own, generated in code by `Content/Python/riptide_boat_mesh.py` and imported when the editor opens; change the shape there and bump `BOAT_MODEL_VERSION` in `init_unreal.py` to rebuild it.
+- A full-size 26 ft (7.9 m, 2.6 m beam) aluminium centre-console patrol boat (deep-V hull, fender collar, T-top, bow rail) with twin outboards that swing as they steer and tilt with the trim, floating on the Water plugin ocean. Each motor pushes only while its own prop is in the water. Trimming out lifts the bow at speed (about 6 degrees fully out), trimming in holds it down. The model is our own, generated in code by `Content/Python/riptide_boat_mesh.py` and imported when the editor opens; change the shape there and bump `BOAT_MODEL_VERSION` in `init_unreal.py` to rebuild it.
 - The ocean test map (2 km of open sea with a moderate 1-1.5 m swell) builds itself the first time the editor opens (`Content/Python/init_unreal.py`). To rebuild it after changing that script, delete `Content/Riptide/Maps/Ocean_Test.umap` with the editor closed.
 - You start on foot on the deck, in first person, and can walk all of it: round the console on either side, up to the bow and across the aft deck, at rest or at full speed through turns. Step up to the wheel and press E to take the helm; E again lets go (the throttle stays where you left it). Falling overboard puts you back on deck for now, since swimming comes next.
 - The boat leaves a real wake: its hull pushes the Water plugin's fluid simulation (Epic's boat force, scaled for a small hull), so waves and foam spread behind it in a V; white prop churn trails from the transom (`RiptideWakeFoamComponent`). Materials are built by `init_unreal.py`.
@@ -11,7 +11,7 @@ Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLA
 - Builds and runs on Unreal Engine 5.7 (Windows, Visual Studio 2022).
 
 ## Handling test
-`Tools/boat_handling_test.py` plays Ocean_Test hands-free and checks the boat floats, stays upright, drives, and steers the right way. Meanwhile the player walks laps of the whole deck, at rest and at speed, and must never get stuck or fall off; at the end it takes the helm and leaves it again. Run it with the editor closed:
+`Tools/boat_handling_test.py` plays Ocean_Test hands-free and checks the boat floats, stays upright, drives, and steers the right way. It also checks the props and hull never flicker in and out of the water, the outboards swing with the wheel, trim moves the bow up and down, and the sea stays below the deck. Meanwhile the player walks laps of the whole deck, at rest and at speed, and must never get stuck, hop or fall off; at the end it takes the helm and leaves it again. Run it with the editor closed:
 
 ```
 UnrealEditor Riptide.uproject -nullrhi -unattended -nosplash -nosound -ExecCmds="py <project>/Tools/boat_handling_test.py"
@@ -37,11 +37,12 @@ Each sound is levelled on import to a target loudness, with peaks held below -8 
 |---|---|---|
 | Throttle lever up / down (stays where you leave it) | W / S | Right / left trigger |
 | Steer the motor | A / D | Left stick |
+| Trim out (bow up) / in (bow down) | R / F | D-pad up / down |
 | Cut throttle to idle | X | B |
 | Look around | Mouse | Right stick |
 | Leave the helm | E | X |
 
-The top-left readout shows speed, throttle, fuel, engine health, and whether the props are in the water.
+The top-left readout shows speed, throttle, motor angle, trim, fuel, engine health, and whether the props are in the water.
 
 ## Development PC
 Windows 11, AMD Ryzen 5 2600X (6 cores), 32 GB RAM. NVIDIA GeForce RTX 3060. Target: 1080p, 60 fps, Lumen on, with DLSS as an option.

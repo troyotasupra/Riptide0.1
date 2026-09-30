@@ -1,6 +1,9 @@
 #include "RiptideGameMode.h"
 
 #include "EngineUtils.h"
+#include "Kismet/GameplayStatics.h"
+#include "WaterBodyComponent.h"
+#include "WaterBodyOceanActor.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
 
@@ -18,8 +21,20 @@ ARiptideBoat* ARiptideGameMode::FindOrLaunchBoat(AActor* StartSpot)
 	}
 
 	// Launched on the water at the player start (the hull's origin sits 15 cm above its waterline), facing its way.
+	// It sits on the swell as it is right there: dropped into a crest's flank at flat sea level, the hull would be
+	// buried a metre deep and thrown clear of the water.
 	FVector Location = StartSpot ? StartSpot->GetActorLocation() : FVector::ZeroVector;
-	Location.Z = 15.f;
+	float SurfaceZ = 0.f;
+	if (const AWaterBodyOcean* Ocean = Cast<AWaterBodyOcean>(UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass())))
+	{
+		const auto Query = Ocean->GetWaterBodyComponent()->TryQueryWaterInfoClosestToWorldLocation(
+			FVector(Location.X, Location.Y, 0.f), EWaterBodyQueryFlags::ComputeLocation | EWaterBodyQueryFlags::IncludeWaves);
+		if (Query.HasValue())
+		{
+			SurfaceZ = Query.GetValue().GetWaterSurfaceLocation().Z;
+		}
+	}
+	Location.Z = SurfaceZ + 15.f;
 	const FRotator Facing(0.f, StartSpot ? StartSpot->GetActorRotation().Yaw : 0.f, 0.f);
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;

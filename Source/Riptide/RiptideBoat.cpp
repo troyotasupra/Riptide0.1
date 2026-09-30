@@ -56,9 +56,9 @@ namespace
 
 	// The deck, where the crew stands (see riptide_boat_mesh.py): flat at this height from the transom to the
 	// foredeck. Spots: the helm, behind the console; the aft deck; its two corners; the foredeck.
-	constexpr float DeckZ = 5.f;
+	constexpr float DeckZ = 20.f;
 	const FVector DeckSpots[] = {
-		FVector(-100.f, 0.f, DeckZ),
+		FVector(-110.f, 0.f, DeckZ),
 		FVector(-270.f, 0.f, DeckZ),
 		FVector(-270.f, -70.f, DeckZ),
 		FVector(-270.f, 70.f, DeckZ),
@@ -145,7 +145,7 @@ ARiptideBoat::ARiptideBoat()
 	// Standing at the helm, an arm's length behind the wheel, eyes about 1.7 m above the deck.
 	HelmCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("HelmCamera"));
 	HelmCamera->SetupAttachment(HullBody);
-	HelmCamera->SetRelativeLocation(FVector(-100.f, 0.f, 175.f));
+	HelmCamera->SetRelativeLocation(FVector(-110.f, 0.f, DeckZ + 170.f));
 	HelmCamera->bUsePawnControlRotation = false;
 
 	// At the waterline, amidships.
@@ -378,7 +378,10 @@ AActor* ARiptideBoat::SpawnWakeSimulation(UClass* SimClass)
 		}
 	};
 	Set(TEXT("WaterBody"), [Ocean](FProperty* P, void* V) { if (FObjectPropertyBase* O = CastField<FObjectPropertyBase>(P)) { O->SetObjectPropertyValue(V, Ocean); } });
-	Set(TEXT("Follow Player "), [](FProperty* P, void* V) { if (FBoolProperty* B = CastField<FBoolProperty>(P)) { B->SetPropertyValue(V, true); } });  // trailing space is in the Blueprint's name
+	// Its patch of water is centred on the simulation actor itself, which the boat carries along (see Tick). Left to
+	// follow the player, it would centre on whoever is walking about the deck, and the ripples would slide around as
+	// they moved and looked about.
+	Set(TEXT("Follow Player "), [](FProperty* P, void* V) { if (FBoolProperty* B = CastField<FBoolProperty>(P)) { B->SetPropertyValue(V, false); } });  // trailing space is in the Blueprint's name
 	Set(TEXT("Simulation World Size"), [this](FProperty* P, void* V) { if (FNumericProperty* N = CastField<FNumericProperty>(P)) { N->SetFloatingPointPropertyValue(V, WakeSimulationSize); } });
 	Set(TEXT("Damping"), [this](FProperty* P, void* V) { if (FNumericProperty* N = CastField<FNumericProperty>(P)) { N->SetFloatingPointPropertyValue(V, WakeSimulationDamping); } });
 	Set(TEXT("Travel Speed"), [this](FProperty* P, void* V) { if (FNumericProperty* N = CastField<FNumericProperty>(P)) { N->SetFloatingPointPropertyValue(V, WakeSimulationWaveSpeed); } });
@@ -514,6 +517,7 @@ void ARiptideBoat::RegisterWithWakeSimulation()
 	if (!Sim)
 	{
 		Sim = SpawnWakeSimulation(SimClass);
+		WakeSimulation = Sim;
 	}
 	if (!Sim)
 	{
@@ -601,6 +605,7 @@ void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ARiptideBoat, ThrottleLever);
 	DOREPLIFETIME(ARiptideBoat, EngineOutput);
 	DOREPLIFETIME(ARiptideBoat, SteerAngleDeg);
+	DOREPLIFETIME(ARiptideBoat, TrimDeg);
 	DOREPLIFETIME(ARiptideBoat, FuelLiters);
 	DOREPLIFETIME(ARiptideBoat, EngineHealth);
 	DOREPLIFETIME(ARiptideBoat, Helmsman);
@@ -647,6 +652,14 @@ void ARiptideBoat::BuildInput()
 	HelmMapping->MapKey(LeaveHelmAction, EKeys::E);
 	HelmMapping->MapKey(LeaveHelmAction, EKeys::Gamepad_FaceButton_Left);
 
+	// Trim switch: R trims out (bow up), F trims in (bow down); the d-pad on a gamepad.
+	TrimAction = NewObject<UInputAction>(this, TEXT("IA_Trim"));
+	TrimAction->ValueType = EInputActionValueType::Axis1D;
+	HelmMapping->MapKey(TrimAction, EKeys::R);
+	HelmMapping->MapKey(TrimAction, EKeys::F).Modifiers.Add(NewObject<UInputModifierNegate>(HelmMapping));
+	HelmMapping->MapKey(TrimAction, EKeys::Gamepad_DPad_Up);
+	HelmMapping->MapKey(TrimAction, EKeys::Gamepad_DPad_Down).Modifiers.Add(NewObject<UInputModifierNegate>(HelmMapping));
+
 	// Gamepad: right trigger / left trigger for throttle, left stick to steer, right stick to look.
 	HelmMapping->MapKey(ThrottleAction, EKeys::Gamepad_RightTriggerAxis);
 	FEnhancedActionKeyMapping& PadReverse = HelmMapping->MapKey(ThrottleAction, EKeys::Gamepad_LeftTriggerAxis);
@@ -665,6 +678,8 @@ void ARiptideBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 	if (UEnhancedInputComponent* Input = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		Input->BindAction(LeaveHelmAction, ETriggerEvent::Started, this, &ARiptideBoat::OnLeaveHelm);
+		Input->BindAction(TrimAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnTrim);
+		Input->BindAction(TrimAction, ETriggerEvent::Completed, this, &ARiptideBoat::OnTrimReleased);
 		Input->BindAction(ThrottleAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnThrottle);
 		Input->BindAction(ThrottleAction, ETriggerEvent::Completed, this, &ARiptideBoat::OnThrottleReleased);
 		Input->BindAction(SteerAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnSteer);
@@ -701,6 +716,7 @@ void ARiptideBoat::UnPossessed()
 	// Nobody's holding the keys any more: the lever stays where it was left and the wheel swings back to centre.
 	ThrottleInput = 0.f;
 	SteerInput = 0.f;
+	TrimInput = 0.f;
 }
 
 void ARiptideBoat::OnThrottle(const FInputActionValue& Value)
@@ -721,6 +737,16 @@ void ARiptideBoat::OnSteer(const FInputActionValue& Value)
 void ARiptideBoat::OnSteerReleased(const FInputActionValue& Value)
 {
 	SteerInput = 0.f;
+}
+
+void ARiptideBoat::OnTrim(const FInputActionValue& Value)
+{
+	TrimInput = FMath::Clamp(Value.Get<float>(), -1.f, 1.f);
+}
+
+void ARiptideBoat::OnTrimReleased(const FInputActionValue& Value)
+{
+	TrimInput = 0.f;
 }
 
 void ARiptideBoat::OnCutThrottle(const FInputActionValue& Value)
@@ -816,10 +842,11 @@ void ARiptideBoat::LeaveHelm()
 	UE_LOG(LogRiptideBoat, Log, TEXT("%s left the helm of %s"), *Crew->GetName(), *GetName());
 }
 
-void ARiptideBoat::ServerSetControls_Implementation(float InThrottleInput, float InSteerInput, bool bInCutThrottle)
+void ARiptideBoat::ServerSetControls_Implementation(float InThrottleInput, float InSteerInput, float InTrimInput, bool bInCutThrottle)
 {
 	ThrottleInput = FMath::Clamp(InThrottleInput, -1.f, 1.f);
 	SteerInput = FMath::Clamp(InSteerInput, -1.f, 1.f);
+	TrimInput = FMath::Clamp(InTrimInput, -1.f, 1.f);
 	bCutThrottleRequested |= bInCutThrottle;
 }
 
@@ -831,9 +858,11 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 
 	if (IsLocallyControlled() && !HasAuthority())
 	{
-		ServerSetControls(ThrottleInput, SteerInput, bCutThrottleRequested);
+		ServerSetControls(ThrottleInput, SteerInput, TrimInput, bCutThrottleRequested);
 		bCutThrottleRequested = false;
 	}
+
+	UpdatePropImmersion();
 
 	if (HasAuthority())
 	{
@@ -843,15 +872,17 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 		ApplyHydrodynamics();
 	}
 
-	// The outboards swing on their brackets as they steer (the thrust turns the same way in ApplyThrust).
-	if (OutboardModel.IsValid())
-	{
-		MotorMesh->SetRelativeRotation(FRotator(0.f, -SteerAngleDeg, 0.f));
-		MotorMeshStarboard->SetRelativeRotation(FRotator(0.f, -SteerAngleDeg, 0.f));
-	}
+	PoseOutboards();
 
 	UpdateSounds(DeltaSeconds);
 	UpdateWakeFoam(DeltaSeconds);
+
+	// Carry the wake simulation's patch of water along with the boat, at sea level.
+	if (AActor* Sim = WakeSimulation.Get())
+	{
+		const FVector Here = GetActorLocation();
+		Sim->SetActorLocation(FVector(Here.X, Here.Y, 0.f));
+	}
 
 	if (IsLocallyControlled())
 	{
@@ -873,6 +904,26 @@ void ARiptideBoat::UpdateControls(float DeltaSeconds)
 	// The motor swings back to centre when the wheel is let go.
 	const float TargetSteer = SteerInput * MaxSteerAngleDeg;
 	SteerAngleDeg = FMath::FInterpConstantTo(SteerAngleDeg, TargetSteer, DeltaSeconds, SteerRateDeg);
+
+	// The trim moves while its switch is held and stays where it's left.
+	TrimDeg = FMath::Clamp(TrimDeg + TrimInput * TrimRateDeg * DeltaSeconds, MinTrimDeg, MaxTrimDeg);
+}
+
+FQuat ARiptideBoat::GetOutboardRotation() const
+{
+	// Trim tilts the motor about its bracket (out swings the lower unit aft, which pitches the prop shaft down);
+	// steering then swings it about its own, tilted, steering axis. Steering right swings the prop to push the
+	// stern left.
+	return FQuat(FRotator(-TrimDeg, 0.f, 0.f)) * FQuat(FRotator(0.f, -SteerAngleDeg, 0.f));
+}
+
+void ARiptideBoat::PoseOutboards()
+{
+	const FQuat Pose = GetOutboardRotation();
+	MotorMesh->SetRelativeRotation(Pose);
+	MotorMeshStarboard->SetRelativeRotation(Pose);
+	Propeller->SetRelativeLocation(OutboardPivot + Pose.RotateVector(PropInOutboard));
+	PropellerStarboard->SetRelativeLocation(OutboardPivotStarboard + Pose.RotateVector(PropInOutboard));
 }
 
 void ARiptideBoat::UpdateEngine(float DeltaSeconds)
@@ -908,15 +959,20 @@ bool ARiptideBoat::IsPropellerSubmerged() const
 
 bool ARiptideBoat::IsPropSubmerged(const USceneComponent* Prop) const
 {
-	if (!Buoyancy || !Buoyancy->IsInWaterBody() || !Buoyancy->BuoyancyData.Pontoons.IsValidIndex(SternPontoonIndex))
-	{
-		return false;
-	}
+	return Prop == PropellerStarboard ? bPropWet[1] : bPropWet[0];
+}
 
-	// Compare the prop with the water surface at the stern directly. The stern pontoon itself can sit
-	// clear of the water while the prop, which hangs lower, is still under.
-	const FSphericalPontoon& Stern = Buoyancy->BuoyancyData.Pontoons[SternPontoonIndex];
-	return Prop->GetComponentLocation().Z < Stern.WaterHeight;
+void ARiptideBoat::UpdatePropImmersion()
+{
+	const USceneComponent* Props[2] = { Propeller, PropellerStarboard };
+	for (int32 i = 0; i < 2; ++i)
+	{
+		// The sea right at the prop, waves included (the stern's buoyancy reading is taken on the centreline, a
+		// metre forward, and is only refreshed while the hull overlaps the ocean).
+		const FVector At = Props[i]->GetComponentLocation();
+		const float Depth = GetSeaSurfaceZ(At) - At.Z;
+		bPropWet[i] = bPropWet[i] ? Depth > -PropDryMargin : Depth > 0.f;
+	}
 }
 
 void ARiptideBoat::ApplyThrust()
@@ -931,16 +987,33 @@ void ARiptideBoat::ApplyThrust()
 	const float Scale = EngineOutput > 0.f ? 1.f : ReverseThrustScale;
 	const float ThrustN = 0.5f * MaxThrust * EngineOutput * Scale;
 
-	// Steering right swings the props so they push the stern left, which turns the bow right.
-	const FVector Up = HullBody->GetUpVector();
-	const FVector ThrustDir = HullBody->GetForwardVector().RotateAngleAxis(-SteerAngleDeg, Up);
+	// Along the prop shafts: steering swings them (right pushes the stern left, turning the bow right), and trim
+	// tilts them (out pushes down on the stern, lifting the bow; in pushes it up, holding the bow down).
+	const FVector ThrustDir = HullBody->GetComponentQuat() * GetOutboardRotation().RotateVector(FVector::ForwardVector);
+	float WetProps = 0.f;
 	for (const USceneComponent* Prop : { Propeller.Get(), PropellerStarboard.Get() })
 	{
 		if (IsPropSubmerged(Prop))
 		{
 			HullBody->AddForceAtLocation(ThrustDir * ThrustN * NewtonsToUnreal, Prop->GetComponentLocation());
+			WetProps += 0.5f;
 		}
 	}
+
+	// Trim's hold on the running attitude, through the hull's planing lift: grows with speed and drive.
+	const float ForwardKnots = FVector::DotProduct(HullBody->GetPhysicsLinearVelocity(), HullBody->GetForwardVector()) * CmPerSecToKnots;
+	const float SpeedFactor = FMath::Min(FMath::Square(FMath::Max(0.f, ForwardKnots) / TrimFullEffectKnots), 1.2f);
+	float MomentNm = (TrimDeg > 0.f ? TrimMomentPerDeg : TrimInMomentPerDeg) * TrimDeg * SpeedFactor * WetProps * FMath::Max(0.f, EngineOutput);
+	if (MomentNm > 0.f)
+	{
+		// Lifting the bow needs the hull's bottom planing on the water to push against. A planing hull runs a few
+		// degrees bow-up at most, so the lift fades out between 4 and 9 degrees; without that, a bow trimmed high
+		// enough would keep climbing and stand the boat on its transom.
+		const float BowUpDeg = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(HullBody->GetForwardVector().Z, -1.f, 1.f)));
+		MomentNm *= 1.f - FMath::SmoothStep(4.f, 9.f, BowUpDeg);
+	}
+	// Bow up is a torque about the hull's left (-Y) axis. N*m to Unreal's kg*cm^2/s^2 is 100 * 100.
+	HullBody->AddTorqueInRadians(-HullBody->GetRightVector() * MomentNm * NewtonsToUnreal * 100.f);
 }
 
 void ARiptideBoat::ApplyHydrodynamics()
@@ -1008,6 +1081,20 @@ float ARiptideBoat::GetBowFreeboardCm() const
 	return BowDeckEdge.Z - Bow.WaterHeight;
 }
 
+float ARiptideBoat::GetSeaSurfaceZ(FVector Location) const
+{
+	if (const AWaterBodyOcean* Ocean = Cast<AWaterBodyOcean>(UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass())))
+	{
+		const auto Query = Ocean->GetWaterBodyComponent()->TryQueryWaterInfoClosestToWorldLocation(
+			Location, EWaterBodyQueryFlags::ComputeLocation | EWaterBodyQueryFlags::IncludeWaves);
+		if (Query.HasValue())
+		{
+			return Query.GetValue().GetWaterSurfaceLocation().Z;
+		}
+	}
+	return 0.f;
+}
+
 float ARiptideBoat::GetSpeedKnots() const
 {
 	return HullBody->GetComponentVelocity().Size() * CmPerSecToKnots;
@@ -1018,6 +1105,14 @@ void ARiptideBoat::ApplyEngineDamage(float Amount)
 	if (HasAuthority())
 	{
 		EngineHealth = FMath::Clamp(EngineHealth - Amount, 0.f, 1.f);
+	}
+}
+
+void ARiptideBoat::SetTrimInput(float Trim)
+{
+	if (HasAuthority())
+	{
+		TrimInput = FMath::Clamp(Trim, -1.f, 1.f);
 	}
 }
 
@@ -1043,8 +1138,8 @@ void ARiptideBoat::DrawDebugHud() const
 		FString::Printf(TEXT("Speed %.1f kn   Throttle %+.0f%%   Engine %+.0f%%"),
 			GetSpeedKnots(), ThrottleLever * 100.f, EngineOutput * 100.f));
 	GEngine->AddOnScreenDebugMessage(KeyBase + 1, 0.f, FColor::White,
-		FString::Printf(TEXT("Motor %+.0f deg   Fuel %.1f L   Engine health %.0f%%"),
-			SteerAngleDeg, FuelLiters, EngineHealth * 100.f));
+		FString::Printf(TEXT("Motors %+.0f deg   Trim %+.0f deg (R/F)   Fuel %.1f L   Engine health %.0f%%"),
+			SteerAngleDeg, TrimDeg, FuelLiters, EngineHealth * 100.f));
 	const bool bPort = IsPropSubmerged(Propeller);
 	const bool bStarboard = IsPropSubmerged(PropellerStarboard);
 	GEngine->AddOnScreenDebugMessage(KeyBase + 2, 0.f, bPort && bStarboard ? FColor::Green : bPort || bStarboard ? FColor::Yellow : FColor::Red,
@@ -1054,3 +1149,4 @@ void ARiptideBoat::DrawDebugHud() const
 		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, TEXT("E  Leave the helm"));
 	}
 }
+
