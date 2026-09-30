@@ -60,7 +60,8 @@ void URiptideSprayComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 		C.Position += C.Velocity * DeltaTime;
 		// Gone once it has lived out its time, fallen back into the sea, or ended up inside the boat.
 		const bool bInSea = C.Velocity.Z < 0.f && C.Position.Z < C.SeaZ - 15.f;
-		if (C.Age >= C.Life || bInSea || (IsInsideSolid && IsInsideSolid(C.Position)))
+		C.Clearance = ClearanceFromSolid ? ClearanceFromSolid(C.Position) : 1e6f;
+		if (C.Age >= C.Life || bInSea || C.Clearance <= 0.f)
 		{
 			Clouds.RemoveAtSwap(i, 1, EAllowShrinking::No);
 		}
@@ -105,14 +106,16 @@ void URiptideSprayComponent::RebuildMesh()
 	for (const FCloud& C : Clouds)
 	{
 		const float T = FMath::Clamp(C.Age / C.Life, 0.f, 1.f);
-		// Grows fast at first then spreads slowly.
-		const float Size = FMath::Lerp(C.StartSize, C.EndSize, FMath::Sqrt(T));
-		// Solid through most of its flight, thinning away only near the end (water doesn't dissolve like smoke).
-		const float Alpha = C.Opacity * FMath::Min(1.f, T * 12.f) * (1.f - T * T);
+		// Grows fast at first then spreads slowly, but never reaches the hull: a cloud is a flat card facing the
+		// camera, and one wider than its distance from the hull would poke through into the boat.
+		const float Size = FMath::Min(FMath::Lerp(C.StartSize, C.EndSize, FMath::Sqrt(T)), 2.f * C.Clearance);
+		// Solid through most of its flight, thinning away only near the end (water doesn't dissolve like smoke), and
+		// fading out in the last few centimetres before it touches the hull.
+		const float Alpha = C.Opacity * FMath::Min(1.f, T * 12.f) * (1.f - T * T) * FMath::Clamp(C.Clearance / 6.f, 0.f, 1.f);
 		// Stretched along its flight as seen from the camera (a streak), otherwise a round puff at a random spin.
 		const FVector Normal = (CamLoc - C.Position).GetSafeNormal();
 		const FVector Flight = FVector::VectorPlaneProject(C.Velocity, Normal);
-		const float StreakLength = Flight.Size() * C.Streak;
+		const float StreakLength = FMath::Min(Flight.Size() * C.Streak, FMath::Max(0.f, 2.f * C.Clearance - Size));
 		FVector Along, Across;
 		if (StreakLength > Size * 0.25f)
 		{

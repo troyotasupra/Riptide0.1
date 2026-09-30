@@ -40,8 +40,12 @@ public:
 
 	int32 GetCloudCount() const { return Clouds.Num(); }
 
-	/** Spray that ends up somewhere this says is solid (inside the hull it flew off) disappears. */
-	TFunction<bool(const FVector&)> IsInsideSolid;
+	/**
+	 * How far a point is from the solid thing the spray flies off (the hull), in cm: negative inside it. Spray that
+	 * ends up inside disappears, and each cloud is drawn no bigger than its distance from the hull (fading as it
+	 * gets close), so no part of it ever shows through the boat, however big the cloud has grown.
+	 */
+	TFunction<float(const FVector&)> ClearanceFromSolid;
 
 private:
 	struct FCloud
@@ -56,6 +60,7 @@ private:
 		float Opacity = 1.f;
 		float Spin = 0.f;
 		float Streak = 0.05f;   // drawn stretched along its flight by this much of its motion, so fast droplets streak
+		float Clearance = 1e6f; // how far it is from the hull this frame (cm)
 		FVector2f NoiseOffset;
 	};
 

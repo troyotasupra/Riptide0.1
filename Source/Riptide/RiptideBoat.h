@@ -209,6 +209,10 @@ public:
 	/** True if a world point is inside the hull (below its gunwale, within its sides). */
 	bool IsInsideHull(const FVector& World) const;
 
+	/** Roughly how far a world point is outside the hull (cm; negative inside): off its sides and bottom, beyond its
+	 * ends, or above its gunwale. */
+	float ClearanceFromHull(const FVector& World) const;
+
 	// --- The radio ---
 	// The VHF in the overhead box has a hand mic on a coiled cord, hanging on a clip beside it. Anyone within the
 	// cord's reach can take it; walking out of reach pulls it from their hand, back onto its clip.
@@ -792,6 +796,10 @@ private:
 
 	/** Half the hull's width at X and height Z in the boat's frame (0 below the keel). */
 	static float HullHalfWidthAt(float X, float Z);
+
+	/** How fast the hull's side widens going aft at X and height Z (cm per cm): 0 along the parallel body aft,
+	 * steep toward the stem. The side there is angled atan(this) off the centreline. */
+	static float HullSideSlope(float X, float Z);
 
 	/** Where water leaving the hull at a sample starts from, just outside the skin at the sea's height there. */
 	FVector SprayOriginAt(float X, float LocalSeaZ, float Side) const;

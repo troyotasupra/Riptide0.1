@@ -555,7 +555,7 @@ void ARiptideBoat::StartWakeFoam()
 	// Spray never shows inside the boat: water that ends up inside the hull (a turn sliding the boat into its own
 	// spray, or a burst falling into the cockpit) is gone.
 	TWeakObjectPtr<ARiptideBoat> WeakThis(this);
-	Spray->IsInsideSolid = [WeakThis](const FVector& World) { return WeakThis.IsValid() && WeakThis->IsInsideHull(World); };
+	Spray->ClearanceFromSolid = [WeakThis](const FVector& World) { return WeakThis.IsValid() ? WeakThis->ClearanceFromHull(World) : 1e6f; };
 
 	// The mic's cord, in the hand mic's own black.
 	const int32 Trim = HullMesh->GetMaterialIndex(TEXT("Trim"));
@@ -620,25 +620,63 @@ void ARiptideBoat::SetUpLockers()
 	Stock(Anchor, TEXT("rope"), 20);
 }
 
-void ARiptideBoat::HullSection(float X, float& OutChineY, float& OutChineZ, float& OutKeelZ, float* OutSheerY, float* OutSheerZ)
+namespace
 {
 	// riptide_boat_mesh.py's station(): full beam aft, narrowing to the stem; a deep V whose keel and chines sweep
-	// up into the bow.
-	const float T = FMath::Clamp((X + HullExtent.X) / (2.f * HullExtent.X), 0.f, 1.f);
-	const float SheerHalf = T < 0.35f ? HullExtent.Y : HullExtent.Y * FMath::Pow(FMath::Max(0.f, FMath::Cos((T - 0.35f) / 0.65f * UE_HALF_PI)), 0.75f);
-	const float SheerZ = DeckZ + 55.f + 45.f * FMath::Pow(T, 2.2f);
-	OutKeelZ = -42.f + 30.f * FMath::Pow(FMath::SmoothStep(0.62f, 1.f, T), 1.3f) + 50.f * FMath::SmoothStep(0.93f, 1.f, T);
-	OutChineY = SheerHalf * (0.88f - 0.1f * FMath::SmoothStep(0.6f, 1.f, T));
-	OutChineZ = FMath::Min(-24.f + 34.f * FMath::SmoothStep(0.55f, 1.f, T), SheerZ - 6.f);
-	// The keel runs up into the stem to meet the chines there, always below them.
-	OutKeelZ = FMath::Min(OutKeelZ, OutChineZ - 18.f * (1.f - FMath::SmoothStep(0.9f, 1.f, T)) - 0.5f);
+	// up into the bow. Chine half-width and height, keel height, sheer half-width and height at T (0 transom, 1 stem).
+	struct FHullStation
+	{
+		float ChineY, ChineZ, KeelZ, SheerY, SheerZ;
+	};
+
+	FHullStation ComputeHullStation(float T)
+	{
+		FHullStation S;
+		S.SheerY = T < 0.35f ? HullExtent.Y : HullExtent.Y * FMath::Pow(FMath::Max(0.f, FMath::Cos((T - 0.35f) / 0.65f * UE_HALF_PI)), 0.75f);
+		S.SheerZ = DeckZ + 55.f + 45.f * FMath::Pow(T, 2.2f);
+		S.KeelZ = -42.f + 30.f * FMath::Pow(FMath::SmoothStep(0.62f, 1.f, T), 1.3f) + 50.f * FMath::SmoothStep(0.93f, 1.f, T);
+		S.ChineY = S.SheerY * (0.88f - 0.1f * FMath::SmoothStep(0.6f, 1.f, T));
+		S.ChineZ = FMath::Min(-24.f + 34.f * FMath::SmoothStep(0.55f, 1.f, T), S.SheerZ - 6.f);
+		// The keel runs up into the stem to meet the chines there, always below them.
+		S.KeelZ = FMath::Min(S.KeelZ, S.ChineZ - 18.f * (1.f - FMath::SmoothStep(0.9f, 1.f, T)) - 0.5f);
+		return S;
+	}
+
+	// The same, tabulated every 3 cm or so along the hull: the spray asks for it thousands of times a frame.
+	constexpr int32 HullTableSize = 257;
+	const FHullStation* HullTable()
+	{
+		static const TArray<FHullStation> Table = []()
+		{
+			TArray<FHullStation> T;
+			T.SetNum(HullTableSize);
+			for (int32 i = 0; i < HullTableSize; ++i)
+			{
+				T[i] = ComputeHullStation(float(i) / (HullTableSize - 1));
+			}
+			return T;
+		}();
+		return Table.GetData();
+	}
+}
+
+void ARiptideBoat::HullSection(float X, float& OutChineY, float& OutChineZ, float& OutKeelZ, float* OutSheerY, float* OutSheerZ)
+{
+	const float U = FMath::Clamp((X + HullExtent.X) / (2.f * HullExtent.X), 0.f, 1.f) * (HullTableSize - 1);
+	const int32 I = FMath::Min(FMath::FloorToInt(U), HullTableSize - 2);
+	const float F = U - I;
+	const FHullStation& A = HullTable()[I];
+	const FHullStation& B = HullTable()[I + 1];
+	OutChineY = FMath::Lerp(A.ChineY, B.ChineY, F);
+	OutChineZ = FMath::Lerp(A.ChineZ, B.ChineZ, F);
+	OutKeelZ = FMath::Lerp(A.KeelZ, B.KeelZ, F);
 	if (OutSheerY)
 	{
-		*OutSheerY = SheerHalf;
+		*OutSheerY = FMath::Lerp(A.SheerY, B.SheerY, F);
 	}
 	if (OutSheerZ)
 	{
-		*OutSheerZ = SheerZ;
+		*OutSheerZ = FMath::Lerp(A.SheerZ, B.SheerZ, F);
 	}
 }
 
@@ -657,6 +695,29 @@ float ARiptideBoat::HullHalfWidthAt(float X, float Z)
 	}
 	const float Shelf = ChineY + (SheerY - ChineY) * 0.35f;
 	return FMath::Lerp(Shelf, SheerY, FMath::Clamp((Z - ChineZ) / FMath::Max(SheerZ - ChineZ, 1.f), 0.f, 1.f));
+}
+
+float ARiptideBoat::HullSideSlope(float X, float Z)
+{
+	return FMath::Max(0.f, (HullHalfWidthAt(X - 5.f, Z) - HullHalfWidthAt(X + 5.f, Z)) / 10.f);
+}
+
+float ARiptideBoat::ClearanceFromHull(const FVector& World) const
+{
+	const FVector Local = HullBody->GetComponentTransform().InverseTransformPosition(World);
+	const float X = FMath::Clamp(Local.X, -HullExtent.X, HullExtent.X);
+	float ChineY, ChineZ, KeelZ, SheerY, SheerZ;
+	HullSection(X, ChineY, ChineZ, KeelZ, &SheerY, &SheerZ);
+	const float Z = FMath::Clamp(Local.Z, KeelZ, SheerZ);
+	// Off the side (square to it, where it angles in toward the bow), past the ends, above the gunwale (and the
+	// cockpit inside it), below the keel: whichever is furthest out. All negative means inside.
+	const float Width = HullHalfWidthAt(X, Z) + (Z > SheerZ - 20.f ? 9.f : 0.f);
+	const float Slope = HullSideSlope(X, Z);
+	const float OffSide = (FMath::Abs(Local.Y) - Width) / FMath::Sqrt(1.f + Slope * Slope);
+	const float PastEnd = FMath::Abs(Local.X) - HullExtent.X;
+	const float Above = Local.Z - (SheerZ + 4.f);
+	const float Below = KeelZ - Local.Z;
+	return FMath::Max(FMath::Max(OffSide, PastEnd), FMath::Max(Above, Below));
 }
 
 bool ARiptideBoat::IsInsideHull(const FVector& World) const
@@ -684,7 +745,8 @@ FVector ARiptideBoat::SprayOriginAt(float X, float LocalSeaZ, float Side) const
 	// At the sea's height on the hull there (on the V of the bottom, or up the topsides if the sea is over the
 	// chine), just outside the skin: never inside it, where the topsides flare out above the chine.
 	const float Z = FMath::Clamp(LocalSeaZ, KeelZ + 1.f, SheerZ - 16.f);
-	const float Y = HullHalfWidthAt(X, Z) + 7.f + (Z > SheerZ - 20.f ? 9.f : 0.f);
+	const float Slope = HullSideSlope(X, Z);
+	const float Y = HullHalfWidthAt(X, Z) + 7.f * FMath::Sqrt(1.f + Slope * Slope) + (Z > SheerZ - 20.f ? 9.f : 0.f);
 	return HullBody->GetComponentTransform().TransformPosition(FVector(X, Side * Y, Z));
 }
 
@@ -741,9 +803,14 @@ void ARiptideBoat::SprayAtBow(float Strength)
 			const FVector Origin = SprayOriginAt(At.X, At.LocalSeaZ, Side);
 			const float Fwd01 = FMath::Clamp((At.X + 60.f) / (HullExtent.X + 60.f), 0.f, 1.f);
 			const float Immersed = FMath::Clamp((At.ChineDepth + 25.f) / 40.f, 0.3f, 1.f);
-			// Mostly out, some up (more where the flare is steeper, forward), with only a little of the boat's way on.
-			const FVector Throw = GetDeckPointVelocity(Origin) * 0.2f
-				+ Right * Side * FMath::Lerp(300.f, 800.f, Power) * Immersed
+			// Shoved out square to the hull's side there. Where the side angles in toward the stem it meets the
+			// water head on and pushes it forward and out at the speed it's coming at it; along the straight sides aft
+			// it only pushes it out. Plus the splash of the landing itself, out and up (higher forward, where the
+			// flare is steeper). Relative to the boat it always leaves outward, never back into the hull.
+			const float SideAngle = FMath::Atan(HullSideSlope(At.X, At.LocalSeaZ));
+			const FVector Out = Xf.GetUnitAxis(EAxis::X) * FMath::Sin(SideAngle) + Right * Side * FMath::Cos(SideAngle);
+			const float Ahead = FMath::Max(0.f, FVector::DotProduct(GetDeckPointVelocity(Origin), Xf.GetUnitAxis(EAxis::X)));
+			const FVector Throw = Out * (Ahead * FMath::Sin(SideAngle) + FMath::Lerp(300.f, 800.f, Power) * Immersed)
 				+ FVector::UpVector * FMath::Lerp(180.f, 560.f, Power) * FMath::Lerp(0.6f, 1.f, Fwd01) * Immersed;
 			Spray->ThrowSpray(Origin, Throw, FMath::Lerp(100.f, 240.f, Power), FMath::RoundToInt(FMath::Lerp(14.f, 45.f, Power * Immersed)),
 				4.5f, FMath::Lerp(13.f, 20.f, Power), FMath::Lerp(0.9f, 1.5f, Power), At.SeaZ, 0.8f, 0.06f);
@@ -842,7 +909,10 @@ void ARiptideBoat::UpdateSpray(float DeltaSeconds)
 			const FVector Origin = SprayOriginAt(FMath::Lerp(SA.X, SB.X, F), FMath::Lerp(SA.LocalSeaZ, SB.LocalSeaZ, F), Side);
 			const FVector PointVelocity = GetDeckPointVelocity(Origin);
 			const float U = FMath::Max(0.f, FVector::DotProduct(PointVelocity, Fwd));
-			const float Angle = FMath::DegreesToRadians(FMath::FRandRange(15.f, 30.f));
+			// Out from the side it runs along: near the stem the side itself angles in steeply, and water thrown at
+			// a fixed angle off the centreline there would fly straight back into it.
+			const float SideAngle = FMath::Atan(HullSideSlope(FMath::Lerp(SA.X, SB.X, F), FMath::Lerp(SA.LocalSeaZ, SB.LocalSeaZ, F)));
+			const float Angle = FMath::Min(SideAngle + FMath::DegreesToRadians(FMath::FRandRange(15.f, 30.f)), FMath::DegreesToRadians(80.f));
 			// Flat off a dry chine; climbing higher up the topsides when the sea is over it; highest driving down.
 			const float Lift = FMath::FRandRange(0.08f, 0.2f) + 0.15f * FMath::Clamp(ChineDepth / 20.f, 0.f, 1.f) + 0.2f * Plunge;
 			const FVector Throw = PointVelocity - Fwd * U * FMath::Cos(Angle) + Right * Side * U * FMath::Sin(Angle)
