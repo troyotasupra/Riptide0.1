@@ -11,6 +11,9 @@ class UStaticMesh;
 class UMaterialInterface;
 class URiptideSprayComponent;
 class URiptideStorageComponent;
+class UPointLightComponent;
+class USpotLightComponent;
+class UMaterialInstanceDynamic;
 class URiptideWakeFoamComponent;
 class UBoxComponent;
 class UStaticMeshComponent;
@@ -129,6 +132,25 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
 	URiptideStorageComponent* GetLockers() const { return Lockers; }
 
+	UFUNCTION(BlueprintCallable, Category = "Boat|Lights")
+	void SetSearchlightOn(bool bOn);
+
+	UFUNCTION(BlueprintCallable, Category = "Boat|Lights")
+	void SetNavLightsOn(bool bOn);
+
+	UFUNCTION(BlueprintCallable, Category = "Boat|Lights")
+	void SetDeckLightsOn(bool bOn);
+
+	UFUNCTION(BlueprintPure, Category = "Boat|Lights")
+	bool IsSearchlightOn() const { return bSearchlightOn; }
+
+	UFUNCTION(BlueprintPure, Category = "Boat|Lights")
+	bool AreNavLightsOn() const { return bNavLightsOn; }
+
+	/** Points the searchlight: yaw and pitch relative to the boat, in degrees. Server only (the helm aims it). */
+	UFUNCTION(BlueprintCallable, Category = "Boat|Lights")
+	void AimSearchlight(float YawDeg, float PitchDeg);
+
 	/** The foot of the boarding ladder on the transom (port side), at the waterline, and its top on the stern box. */
 	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
 	FTransform GetLadderFootTransform() const;
@@ -186,6 +208,60 @@ protected:
 	/** Dash instruments: tachometer, speedometer, and the screen (gear, trim, fuel, heading, warnings). */
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<URiptideStorageComponent> Lockers;
+
+	// --- Lights ---
+	// Navigation lights (masthead all-round white, bow red and green) are lit at the start; the searchlight and the
+	// cockpit floods are switched from the helm. The searchlight follows where the helmsman looks.
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Lights")
+	TObjectPtr<UStaticMeshComponent> SearchlightHead;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Lights")
+	TObjectPtr<USpotLightComponent> SearchlightBeam;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Lights")
+	TObjectPtr<UPointLightComponent> MastheadLight;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Lights")
+	TObjectPtr<USpotLightComponent> BowLightPort;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Lights")
+	TObjectPtr<USpotLightComponent> BowLightStarboard;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Lights")
+	TObjectPtr<USpotLightComponent> DeckFloodPort;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Lights")
+	TObjectPtr<USpotLightComponent> DeckFloodStarboard;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Lights")
+	TSoftObjectPtr<UStaticMesh> SearchlightModel;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Lights")
+	TSoftObjectPtr<UMaterialInterface> LampOnMaterial;
+
+	/** How fast the searchlight swings to where it's aimed, in degrees per second. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Lights")
+	float SearchlightSlewDeg = 120.f;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Lights)
+	bool bSearchlightOn = false;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Lights)
+	bool bNavLightsOn = true;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Lights)
+	bool bDeckLightsOn = false;
+
+	/** Where the searchlight is aimed (degrees, relative to the boat). */
+	UPROPERTY(Replicated)
+	float SearchlightYaw = 0.f;
+
+	UPROPERTY(Replicated)
+	float SearchlightPitch = -5.f;
+
+	UFUNCTION()
+	void OnRep_Lights();
 
 	/** The open-array radar antenna on the T-top, turning while the engines run. */
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
@@ -580,6 +656,10 @@ private:
 	static float WaterlineHalfBeam(float X);
 
 	float BowSprayOwed = 0.f;
+
+	/** The sea's height under the hull last frame, for how fast it's rising or falling. */
+	float PrevSeaZ = 0.f;
+	bool bHaveSeaZ = false;
 	float SternSprayOwed = 0.f;
 
 	void OnThrottle(const FInputActionValue& Value);
@@ -590,6 +670,24 @@ private:
 	void OnLook(const FInputActionValue& Value);
 	void OnLeaveHelm(const FInputActionValue& Value);
 	void OnTrim(const FInputActionValue& Value);
+	void ApplyLights();
+	void UpdateSearchlight(float DeltaSeconds);
+
+	UFUNCTION(Server, Reliable)
+	void ServerToggleLight(uint8 Which);
+
+	UFUNCTION(Server, Unreliable)
+	void ServerAimSearchlight(float YawDeg, float PitchDeg);
+
+	/** The searchlight's current (smoothed) aim. */
+	float SearchlightYawNow = 0.f;
+	float SearchlightPitchNow = -5.f;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> LampOffMaterial;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> NavLenses;
 	void OnTrimReleased(const FInputActionValue& Value);
 
 	UFUNCTION(Server, Reliable)
@@ -621,6 +719,15 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> DebugHudAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> SearchlightAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> NavLightsAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> DeckLightsAction;
 
 	/** The tuning readout on screen (off by default; H at the helm). */
 	bool bShowDebugHud = false;

@@ -19,7 +19,10 @@
 #include "UObject/StructOnScope.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/App.h"
+#include "Components/PointLightComponent.h"
+#include "Components/SpotLightComponent.h"
 #include "Components/WidgetComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "RiptideCharacter.h"
 #include "RiptideGauge.h"
 #include "RiptideSprayComponent.h"
@@ -64,6 +67,12 @@ namespace
 	const FVector ThrottlePivotPort(-49.f, 28.f, DeckZ + 92.f);
 	const FVector ThrottlePivotStarboard(-49.f, 36.f, DeckZ + 92.f);
 	constexpr float LeverSwingDeg = 35.f;
+
+	// Lights (riptide_boat_mesh.py): the searchlight's pivot on the T-top, the masthead light on its pole, the bow
+	// light at the stem, and floods under the canopy over the cockpit.
+	const FVector SearchlightPivot(26.f, 40.f, DeckZ + 244.f);
+	const FVector MastheadLightPoint(-162.f, 0.f, DeckZ + 317.f);
+	const FVector BowLightPoint(383.f, 0.f, DeckZ + 104.f);
 
 	// The radar antenna's hub, on its pedestal on the T-top (riptide_boat_mesh.py's RADAR).
 	const FVector RadarHub(-70.f, 0.f, DeckZ + 258.f);
@@ -165,6 +174,78 @@ ARiptideBoat::ARiptideBoat()
 	ThrottleLeverStarboard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThrottleLeverStarboard"));
 	ThrottleLeverStarboard->SetupAttachment(HullBody);
 	ThrottleLeverStarboard->SetRelativeLocation(ThrottlePivotStarboard);
+	SearchlightHead = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SearchlightHead"));
+	SearchlightHead->SetupAttachment(HullBody);
+	SearchlightHead->SetRelativeLocation(SearchlightPivot);
+	SearchlightHead->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	SearchlightBeam = CreateDefaultSubobject<USpotLightComponent>(TEXT("SearchlightBeam"));
+	SearchlightBeam->SetupAttachment(SearchlightHead);
+	SearchlightBeam->SetRelativeLocation(FVector(13.f, 0.f, 0.f));
+	SearchlightBeam->SetIntensityUnits(ELightUnits::Candelas);
+	SearchlightBeam->SetIntensity(250000.f);
+	SearchlightBeam->SetAttenuationRadius(25000.f);
+	SearchlightBeam->SetInnerConeAngle(2.5f);
+	SearchlightBeam->SetOuterConeAngle(6.f);
+	SearchlightBeam->SetLightColor(FLinearColor(1.f, 0.96f, 0.88f));
+	// No shadows: at a searchlight's grazing angle the sea shadows its own lit patch and the beam never shows.
+	SearchlightBeam->SetCastShadows(false);
+	SearchlightBeam->SetVolumetricScatteringIntensity(1.5f);
+	SearchlightBeam->SetVisibility(false);
+	SearchlightModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_Searchlight.SM_Searchlight")));
+	LampOnMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Riptide/Materials/MI_Boat_LampOn.MI_Boat_LampOn")));
+
+	auto MakeNavLight = [this](const TCHAR* Name, const FVector& Where, const FLinearColor& Colour, float Candelas, float Radius)
+	{
+		UPointLightComponent* Light = CreateDefaultSubobject<UPointLightComponent>(Name);
+		Light->SetupAttachment(HullBody);
+		Light->SetRelativeLocation(Where);
+		Light->SetIntensityUnits(ELightUnits::Candelas);
+		Light->SetIntensity(Candelas);
+		Light->SetAttenuationRadius(Radius);
+		Light->SetLightColor(Colour);
+		Light->SetCastShadows(false);
+		return Light;
+	};
+	// Real navigation lights are for being seen, not for seeing by: dim. The masthead light shines all round from
+	// above everything; the sidelights are screened, each lighting only its own side from dead ahead to just abaft
+	// the beam (112.5 degrees), so none of their light falls on the deck.
+	MastheadLight = MakeNavLight(TEXT("MastheadLight"), MastheadLightPoint, FLinearColor(1.f, 0.97f, 0.9f), 6.f, 900.f);
+	auto MakeSidelight = [this](const TCHAR* Name, float Side, const FLinearColor& Colour)
+	{
+		USpotLightComponent* Light = CreateDefaultSubobject<USpotLightComponent>(Name);
+		Light->SetupAttachment(HullBody);
+		Light->SetRelativeLocationAndRotation(BowLightPoint + FVector(4.f, Side * 4.f, 0.f), FRotator(0.f, Side * 56.25f, 0.f));
+		Light->SetIntensityUnits(ELightUnits::Candelas);
+		Light->SetIntensity(4.f);
+		Light->SetAttenuationRadius(600.f);
+		Light->SetInnerConeAngle(45.f);
+		Light->SetOuterConeAngle(56.25f);
+		Light->SetLightColor(Colour);
+		Light->SetCastShadows(false);
+		return Light;
+	};
+	BowLightPort = MakeSidelight(TEXT("BowLightPort"), -1.f, FLinearColor(1.f, 0.05f, 0.03f));
+	BowLightStarboard = MakeSidelight(TEXT("BowLightStarboard"), 1.f, FLinearColor(0.05f, 1.f, 0.2f));
+
+	auto MakeFlood = [this](const TCHAR* Name, float Y)
+	{
+		USpotLightComponent* Flood = CreateDefaultSubobject<USpotLightComponent>(Name);
+		Flood->SetupAttachment(HullBody);
+		// Under the canopy's aft edge, over the leaning post, lighting the cockpit and aft deck (not the helm's face).
+		Flood->SetRelativeLocationAndRotation(FVector(-150.f, Y, DeckZ + 212.f), FRotator(-62.f, 180.f, 0.f));
+		Flood->SetIntensityUnits(ELightUnits::Candelas);
+		Flood->SetIntensity(60.f);
+		Flood->SetAttenuationRadius(600.f);
+		Flood->SetInnerConeAngle(22.f);
+		Flood->SetOuterConeAngle(38.f);
+		Flood->SetLightColor(FLinearColor(1.f, 0.95f, 0.85f));
+		Flood->SetCastShadows(false);
+		Flood->SetVisibility(false);
+		return Flood;
+	};
+	DeckFloodPort = MakeFlood(TEXT("DeckFloodPort"), -30.f);
+	DeckFloodStarboard = MakeFlood(TEXT("DeckFloodStarboard"), 30.f);
+
 	RadarArray = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RadarArray"));
 	RadarArray->SetupAttachment(HullBody);
 	RadarArray->SetRelativeLocation(RadarHub);
@@ -319,6 +400,10 @@ void ARiptideBoat::ApplyModels()
 		MotorBracket->SetStaticMesh(Bracket);
 		MotorBracketStarboard->SetStaticMesh(Bracket);
 	}
+	if (UStaticMesh* Head = SearchlightModel.LoadSynchronous())
+	{
+		SearchlightHead->SetStaticMesh(Head);
+	}
 	if (UStaticMesh* Radar = RadarModel.LoadSynchronous())
 	{
 		RadarArray->SetStaticMesh(Radar);
@@ -367,6 +452,20 @@ void ARiptideBoat::BeginPlay()
 			Gauge.Key->SetSlateWidget(SNew(SRiptideGauge).Boat(this).Kind(Gauge.Value));
 		}
 	}
+	// The navigation lights' lenses glow while they're on: dynamic copies of their materials to dim when off.
+	for (const TCHAR* Slot : { TEXT("NavRed"), TEXT("NavGreen"), TEXT("NavWhite") })
+	{
+		const int32 Index = HullMesh->GetMaterialIndex(FName(Slot));
+		if (Index != INDEX_NONE)
+		{
+			NavLenses.Add(HullMesh->CreateDynamicMaterialInstance(Index));
+		}
+	}
+	const int32 LampIndex = SearchlightHead->GetMaterialIndex(TEXT("Lamp"));
+	LampOffMaterial = LampIndex != INDEX_NONE ? SearchlightHead->GetMaterial(LampIndex) : nullptr;
+	LampOnMaterial.LoadSynchronous();
+	ApplyLights();
+
 	RegisterWithWakeSimulation();
 	StartSounds();
 	StartWakeFoam();
@@ -826,6 +925,11 @@ void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ARiptideBoat, FuelLiters);
 	DOREPLIFETIME(ARiptideBoat, EngineHealth);
 	DOREPLIFETIME(ARiptideBoat, Helmsman);
+	DOREPLIFETIME(ARiptideBoat, bSearchlightOn);
+	DOREPLIFETIME(ARiptideBoat, bNavLightsOn);
+	DOREPLIFETIME(ARiptideBoat, bDeckLightsOn);
+	DOREPLIFETIME(ARiptideBoat, SearchlightYaw);
+	DOREPLIFETIME(ARiptideBoat, SearchlightPitch);
 }
 
 // --- Input ---
@@ -882,6 +986,19 @@ void ARiptideBoat::BuildInput()
 	DebugHudAction->ValueType = EInputActionValueType::Boolean;
 	HelmMapping->MapKey(DebugHudAction, EKeys::H);
 
+	// Lights: L the searchlight (it follows where you look), N the navigation lights, K the cockpit floods.
+	SearchlightAction = NewObject<UInputAction>(this, TEXT("IA_Searchlight"));
+	SearchlightAction->ValueType = EInputActionValueType::Boolean;
+	HelmMapping->MapKey(SearchlightAction, EKeys::L);
+	HelmMapping->MapKey(SearchlightAction, EKeys::Gamepad_DPad_Left);
+	NavLightsAction = NewObject<UInputAction>(this, TEXT("IA_NavLights"));
+	NavLightsAction->ValueType = EInputActionValueType::Boolean;
+	HelmMapping->MapKey(NavLightsAction, EKeys::N);
+	DeckLightsAction = NewObject<UInputAction>(this, TEXT("IA_DeckLights"));
+	DeckLightsAction->ValueType = EInputActionValueType::Boolean;
+	HelmMapping->MapKey(DeckLightsAction, EKeys::K);
+	HelmMapping->MapKey(DeckLightsAction, EKeys::Gamepad_DPad_Right);
+
 	// Gamepad: right trigger / left trigger for throttle, left stick to steer, right stick to look.
 	HelmMapping->MapKey(ThrottleAction, EKeys::Gamepad_RightTriggerAxis);
 	FEnhancedActionKeyMapping& PadReverse = HelmMapping->MapKey(ThrottleAction, EKeys::Gamepad_LeftTriggerAxis);
@@ -903,6 +1020,9 @@ void ARiptideBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindAction(TrimAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnTrim);
 		Input->BindAction(TrimAction, ETriggerEvent::Completed, this, &ARiptideBoat::OnTrimReleased);
 		Input->BindActionValueLambda(DebugHudAction, ETriggerEvent::Started, [this](const FInputActionValue&) { bShowDebugHud = !bShowDebugHud; });
+		Input->BindActionValueLambda(SearchlightAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(0); });
+		Input->BindActionValueLambda(NavLightsAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(1); });
+		Input->BindActionValueLambda(DeckLightsAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(2); });
 		Input->BindAction(ThrottleAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnThrottle);
 		Input->BindAction(ThrottleAction, ETriggerEvent::Completed, this, &ARiptideBoat::OnThrottleReleased);
 		Input->BindAction(SteerAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnSteer);
@@ -1017,6 +1137,111 @@ FTransform ARiptideBoat::GetDeckSpotTransform(int32 Index) const
 	return FTransform(Xf.GetRotation(), Xf.TransformPosition(Spot));
 }
 
+// --- Lights ---
+
+void ARiptideBoat::SetSearchlightOn(bool bOn)
+{
+	if (HasAuthority())
+	{
+		bSearchlightOn = bOn;
+		ApplyLights();
+	}
+}
+
+void ARiptideBoat::SetNavLightsOn(bool bOn)
+{
+	if (HasAuthority())
+	{
+		bNavLightsOn = bOn;
+		ApplyLights();
+	}
+}
+
+void ARiptideBoat::SetDeckLightsOn(bool bOn)
+{
+	if (HasAuthority())
+	{
+		bDeckLightsOn = bOn;
+		ApplyLights();
+	}
+}
+
+void ARiptideBoat::ServerToggleLight_Implementation(uint8 Which)
+{
+	switch (Which)
+	{
+	case 0: SetSearchlightOn(!bSearchlightOn); break;
+	case 1: SetNavLightsOn(!bNavLightsOn); break;
+	default: SetDeckLightsOn(!bDeckLightsOn); break;
+	}
+}
+
+void ARiptideBoat::AimSearchlight(float YawDeg, float PitchDeg)
+{
+	if (HasAuthority())
+	{
+		// Its mount turns almost all the way round and tilts from well down to a little up.
+		SearchlightYaw = FMath::Clamp(FRotator::NormalizeAxis(YawDeg), -170.f, 170.f);
+		SearchlightPitch = FMath::Clamp(PitchDeg, -35.f, 20.f);
+	}
+}
+
+void ARiptideBoat::ServerAimSearchlight_Implementation(float YawDeg, float PitchDeg)
+{
+	AimSearchlight(YawDeg, PitchDeg);
+}
+
+void ARiptideBoat::OnRep_Lights()
+{
+	ApplyLights();
+}
+
+void ARiptideBoat::ApplyLights()
+{
+	SearchlightBeam->SetVisibility(bSearchlightOn);
+	const int32 LampIndex = SearchlightHead->GetMaterialIndex(TEXT("Lamp"));
+	if (LampIndex != INDEX_NONE)
+	{
+		UMaterialInterface* Lens = bSearchlightOn ? LampOnMaterial.Get() : LampOffMaterial.Get();
+		if (Lens)
+		{
+			SearchlightHead->SetMaterial(LampIndex, Lens);
+		}
+	}
+	MastheadLight->SetVisibility(bNavLightsOn);
+	BowLightPort->SetVisibility(bNavLightsOn);
+	BowLightStarboard->SetVisibility(bNavLightsOn);
+	for (UMaterialInstanceDynamic* Lens : NavLenses)
+	{
+		if (Lens)
+		{
+			Lens->SetScalarParameterValue(TEXT("Glow"), bNavLightsOn ? 8.f : 0.f);
+		}
+	}
+	DeckFloodPort->SetVisibility(bDeckLightsOn);
+	DeckFloodStarboard->SetVisibility(bDeckLightsOn);
+}
+
+void ARiptideBoat::UpdateSearchlight(float DeltaSeconds)
+{
+	// The helmsman aims it by looking: it follows the helm camera's direction.
+	if (IsLocallyControlled() && Helmsman)
+	{
+		if (HasAuthority())
+		{
+			AimSearchlight(LookYaw, LookPitch);
+		}
+		else
+		{
+			ServerAimSearchlight(LookYaw, LookPitch);
+		}
+	}
+	const float Step = SearchlightSlewDeg * DeltaSeconds;
+	SearchlightYawNow = FMath::FixedTurn(SearchlightYawNow, SearchlightYaw, Step);
+	SearchlightPitchNow = FMath::FInterpConstantTo(SearchlightPitchNow, SearchlightPitch, DeltaSeconds, SearchlightSlewDeg);
+	SearchlightHead->SetRelativeRotation(FRotator(SearchlightPitchNow, SearchlightYawNow, 0.f));
+}
+
 FTransform ARiptideBoat::GetLadderFootTransform() const
 {
 	// The ladder hangs off the transom's port side (riptide_boat_mesh.py's _fittings), its foot in the water.
@@ -1116,6 +1341,8 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 	}
 
 	PoseOutboards();
+	UpdateSearchlight(DeltaSeconds);
+
 	// The radar sweeps while the engines are running.
 	if (GetEngineRpm() > 0.f)
 	{
@@ -1321,9 +1548,19 @@ void ARiptideBoat::ApplyHydrodynamics()
 	const FVector LocalDragN(
 		-ForwardDrag * LocalVelMs.X * FMath::Abs(LocalVelMs.X),
 		-LateralDrag * LocalVelMs.Y * FMath::Abs(LocalVelMs.Y),
-		-HeaveDamping * LocalVelMs.Z);
-
+		0.f);
 	HullBody->AddForce(Xf.TransformVectorNoScale(LocalDragN) * NewtonsToUnreal);
+
+	// Heave: the water resists the hull moving up and down through it, so this acts on the hull's vertical speed
+	// relative to the sea's own rise and fall under it. (Against its absolute speed, it held the hull up in the air
+	// as a swell dropped away beneath it, lifting the props clear.)
+	const float DeltaSeconds = GetWorld()->GetDeltaSeconds();
+	const float SeaZ = GetSeaSurfaceZ(Xf.GetLocation());
+	const float SeaVzMs = bHaveSeaZ && DeltaSeconds > 0.f ? (SeaZ - PrevSeaZ) / DeltaSeconds / 100.f : 0.f;
+	PrevSeaZ = SeaZ;
+	bHaveSeaZ = true;
+	const float RelativeVzMs = HullBody->GetPhysicsLinearVelocity().Z / 100.f - SeaVzMs;
+	HullBody->AddForce(FVector::UpVector * -HeaveDamping * RelativeVzMs * NewtonsToUnreal);
 
 	// Planing lift: water striking the forward hull bottom pushes up ahead of the centre of mass,
 	// so the bow trims up with speed. Only going forward, and capped so crests don't launch the boat.

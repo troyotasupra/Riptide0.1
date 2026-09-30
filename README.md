@@ -8,6 +8,7 @@ Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLA
 - You start on foot on the deck, in first person, and can walk all of it: round the console on either side, up to the bow and across the aft deck, at rest or at full speed through turns. Step up to the wheel and press E to take the helm; E again lets go (the throttle stays where you left it). Go over the side and you swim (where you look; Space swims up, C dives); the boarding ladder on the stern's port side reaches into the water, and E at its foot climbs you back aboard.
 - At the helm: a twin-lever throttle (centred is neutral; forward engages ahead, then opens the throttle; back is astern), and live gauges on the dash: tachometer, speedometer, and a screen showing gear, throttle, trim, fuel, heading and warnings.
 - Storage: the floor lockers in front of the console, the stern hatches and the anchor locker hold gear. E beside one opens it in the inventory screen (the Godot build's Delta Force-style grid): drag items between the locker and your pockets and backpack. Tab opens your own inventory.
+- Lights: navigation lights (masthead all-round white, screened red and green sidelights at the bow) are on from the start; the searchlight on the T-top swings to wherever the helmsman looks and throws a visible beam at night (the map has light volumetric fog for it); floods under the canopy light the cockpit.
 - Spray: at speed the bow wave peels off in fans of spray, slamming into a swell throws bursts out both sides, and the props churn whitewater behind the stern.
 - The boat leaves a real wake: its hull pushes the Water plugin's fluid simulation (Epic's boat force, scaled for a small hull), so waves and foam spread behind it in a V; white prop churn trails from the transom (`RiptideWakeFoamComponent`). Materials are built by `init_unreal.py`.
 - Sound: the twin engines rev with the throttle and races when the prop leaves the water; water wash rises with speed; the bow slaps into waves; ocean ambience all around. Sounds are imported from `SourceAssets/Audio` when the editor opens (credits in `Docs/CREDITS.md`).
@@ -46,6 +47,9 @@ Each sound is levelled on import to a target loudness, with peaks held below -8 
 | Cut throttle to idle | X | B |
 | Look around | Mouse | Right stick |
 | Leave the helm | E | X |
+| Searchlight on / off (it follows where you look) | L | D-pad left |
+| Navigation lights on / off | N | |
+| Cockpit floods on / off | K | D-pad right |
 | Tuning readout on screen | H | |
 
 The dash gauges show everything you need; H brings up the old tuning readout (speed, throttle, motor angle, trim, fuel, engine health, props in the water).

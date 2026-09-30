@@ -619,11 +619,9 @@ def _t_top(m):
     m.tube(ring, 3.5, "Frame")
     m.box((-165.0, -70.0, top + 2.0), (35.0, 70.0, top + 8.0), "Canopy")
     roof = top + 8.0
-    # Searchlight (starboard) and FLIR thermal camera ball (port) at the front edge, each on a pan-tilt base.
+    # Searchlight (starboard) and FLIR thermal camera ball (port) at the front edge, each on a pan-tilt base. The
+    # searchlight's head is its own model (build_searchlight), aimed from the helm.
     m.tube([(26.0, 40.0, roof), (26.0, 40.0, roof + 8.0)], 5.0, "Trim", sides=12)
-    m.tube([(20.0, 40.0, roof + 16.0), (38.0, 40.0, roof + 16.0)], 8.0, "Frame", sides=16)
-    m.fan([(38.0, 40.0 + 7.0 * math.cos(a), roof + 16.0 + 7.0 * math.sin(a)) for a in [2 * math.pi * i / 16 for i in range(16)]],
-          "Lamp", outward_hint=lambda p: (0.0, 40.0, roof + 16.0))
     m.tube([(26.0, -40.0, roof), (26.0, -40.0, roof + 6.0)], 5.0, "Trim", sides=12)
     _ball(m, (26.0, -40.0, roof + 15.0), 9.0, "White")
     m.fan([(26.0 + 8.6, -40.0 + 4.0 * math.cos(a), roof + 15.0 + 4.0 * math.sin(a)) for a in [2 * math.pi * i / 12 for i in range(12)]],
@@ -677,6 +675,24 @@ def build_skiff():
     _t_top(m)
     _bow_rail(m)
     _fittings(m)
+    return m
+
+
+SEARCHLIGHT = (26.0, 40.0, DECK_Z + 220.0 + 8.0 + 16.0)   # the head's pivot (ARiptideBoat's SearchlightPivot)
+
+
+def build_searchlight():
+    """The searchlight's head: origin at its pivot, the beam along +X, on a yoke that sits on the T-top base."""
+    m = Mesh()
+    m.tube([(-6.0, 0.0, 0.0), (12.0, 0.0, 0.0)], 8.0, "Frame", sides=16)
+    m.fan([(-6.0, 7.9 * math.cos(a), 7.9 * math.sin(a)) for a in [2 * math.pi * i / 16 for i in range(16)]], "Frame",
+          outward_hint=lambda p: (6.0, 0.0, 0.0))
+    m.fan([(12.0, 7.2 * math.cos(a), 7.2 * math.sin(a)) for a in [2 * math.pi * i / 16 for i in range(16)]], "Lamp",
+          outward_hint=lambda p: (0.0, 0.0, 0.0))
+    for y in (-9.5, 9.5):
+        m.box((-2.0, y - 1.0, -8.0), (4.0, y + 1.0, 1.0), "Trim")
+    m.box((-2.0, -10.5, -9.0), (4.0, 10.5, -7.0), "Trim")
+    m.tube([(-6.0, 0.0, 5.0), (-10.0, 0.0, 9.0)], 1.0, "Trim", sides=6)   # handle
     return m
 
 
@@ -760,6 +776,6 @@ if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "."
     os.makedirs(out, exist_ok=True)
     for name, mesh in (("skiff", build_skiff()), ("outboard", build_outboard()), ("bracket", build_outboard_bracket()),
-                       ("lever", build_throttle_lever()), ("radar", build_radar_array())):
+                       ("lever", build_throttle_lever()), ("radar", build_radar_array()), ("searchlight", build_searchlight())):
         mesh.write_obj(os.path.join(out, name + ".obj"))
         print(name, len(mesh.verts), "verts", sum(len(f) for f in mesh.faces.values()), "tris")

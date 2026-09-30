@@ -332,6 +332,9 @@ def verdict():
         checks.append(("trimming in lowers the bow", avg["trim in"] < avg["trim neutral"] - 0.5,
                        "bow pitch %.1f deg trimmed in vs %.1f neutral" % (avg["trim in"], avg["trim neutral"])))
 
+    lights = state.get("lights", (False, False, False))
+    checks.append(("navigation lights on at the start; the searchlight switches on and off", all(lights), "%s" % (lights,)))
+
     w, h, walker = state["walk"], state["helm"], state["walker"]
     if walker:
         checks.append(("walks laps of the whole deck at rest and underway (round the console, bow, aft deck)",
@@ -443,6 +446,12 @@ def _tick(_dt):
         t = unreal.GameplayStatics.get_time_seconds(world)
         start, throttle, steer, phase = phase_at(t)
         boat.set_helm_input(throttle, steer)
+        if "lights" not in state and t > 1.0:
+            nav = boat.are_nav_lights_on()
+            boat.set_searchlight_on(True)
+            on = boat.is_searchlight_on()
+            boat.set_searchlight_on(False)
+            state["lights"] = (nav, on, not boat.is_searchlight_on())
         switch, held = TRIM_SWITCH.get(phase, (0.0, 0.0))
         boat.set_trim_input(switch if t - start < held else 0.0)
         if phase.startswith("trim"):
