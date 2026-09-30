@@ -175,16 +175,29 @@ int32 SRiptideGauge::PaintDisplay(const FGeometry& G, FSlateWindowElementList& O
 	// Warnings across the top.
 	FString Warning;
 	FLinearColor WarningColour = Amber;
-	if (B.GetEngineHealth() <= 0.f)
+	const TCHAR* Sides[2] = { TEXT("PORT"), TEXT("STBD") };
+	for (int32 Motor = 0; Motor < 2 && Warning.IsEmpty(); ++Motor)
 	{
-		Warning = TEXT("ENGINE FAILURE");
+		if (B.GetMotorHealth(Motor) <= 0.f)
+		{
+			Warning = FString::Printf(TEXT("%s ENGINE FAILURE"), Sides[Motor]);
+			WarningColour = Red;
+		}
+		else if (B.GetMotorHealth(Motor) < 0.5f)
+		{
+			Warning = FString::Printf(TEXT("CHECK %s ENGINE"), Sides[Motor]);
+		}
+	}
+	if (Warning.IsEmpty() && B.GetFuelFraction() <= 0.f)
+	{
+		Warning = TEXT("OUT OF FUEL");
 		WarningColour = Red;
 	}
-	else if (B.GetEngineHealth() < 0.5f)
+	else if (Warning.IsEmpty() && B.GetFuelFraction() < 0.15f)
 	{
-		Warning = TEXT("CHECK ENGINE");
+		Warning = TEXT("LOW FUEL");
 	}
-	else if (!B.IsPropellerSubmerged() && B.GetEngineRpm() > 0.f)
+	else if (Warning.IsEmpty() && !B.IsPropellerSubmerged() && B.GetEngineRpm() > 0.f)
 	{
 		Warning = TEXT("PROP VENTILATING");
 	}

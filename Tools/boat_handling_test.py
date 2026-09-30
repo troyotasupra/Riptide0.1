@@ -32,9 +32,12 @@ SCRIPT = [
     (106.0, -1.0, 0.0, "stop"),          # lever back through neutral into reverse to brake
     (108.7, 0.0, 0.0, "astern"),
     (111.0, 1.0, 0.0, "to neutral"),
-    (112.0, 0.0, 0.0, "drift"),          # then the crew member goes in the sea and climbs back aboard
+    (112.0, 0.0, 0.0, "drift"),          # then the crew member goes in the sea and climbs back aboard,
+    (123.0, 0.0, 0.0, "refuel"),         # fetches the fuel drum from the stern locker and pours it in,
+    (125.5, 1.0, 0.0, "one engine"),     # and the port motor dies: the boat runs on the starboard one
+    (127.5, 0.0, 0.0, "one engine run"),
 ]
-END_TIME = 124.0
+END_TIME = 134.0
 SWIM_IN_T, CLIMB_T, ABOARD_CHECK_T = 115.0, 117.0, 122.0
 # Points on the deck (cm, boat frame) checked against the sea surface every frame.
 DECK_POINTS = {"aft deck": (-300, 0, 20), "aft corner": (-320, 100, 20), "side deck": (0, 100, 20),
@@ -245,6 +248,33 @@ def swim_check(world, boat, walker, t):
         log("t=%5.1f after the ladder: standing on the boat %s" % (t, sw["aboard"]))
 
 
+def fuel_and_engine_check(world, boat, walker, t):
+    """Takes the fuel drum from the stern locker and pours it in at the filler; then kills the port motor."""
+    fe = state.setdefault("fuel", {})
+    xf = boat.get_actor_transform()
+    if t >= 123.0 and "drum" not in fe:
+        walker.set_actor_location(xf.transform_location(unreal.Vector(-318.0, -90.0, 20.0 + 92.0)), False, True)
+        fe["drum"] = t
+    if t >= 123.6 and "taken" not in fe:
+        lockers, inv = boat.get_lockers(), walker.get_inventory()
+        log("t=%5.1f at the stern locker: in reach %d; lockers hold %s stacks; pockets/pack %s stacks, %s cells free"
+            % (t, walker.get_locker_in_reach(), [lockers.count_stacks(i) for i in range(lockers.num())],
+               [inv.count_stacks(i) for i in range(inv.num())], [inv.count_free_cells(i) for i in range(inv.num())]))
+        fe["taken"] = walker.take_from_locker(2)
+        walker.set_actor_location(xf.transform_location(unreal.Vector(-237.0, 100.0, 20.0 + 92.0)), False, True)
+    if t >= 124.3 and "poured" not in fe:
+        fe["before"] = boat.get_fuel_liters()
+        fe["can"] = walker.can_refuel()
+        walker.try_refuel()
+        fe["poured"] = boat.get_fuel_liters() - fe["before"]
+        log("t=%5.1f refuel: took %d stacks from the stern locker, at the filler %s, poured %.1f L (tank %.0f L)"
+            % (t, fe["taken"], fe["can"], fe["poured"], boat.get_fuel_liters()))
+    if t >= 125.4 and "killed" not in fe:
+        boat.apply_engine_damage(1.0, 0)
+        fe["killed"] = t
+        fe["yaw0"] = boat.get_actor_rotation().yaw
+
+
 def in_phase(name):
     return [s for s in state["samples"] if s["phase"] == name]
 
@@ -367,6 +397,15 @@ def verdict():
         checks.append(("swims when in the sea, head above the water", bool(sw.get("swimming")) and sw.get("head_out", 0) > 0.8 * max(1, sw.get("frames", 0)),
                        "head out %s of %s frames" % (sw.get("head_out"), sw.get("frames"))))
         checks.append(("climbs the boarding ladder back aboard", bool(sw.get("at_ladder")) and bool(sw.get("climb")) and bool(sw.get("aboard")), ""))
+        fe = state.get("fuel", {})
+        checks.append(("fetches the fuel drum and pours it in at the filler", bool(fe.get("can")) and fe.get("poured", 0.0) > 19.0,
+                       "%.1f L" % fe.get("poured", 0.0)))
+        one = in_phase("one engine run")
+        if one:
+            top = max(s["kn"] for s in one)
+            turned = yaw_change(one)
+            checks.append(("runs on one motor when the other dies (over 10 kn), pulling toward the dead side", top > 10.0 and turned < -5.0,
+                           "top %.1f kn, yawed %+.0f deg" % (top, turned)))
         stc = state.get("storage", {})
         checks.append(("opens the forward locker from beside it and takes its gear", stc.get("reach") == 0 and stc.get("took", 0) >= 5,
                        "locker %s, %s stacks" % (stc.get("reach"), stc.get("took"))))
@@ -473,6 +512,7 @@ def _tick(_dt):
             helm_swap(world, boat, state["walker"], t)
             storage_check(world, boat, state["walker"], t)
             swim_check(world, boat, state["walker"], t)
+            fuel_and_engine_check(world, boat, state["walker"], t)
 
         # How often the prop and in-water readings flip, every frame: real ventilation comes and goes over a swell,
         # but a reading that flips back and forth every few frames is a glitch (the HUD and engine sound stutter).

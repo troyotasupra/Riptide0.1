@@ -337,6 +337,10 @@ void ARiptideCharacter::OnInteract(const FInputActionValue& Value)
 	{
 		TryTakeHelm();
 	}
+	else if (CanRefuel())
+	{
+		TryRefuel();
+	}
 	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
 	{
 		OpenInventory(Locker);
@@ -410,6 +414,64 @@ void ARiptideCharacter::CloseInventory()
 		PC->SetInputMode(FInputModeGameOnly());
 		PC->SetShowMouseCursor(false);
 	}
+}
+
+bool ARiptideCharacter::FindFuelDrum(int32& OutGrid, int32& OutUid) const
+{
+	for (int32 Grid = 0; Grid < Inventory->Num(); ++Grid)
+	{
+		for (const FRiptideItem& Item : Inventory->GetStorage(Grid)->Grid.Items)
+		{
+			if (Item.Id == FName(TEXT("fuel_drum")))
+			{
+				OutGrid = Grid;
+				OutUid = Item.Uid;
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool ARiptideCharacter::CanRefuel() const
+{
+	int32 Grid, Uid;
+	if (!HomeBoat || bManningHelm || IsInSea() || !FindFuelDrum(Grid, Uid))
+	{
+		return false;
+	}
+	const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+	return FVector::Dist(Feet + FVector(0.f, 0.f, 40.f), HomeBoat->GetFuelFillerTransform().GetLocation()) < 140.f;
+}
+
+void ARiptideCharacter::TryRefuel()
+{
+	if (!CanRefuel())
+	{
+		return;
+	}
+	if (HasAuthority())
+	{
+		ServerRefuel_Implementation();
+	}
+	else
+	{
+		ServerRefuel();
+	}
+}
+
+void ARiptideCharacter::ServerRefuel_Implementation()
+{
+	int32 Grid, Uid;
+	if (!CanRefuel() || !FindFuelDrum(Grid, Uid) || HomeBoat->GetFuelFraction() >= 1.f)
+	{
+		return;
+	}
+	// A drum holds twenty litres (item table: fuel_drum); the empty drum goes over the side.
+	Inventory->GetStorage(Grid)->Grid.Take(Uid, 1);
+	Inventory->OnChanged.Broadcast();
+	const float Poured = HomeBoat->AddFuel(20.f);
+	UE_LOG(LogTemp, Log, TEXT("Riptide: %s poured %.0f L of fuel into %s"), *GetName(), Poured, *HomeBoat->GetName());
 }
 
 int32 ARiptideCharacter::TakeFromLocker(int32 Locker)
@@ -689,6 +751,11 @@ void ARiptideCharacter::DrawHud() const
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, IsBraced() ? FColor::Green : FColor::White,
 			IsBraced() ? TEXT("Holding on") : HomeBoat->IsHandholdNear(GetActorLocation(), HandholdReach)
 				? TEXT("Shift  Hold on") : TEXT("Get to a rail: the boat's moving fast"));
+	}
+	else if (CanRefuel())
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+			FString::Printf(TEXT("E  Pour the fuel drum in (tank %d%%)"), FMath::RoundToInt(HomeBoat->GetFuelFraction() * 100.f)));
 	}
 	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
 	{

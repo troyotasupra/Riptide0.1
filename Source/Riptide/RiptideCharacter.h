@@ -100,6 +100,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	int32 TakeFromLocker(int32 Locker);
 
+	/** True when standing at the home boat's fuel filler with a fuel drum to pour in. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool CanRefuel() const;
+
+	/** Pours a fuel drum from this crew member's inventory into the boat's tank. Called by the interact key; also
+	 * for tests. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void TryRefuel();
+
 	/** Opens the inventory screen, with one of the home boat's lockers alongside (or none). Local player only. */
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void OpenInventory(int32 Locker);
@@ -188,6 +197,12 @@ private:
 		int32 X, int32 Y, bool bRotated, int32 Count);
 
 	bool CanReach(const URiptideStorageComponent* Storage, int32 Index) const;
+
+	UFUNCTION(Server, Reliable)
+	void ServerRefuel();
+
+	/** Finds a fuel drum in what this crew member carries: which grid and which item, or false. */
+	bool FindFuelDrum(int32& OutGrid, int32& OutUid) const;
 	void OnInventoryKey(const FInputActionValue& Value);
 
 	/** Applies bManningHelm on the machines that didn't set it (hidden or not is replicated by the engine). */

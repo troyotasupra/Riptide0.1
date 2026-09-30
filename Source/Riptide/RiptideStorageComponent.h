@@ -38,7 +38,15 @@ public:
 
 	int32 AddStorage(const FText& Title, int32 Width, int32 Height, const FVector& Point = FVector::ZeroVector);
 
+	UFUNCTION(BlueprintPure, Category = "Storage")
 	int32 Num() const { return Storages.Num(); }
+
+	/** How many stacks are in one grid, and the free cells left in it. */
+	UFUNCTION(BlueprintPure, Category = "Storage")
+	int32 CountStacks(int32 Index) const { return Storages.IsValidIndex(Index) ? Storages[Index].Grid.Items.Num() : 0; }
+
+	UFUNCTION(BlueprintPure, Category = "Storage")
+	int32 CountFreeCells(int32 Index) const;
 	const FRiptideStorage* GetStorage(int32 Index) const { return Storages.IsValidIndex(Index) ? &Storages[Index] : nullptr; }
 	FRiptideStorage* GetStorage(int32 Index) { return Storages.IsValidIndex(Index) ? &Storages[Index] : nullptr; }
 

@@ -62,8 +62,27 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	bool IsPropellerSubmerged() const;
 
+	/** Damages one motor (0 port, 1 starboard) or both (-1). Below half health it sputters; at 0 it's dead. */
 	UFUNCTION(BlueprintCallable, Category = "Boat")
-	void ApplyEngineDamage(float Amount);
+	void ApplyEngineDamage(float Amount, int32 Motor = -1);
+
+	/** Pours fuel into the tank (litres, up to its capacity). Server only. Returns how much went in. */
+	UFUNCTION(BlueprintCallable, Category = "Boat")
+	float AddFuel(float Liters);
+
+	/** Where the fuel filler is on the gunwale (starboard, aft), in the world. */
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	FTransform GetFuelFillerTransform() const;
+
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetMotorHealth(int32 Motor) const { return Motor == 1 ? EngineHealthStarboard : EngineHealthPort; }
+
+	/** One motor's output, -1 (full astern) to 1 (full ahead). */
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetMotorOutput(int32 Motor) const { return Motor == 1 ? MotorOutputStarboard : MotorOutputPort; }
+
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	bool IsMotorRunning(int32 Motor) const { return FuelLiters > 0.f && GetMotorHealth(Motor) > 0.f; }
 
 	/**
 	 * Holds the helm controls as if keys were held: Throttle moves the lever (-1..1), Steer swings the motor (-1..1).
@@ -94,8 +113,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	float GetFuelFraction() const { return FuelCapacityLiters > 0.f ? FuelLiters / FuelCapacityLiters : 0.f; }
 
+	/** The two motors' health averaged (see GetMotorHealth for each). */
 	UFUNCTION(BlueprintPure, Category = "Boat")
-	float GetEngineHealth() const { return EngineHealth; }
+	float GetEngineHealth() const { return 0.5f * (EngineHealthPort + EngineHealthStarboard); }
 
 	float GetMinTrimDeg() const { return MinTrimDeg; }
 	float GetMaxTrimDeg() const { return MaxTrimDeg; }
@@ -592,11 +612,18 @@ protected:
 	float TrimFullEffectKnots = 22.f;
 
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
-	float FuelCapacityLiters = 40.f;
+	float FuelCapacityLiters = 450.f;
 
-	/** Fuel burned per second at full throttle. */
+	/** How full the tank is when the boat appears (a crew's boat is rarely brimmed). */
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "1"))
+	float StartingFuelFraction = 0.7f;
+
+	/** Fuel each motor burns per second at full throttle (a 250 hp outboard flat out: about 95 L an hour) and at idle. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
-	float FuelBurnPerSecond = 0.02f;
+	float FuelBurnFullPerMotor = 0.026f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
+	float FuelBurnIdlePerMotor = 0.0006f;
 
 	// --- Camera ---
 
@@ -623,9 +650,19 @@ protected:
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category = "Boat|State")
 	float FuelLiters = 0.f;
 
-	/** 1 = healthy. Below 0.5 the engine sputters; at 0 it's dead. */
+	/** Each motor's health: 1 healthy, below 0.5 it sputters, 0 dead. */
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category = "Boat|State")
-	float EngineHealth = 1.f;
+	float EngineHealthPort = 1.f;
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category = "Boat|State")
+	float EngineHealthStarboard = 1.f;
+
+	/** Each motor's actual output (EngineOutput is their average). */
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category = "Boat|State")
+	float MotorOutputPort = 0.f;
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, Category = "Boat|State")
+	float MotorOutputStarboard = 0.f;
 
 	virtual void BeginPlay() override;
 	virtual void OnConstruction(const FTransform& Transform) override;
@@ -740,8 +777,8 @@ private:
 	/** The tuning readout on screen (off by default; H at the helm). */
 	bool bShowDebugHud = false;
 
-	/** How hard the engines are driving the props, 0 (idle or neutral) to 1 (full), from the engine output. */
-	float GetDriveFraction() const;
+	/** How hard the engines (or one motor: 0 port, 1 starboard) are driving the props, 0 (idle or neutral) to 1. */
+	float GetDriveFraction(int32 Motor = -1) const;
 
 	UPROPERTY(Replicated, Transient)
 	TObjectPtr<ARiptideCharacter> Helmsman;
@@ -756,7 +793,7 @@ private:
 	float LookPitch = 0.f;
 
 	/** Remaining time the engine is cut out by a sputter. */
-	float SputterTimeLeft = 0.f;
+	float SputterTimeLeft[2] = { 0.f, 0.f };
 
 	/** Whether each prop (port, starboard) is in the water, from UpdatePropImmersion. */
 	bool bPropWet[2] = { true, true };
@@ -783,8 +820,8 @@ private:
 	int32 SternFoamTrail = INDEX_NONE;
 	float ChurnLevel = 0.f;
 
-	bool bEngineSoundRunning = false;
-	float EngineRevs = 0.f;
+	bool bMotorSoundRunning[2] = { false, false };
+	float MotorRevs[2] = { 0.f, 0.f };
 	float PrevBowFreeboard = 0.f;
 	bool bHaveBowFreeboard = false;
 	float SlapCooldownLeft = 0.f;

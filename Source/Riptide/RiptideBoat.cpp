@@ -438,7 +438,7 @@ void ARiptideBoat::BeginPlay()
 	HullBody->SetMassOverrideInKg(NAME_None, HullMassKg, true);
 	if (HasAuthority())
 	{
-		FuelLiters = FuelCapacityLiters;
+		FuelLiters = FuelCapacityLiters * StartingFuelFraction;
 		SetUpLockers();
 	}
 
@@ -748,45 +748,45 @@ void ARiptideBoat::UpdateSounds(float DeltaSeconds)
 		return;
 	}
 
-	// Engine: runs while it has fuel and isn't dead. Pitch and volume follow the actual engine output (so a
-	// sputter is heard as a dip), and it races when the prop leaves the water and loses its load.
-	const bool bRunning = FuelLiters > 0.f && EngineHealth > 0.f;
-	if (bRunning != bEngineSoundRunning)
+	// Engines: each motor runs while it has fuel and isn't dead, with its own pair of recordings. Pitch and volume
+	// follow that motor's actual output (a sputter is heard as a dip), and it races when its prop leaves the water.
+	UAudioComponent* MotorLayers[2][2] = { { EngineAudio, EngineHighAudio }, { EngineAudioStarboard, EngineHighAudioStarboard } };
+	const USceneComponent* Props[2] = { Propeller, PropellerStarboard };
+	for (int32 Motor = 0; Motor < 2; ++Motor)
 	{
-		bEngineSoundRunning = bRunning;
-		for (UAudioComponent* Layer : { EngineAudio.Get(), EngineHighAudio.Get(), EngineAudioStarboard.Get(), EngineHighAudioStarboard.Get() })
+		const bool bRunning = IsMotorRunning(Motor);
+		if (bRunning != bMotorSoundRunning[Motor])
 		{
-			if (bRunning)
+			bMotorSoundRunning[Motor] = bRunning;
+			for (UAudioComponent* Layer : MotorLayers[Motor])
 			{
-				Layer->FadeIn(0.5f);
-			}
-			else
-			{
-				Layer->FadeOut(1.5f, 0.f);
+				if (bRunning)
+				{
+					Layer->FadeIn(0.5f);
+				}
+				else
+				{
+					Layer->FadeOut(1.5f, 0.f);
+				}
 			}
 		}
-	}
-	const float Output = GetDriveFraction();
-	const float TargetRevs = FMath::Min(1.f, Output * (IsPropellerSubmerged() ? 1.f : 1.f + PropOutOverRev));
-	EngineRevs = FMath::FInterpTo(EngineRevs, TargetRevs, DeltaSeconds, 6.f);
+		const float Output = GetDriveFraction(Motor);
+		const float TargetRevs = FMath::Min(1.f, Output * (IsPropSubmerged(Props[Motor]) ? 1.f : 1.f + PropOutOverRev));
+		MotorRevs[Motor] = FMath::FInterpTo(MotorRevs[Motor], TargetRevs, DeltaSeconds, 6.f);
 
-	// Engine speed moves between idle and full on a musical (log) scale. Each recording is pitched to that speed,
-	// and the two crossfade at equal power by where the speed sits between them.
-	const float Hz = EngineIdleHz * FMath::Pow(EngineFullHz / EngineIdleHz, EngineRevs);
-	const float HighWeight = FMath::Clamp(
-		FMath::Loge(Hz / EngineLowRecordingHz) / FMath::Loge(EngineHighRecordingHz / EngineLowRecordingHz), 0.f, 1.f);
-	// Each engine at half power (-3 dB), so the pair adds up to the level the single engine was measured at.
-	const float Volume = FMath::Lerp(EngineIdleVolume, 1.f, Output) * UE_INV_SQRT_2;
-	const float LowGain = Volume * FMath::Max(0.f, FMath::Cos(HighWeight * UE_HALF_PI));
-	const float HighGain = Volume * FMath::Max(0.f, FMath::Sin(HighWeight * UE_HALF_PI));
-	EngineAudio->SetPitchMultiplier(Hz / EngineLowRecordingHz);
-	EngineHighAudio->SetPitchMultiplier(Hz / EngineHighRecordingHz);
-	EngineAudioStarboard->SetPitchMultiplier(StarboardEngineDetune * Hz / EngineLowRecordingHz);
-	EngineHighAudioStarboard->SetPitchMultiplier(StarboardEngineDetune * Hz / EngineHighRecordingHz);
-	EngineAudio->SetVolumeMultiplier(LowGain);
-	EngineAudioStarboard->SetVolumeMultiplier(LowGain);
-	EngineHighAudio->SetVolumeMultiplier(HighGain);
-	EngineHighAudioStarboard->SetVolumeMultiplier(HighGain);
+		// Engine speed moves between idle and full on a musical (log) scale. Each recording is pitched to that speed,
+		// and the two crossfade at equal power by where the speed sits between them. The starboard motor runs a touch
+		// sharp, like two real engines.
+		const float Hz = EngineIdleHz * FMath::Pow(EngineFullHz / EngineIdleHz, MotorRevs[Motor]) * (Motor == 1 ? StarboardEngineDetune : 1.f);
+		const float HighWeight = FMath::Clamp(
+			FMath::Loge(Hz / EngineLowRecordingHz) / FMath::Loge(EngineHighRecordingHz / EngineLowRecordingHz), 0.f, 1.f);
+		// Each motor at half power (-3 dB), so the pair adds up to the level the single engine was measured at.
+		const float Volume = FMath::Lerp(EngineIdleVolume, 1.f, Output) * UE_INV_SQRT_2;
+		MotorLayers[Motor][0]->SetPitchMultiplier(Hz / EngineLowRecordingHz);
+		MotorLayers[Motor][1]->SetPitchMultiplier(Hz / EngineHighRecordingHz);
+		MotorLayers[Motor][0]->SetVolumeMultiplier(Volume * FMath::Max(0.f, FMath::Cos(HighWeight * UE_HALF_PI)));
+		MotorLayers[Motor][1]->SetVolumeMultiplier(Volume * FMath::Max(0.f, FMath::Sin(HighWeight * UE_HALF_PI)));
+	}
 
 	// Wash: water rushing past the hull, rising with speed. Silent out of the water.
 	const bool bInWater = Buoyancy && Buoyancy->IsInWaterBody();
@@ -923,7 +923,10 @@ void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ARiptideBoat, SteerAngleDeg);
 	DOREPLIFETIME(ARiptideBoat, TrimDeg);
 	DOREPLIFETIME(ARiptideBoat, FuelLiters);
-	DOREPLIFETIME(ARiptideBoat, EngineHealth);
+	DOREPLIFETIME(ARiptideBoat, EngineHealthPort);
+	DOREPLIFETIME(ARiptideBoat, EngineHealthStarboard);
+	DOREPLIFETIME(ARiptideBoat, MotorOutputPort);
+	DOREPLIFETIME(ARiptideBoat, MotorOutputStarboard);
 	DOREPLIFETIME(ARiptideBoat, Helmsman);
 	DOREPLIFETIME(ARiptideBoat, bSearchlightOn);
 	DOREPLIFETIME(ARiptideBoat, bNavLightsOn);
@@ -1476,18 +1479,26 @@ float ARiptideBoat::GetThrottleOpening() const
 	return FMath::Clamp((FMath::Abs(ThrottleLever) - NeutralDetent) / (1.f - NeutralDetent), 0.f, 1.f);
 }
 
-float ARiptideBoat::GetDriveFraction() const
+float ARiptideBoat::GetDriveFraction(int32 Motor) const
 {
-	return FMath::Clamp((FMath::Abs(EngineOutput) - IdleThrustInGear) / (1.f - IdleThrustInGear), 0.f, 1.f);
+	const float Output = Motor < 0 ? EngineOutput : GetMotorOutput(Motor);
+	return FMath::Clamp((FMath::Abs(Output) - IdleThrustInGear) / (1.f - IdleThrustInGear), 0.f, 1.f);
 }
 
 float ARiptideBoat::GetEngineRpm() const
 {
-	if (FuelLiters <= 0.f || EngineHealth <= 0.f)
+	// The running motors' average (the tachometer reads the pair).
+	float Rpm = 0.f;
+	int32 Running = 0;
+	for (int32 Motor = 0; Motor < 2; ++Motor)
 	{
-		return 0.f;
+		if (IsMotorRunning(Motor))
+		{
+			Rpm += FMath::Lerp(IdleRpm, MaxRpm, MotorRevs[Motor]);
+			++Running;
+		}
 	}
-	return FMath::Lerp(IdleRpm, MaxRpm, EngineRevs);
+	return Running > 0 ? Rpm / Running : 0.f;
 }
 
 void ARiptideBoat::UpdateEngine(float DeltaSeconds)
@@ -1498,26 +1509,38 @@ void ARiptideBoat::UpdateEngine(float DeltaSeconds)
 	const float GearSign = Gear == ERiptideGear::Forward ? 1.f : Gear == ERiptideGear::Reverse ? -1.f : 0.f;
 	float Target = GearSign * FMath::Lerp(IdleThrustInGear, 1.f, GetThrottleOpening());
 
-	if (FuelLiters <= 0.f || EngineHealth <= 0.f)
+	// Each motor runs on its own: a dead or dry one stops, a damaged one cuts out at random (more often the worse it
+	// is). Losing one leaves the other pushing off to one side, so the boat pulls toward the dead motor's side.
+	float Burn = 0.f;
+	for (int32 Motor = 0; Motor < 2; ++Motor)
 	{
-		Target = 0.f;
-	}
-	else if (EngineHealth < 0.5f)
-	{
-		// A damaged engine cuts out at random, more often the worse it is.
-		if (SputterTimeLeft > 0.f)
+		const float Health = GetMotorHealth(Motor);
+		float MotorTarget = Target;
+		if (!IsMotorRunning(Motor))
 		{
-			SputterTimeLeft -= DeltaSeconds;
-			Target = 0.f;
+			MotorTarget = 0.f;
 		}
-		else if (FMath::FRand() < (0.5f - EngineHealth) * 2.f * DeltaSeconds)
+		else if (Health < 0.5f)
 		{
-			SputterTimeLeft = FMath::FRandRange(0.3f, 1.5f);
+			if (SputterTimeLeft[Motor] > 0.f)
+			{
+				SputterTimeLeft[Motor] -= DeltaSeconds;
+				MotorTarget = 0.f;
+			}
+			else if (FMath::FRand() < (0.5f - Health) * 2.f * DeltaSeconds)
+			{
+				SputterTimeLeft[Motor] = FMath::FRandRange(0.3f, 1.5f);
+			}
+		}
+		float& Output = Motor == 1 ? MotorOutputStarboard : MotorOutputPort;
+		Output = FMath::FInterpTo(Output, MotorTarget, DeltaSeconds, EngineSpoolRate);
+		if (IsMotorRunning(Motor))
+		{
+			Burn += FMath::Lerp(FuelBurnIdlePerMotor, FuelBurnFullPerMotor, FMath::Pow(GetDriveFraction(Motor), 1.8f));
 		}
 	}
-
-	EngineOutput = FMath::FInterpTo(EngineOutput, Target, DeltaSeconds, EngineSpoolRate);
-	FuelLiters = FMath::Max(0.f, FuelLiters - FMath::Abs(EngineOutput) * FuelBurnPerSecond * DeltaSeconds);
+	EngineOutput = 0.5f * (MotorOutputPort + MotorOutputStarboard);
+	FuelLiters = FMath::Max(0.f, FuelLiters - Burn * DeltaSeconds);
 }
 
 bool ARiptideBoat::IsPropellerSubmerged() const
@@ -1553,24 +1576,25 @@ void ARiptideBoat::UpdatePropImmersion()
 
 void ARiptideBoat::ApplyThrust()
 {
-	if (FMath::IsNearlyZero(EngineOutput, 0.001f))
+	if (FMath::IsNearlyZero(MotorOutputPort, 0.001f) && FMath::IsNearlyZero(MotorOutputStarboard, 0.001f))
 	{
 		return;
 	}
 
-	// Each motor gives half the thrust, and only while its own prop is in the water: a prop lifting clear on a
-	// roll loses its half, and the other motor's push, off to one side, slews the stern.
-	const float Scale = EngineOutput > 0.f ? 1.f : ReverseThrustScale;
-	const float ThrustN = 0.5f * MaxThrust * EngineOutput * Scale;
+	// Each motor gives up to half the thrust from its own output, and only while its own prop is in the water: a
+	// prop lifting clear on a roll, or a motor dead or sputtering, leaves the other pushing off to one side.
 
 	// Along the prop shafts: steering swings them (right pushes the stern left, turning the bow right), and trim
 	// tilts them (out pushes down on the stern, lifting the bow; in pushes it up, holding the bow down).
 	const FVector ThrustDir = HullBody->GetComponentQuat() * GetOutboardRotation().RotateVector(FVector::ForwardVector);
 	float WetProps = 0.f;
-	for (const USceneComponent* Prop : { Propeller.Get(), PropellerStarboard.Get() })
+	for (int32 Motor = 0; Motor < 2; ++Motor)
 	{
+		const USceneComponent* Prop = Motor == 1 ? PropellerStarboard.Get() : Propeller.Get();
+		const float Output = GetMotorOutput(Motor);
 		if (IsPropSubmerged(Prop))
 		{
+			const float ThrustN = 0.5f * MaxThrust * Output * (Output > 0.f ? 1.f : ReverseThrustScale);
 			HullBody->AddForceAtLocation(ThrustDir * ThrustN * NewtonsToUnreal, Prop->GetComponentLocation());
 			WetProps += 0.5f;
 		}
@@ -1709,12 +1733,38 @@ float ARiptideBoat::GetSpeedKnots() const
 	return HullBody->GetComponentVelocity().Size() * CmPerSecToKnots;
 }
 
-void ARiptideBoat::ApplyEngineDamage(float Amount)
+void ARiptideBoat::ApplyEngineDamage(float Amount, int32 Motor)
 {
-	if (HasAuthority())
+	if (!HasAuthority())
 	{
-		EngineHealth = FMath::Clamp(EngineHealth - Amount, 0.f, 1.f);
+		return;
 	}
+	if (Motor != 1)
+	{
+		EngineHealthPort = FMath::Clamp(EngineHealthPort - Amount, 0.f, 1.f);
+	}
+	if (Motor != 0)
+	{
+		EngineHealthStarboard = FMath::Clamp(EngineHealthStarboard - Amount, 0.f, 1.f);
+	}
+}
+
+float ARiptideBoat::AddFuel(float Liters)
+{
+	if (!HasAuthority())
+	{
+		return 0.f;
+	}
+	const float Added = FMath::Clamp(Liters, 0.f, FuelCapacityLiters - FuelLiters);
+	FuelLiters += Added;
+	return Added;
+}
+
+FTransform ARiptideBoat::GetFuelFillerTransform() const
+{
+	// On the starboard gunwale, aft (riptide_boat_mesh.py's _fittings: station 0.2).
+	const FTransform& Xf = HullBody->GetComponentTransform();
+	return FTransform(Xf.GetRotation(), Xf.TransformPosition(FVector(-237.f, 127.f, DeckZ + 56.f)));
 }
 
 void ARiptideBoat::SetTrimInput(float Trim)
@@ -1754,7 +1804,7 @@ void ARiptideBoat::DrawDebugHud() const
 			GetSpeedKnots(), ThrottleLever * 100.f, EngineOutput * 100.f));
 	GEngine->AddOnScreenDebugMessage(KeyBase + 1, 0.f, FColor::White,
 		FString::Printf(TEXT("Motors %+.0f deg   Trim %+.0f deg (R/F)   Fuel %.1f L   Engine health %.0f%%"),
-			SteerAngleDeg, TrimDeg, FuelLiters, EngineHealth * 100.f));
+			SteerAngleDeg, TrimDeg, FuelLiters, GetEngineHealth() * 100.f));
 	const bool bPort = IsPropSubmerged(Propeller);
 	const bool bStarboard = IsPropSubmerged(PropellerStarboard);
 	GEngine->AddOnScreenDebugMessage(KeyBase + 2, 0.f, bPort && bStarboard ? FColor::Green : bPort || bStarboard ? FColor::Yellow : FColor::Red,
