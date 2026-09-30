@@ -1017,6 +1017,26 @@ FTransform ARiptideBoat::GetDeckSpotTransform(int32 Index) const
 	return FTransform(Xf.GetRotation(), Xf.TransformPosition(Spot));
 }
 
+FTransform ARiptideBoat::GetLadderFootTransform() const
+{
+	// The ladder hangs off the transom's port side (riptide_boat_mesh.py's _fittings), its foot in the water.
+	const FTransform& Xf = HullBody->GetComponentTransform();
+	return FTransform(Xf.GetRotation(), Xf.TransformPosition(FVector(-HullExtent.X - 6.f, -104.f, WaterlineZ - 15.f)));
+}
+
+FTransform ARiptideBoat::GetLadderTopTransform() const
+{
+	// The top of the ladder, where a climber comes over the transom and the stern box.
+	const FTransform& Xf = HullBody->GetComponentTransform();
+	return FTransform(Xf.GetRotation(), Xf.TransformPosition(FVector(-HullExtent.X + 10.f, -104.f, DeckZ + 70.f)));
+}
+
+FTransform ARiptideBoat::GetLadderLandingTransform() const
+{
+	const FTransform& Xf = HullBody->GetComponentTransform();
+	return FTransform(Xf.GetRotation(), Xf.TransformPosition(FVector(-310.f, -85.f, DeckZ)));
+}
+
 bool ARiptideBoat::TakeHelm(ARiptideCharacter* Crew)
 {
 	if (!HasAuthority() || !Crew || Helmsman)

@@ -446,10 +446,13 @@ def _fittings(m):
         y0, y1 = side * 75.0, side * 110.0
         m.box((STERN_X - 24.0, min(y0, y1), -28.0), (STERN_X, max(y0, y1), -26.5), "Frame")
         m.tube([(STERN_X - 1.0, side * 92.0, 5.0), (STERN_X - 16.0, side * 92.0, -26.0)], 2.0, "Trim", sides=8)
+    # The boarding ladder reaches into the water, so a swimmer can climb out (ARiptideBoat's ladder foot), with a
+    # grab handle over the top of the transom.
     for y in (-114.0, -94.0):
-        m.tube([(STERN_X - 3.0, y, 8.0), (STERN_X - 3.0, y, 70.0)], 1.2, "Frame", sides=8)
-    for z in (18.0, 34.0, 50.0, 66.0):
-        m.tube([(STERN_X - 3.0, -114.0, z), (STERN_X - 3.0, -94.0, z)], 1.0, "Frame", sides=6)
+        m.tube([(STERN_X - 4.0, y, -45.0), (STERN_X - 4.0, y, 72.0), (STERN_X + 2.0, y, 80.0), (STERN_X + 14.0, y, 80.0)],
+               1.2, "Frame", sides=8)
+    for z in (-38.0, -22.0, -6.0, 10.0, 26.0, 42.0, 58.0):
+        m.tube([(STERN_X - 4.0, -114.0, z), (STERN_X - 4.0, -94.0, z)], 1.0, "Frame", sides=6)
     # Bilge pump outlets on the hull sides, aft.
     for x in (-300.0, -200.0):
         st = station((x - STERN_X) / LENGTH)

@@ -13,12 +13,14 @@
 #include "InputModifiers.h"
 #include "Net/UnrealNetwork.h"
 #include "RiptideBoat.h"
+#include "RiptideCharacterMovement.h"
 #include "RiptideInventoryWidget.h"
 #include "RiptideStorageComponent.h"
 #include "Engine/GameViewportClient.h"
 #include "Widgets/SWeakWidget.h"
 
-ARiptideCharacter::ARiptideCharacter()
+ARiptideCharacter::ARiptideCharacter(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<URiptideCharacterMovement>(ACharacter::CharacterMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
 
@@ -122,6 +124,12 @@ void ARiptideCharacter::BuildInput()
 
 	WalkMapping->MapKey(JumpAction, EKeys::SpaceBar);
 	WalkMapping->MapKey(JumpAction, EKeys::Gamepad_FaceButton_Bottom);
+	// Swimming: Space (held) swims up, C or Ctrl dives.
+	DiveAction = NewObject<UInputAction>(this, TEXT("IA_Dive"));
+	DiveAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(DiveAction, EKeys::C);
+	WalkMapping->MapKey(DiveAction, EKeys::LeftControl);
+	WalkMapping->MapKey(DiveAction, EKeys::Gamepad_FaceButton_Right);
 	WalkMapping->MapKey(InteractAction, EKeys::E);
 	WalkMapping->MapKey(InteractAction, EKeys::Gamepad_FaceButton_Left);
 
@@ -161,6 +169,8 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 		Input->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnMove);
 		Input->BindAction(LookAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnLook);
 		Input->BindAction(JumpAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnJump);
+		Input->BindAction(JumpAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnSwimUp);
+		Input->BindAction(DiveAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnDive);
 		Input->BindAction(InteractAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInteract);
 		Input->BindAction(InventoryAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInventoryKey);
 	}
@@ -169,9 +179,10 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 void ARiptideCharacter::OnMove(const FInputActionValue& Value)
 {
 	const FVector2D Axis = Value.Get<FVector2D>();
-	const FRotator Yaw(0.f, GetControlRotation().Yaw, 0.f);
-	AddMovementInput(FRotationMatrix(Yaw).GetUnitAxis(EAxis::X), Axis.Y);
-	AddMovementInput(FRotationMatrix(Yaw).GetUnitAxis(EAxis::Y), Axis.X);
+	// Swimming goes where you look (down to dive, up to surface); walking stays level.
+	const FRotator Facing = IsInSea() ? GetControlRotation() : FRotator(0.f, GetControlRotation().Yaw, 0.f);
+	AddMovementInput(FRotationMatrix(Facing).GetUnitAxis(EAxis::X), Axis.Y);
+	AddMovementInput(FRotationMatrix(Facing).GetUnitAxis(EAxis::Y), Axis.X);
 }
 
 void ARiptideCharacter::OnLook(const FInputActionValue& Value)
@@ -190,12 +201,126 @@ void ARiptideCharacter::OnLook(const FInputActionValue& Value)
 
 void ARiptideCharacter::OnJump(const FInputActionValue& Value)
 {
-	Jump();
+	if (!IsInSea())
+	{
+		Jump();
+	}
+}
+
+void ARiptideCharacter::OnSwimUp(const FInputActionValue& Value)
+{
+	if (IsInSea())
+	{
+		AddMovementInput(FVector::UpVector, 1.f);
+	}
+}
+
+void ARiptideCharacter::OnDive(const FInputActionValue& Value)
+{
+	if (IsInSea())
+	{
+		AddMovementInput(FVector::UpVector, -1.f);
+	}
+}
+
+// --- In the sea ---
+
+bool ARiptideCharacter::IsInSea() const
+{
+	const URiptideCharacterMovement* Move = Cast<URiptideCharacterMovement>(GetCharacterMovement());
+	return Move && Move->IsSeaSwimming();
+}
+
+bool ARiptideCharacter::IsAtLadder() const
+{
+	return HomeBoat && !bClimbing && IsInSea()
+		&& FVector::Dist(GetActorLocation(), HomeBoat->GetLadderFootTransform().GetLocation()) <= LadderReach;
+}
+
+void ARiptideCharacter::OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode)
+{
+	Super::OnMovementModeChanged(PrevMovementMode, PreviousCustomMode);
+	if (HasAuthority() && IsInSea() && PrevMovementMode != MOVE_Custom)
+	{
+		++OverboardCount;
+		UE_LOG(LogTemp, Log, TEXT("Riptide: %s is in the sea at t=%.1f"), *GetName(), GetWorld()->GetTimeSeconds());
+	}
+}
+
+void ARiptideCharacter::TryClimbAboard()
+{
+	if (!IsAtLadder())
+	{
+		return;
+	}
+	StartClimb();
+	if (!HasAuthority())
+	{
+		ServerClimbAboard();
+	}
+}
+
+void ARiptideCharacter::ServerClimbAboard_Implementation()
+{
+	if (IsAtLadder())
+	{
+		StartClimb();
+	}
+}
+
+void ARiptideCharacter::StartClimb()
+{
+	bClimbing = true;
+	ClimbTime = 0.f;
+	ClimbStart = HomeBoat->GetActorTransform().InverseTransformPosition(GetActorLocation());
+	GetCharacterMovement()->StopMovementImmediately();
+	GetCharacterMovement()->DisableMovement();
+	SetActorEnableCollision(false);
+}
+
+void ARiptideCharacter::UpdateClimb(float DeltaSeconds)
+{
+	if (!bClimbing || !HomeBoat)
+	{
+		return;
+	}
+	// Onto the ladder, up it hand over hand, over the transom and down into the cockpit, following the boat as it moves.
+	ClimbTime += DeltaSeconds;
+	const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	const FTransform Boat = HomeBoat->GetActorTransform();
+	const FVector Foot = Boat.InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation()) + FVector(-18.f, 0.f, HalfHeight - 20.f);
+	const FVector Top = Boat.InverseTransformPosition(HomeBoat->GetLadderTopTransform().GetLocation()) + FVector(0.f, 0.f, HalfHeight);
+	const FVector UpLadder(Foot.X, Foot.Y, Top.Z);
+	const FVector Landing = Boat.InverseTransformPosition(HomeBoat->GetLadderLandingTransform().GetLocation()) + FVector(0.f, 0.f, HalfHeight + 4.f);
+	const float Legs[] = { 0.5f, 1.3f, 0.5f, 0.5f };
+	const FVector Points[] = { ClimbStart, Foot, UpLadder, Top, Landing };
+	constexpr int32 NumLegs = UE_ARRAY_COUNT(Legs);
+	float T = ClimbTime;
+	int32 Leg = 0;
+	while (Leg < NumLegs && T > Legs[Leg])
+	{
+		T -= Legs[Leg];
+		++Leg;
+	}
+	if (Leg >= NumLegs)
+	{
+		bClimbing = false;
+		SetActorLocation(Boat.TransformPosition(Landing), false, nullptr, ETeleportType::TeleportPhysics);
+		SetActorEnableCollision(true);
+		GetCharacterMovement()->SetMovementMode(MOVE_Falling);
+		return;
+	}
+	const float Alpha = FMath::SmoothStep(0.f, 1.f, T / Legs[Leg]);
+	SetActorLocation(Boat.TransformPosition(FMath::Lerp(Points[Leg], Points[Leg + 1], Alpha)), false, nullptr, ETeleportType::TeleportPhysics);
 }
 
 void ARiptideCharacter::OnInteract(const FInputActionValue& Value)
 {
-	if (IsAtHelm())
+	if (IsAtLadder())
+	{
+		TryClimbAboard();
+	}
+	else if (IsAtHelm())
 	{
 		TryTakeHelm();
 	}
@@ -408,7 +533,6 @@ void ARiptideCharacter::OnRep_ManningHelm()
 
 void ARiptideCharacter::OnRep_OverboardCount()
 {
-	OverboardMessageTimeLeft = 4.f;
 }
 
 // --- On deck ---
@@ -423,43 +547,14 @@ void ARiptideCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (HasAuthority() && !bManningHelm)
+	if (HasAuthority() || IsLocallyControlled())
 	{
-		CheckOverboard();
+		UpdateClimb(DeltaSeconds);
 	}
-	OverboardMessageTimeLeft -= DeltaSeconds;
 	if (IsLocallyControlled())
 	{
 		DrawHud();
 	}
-}
-
-void ARiptideCharacter::CheckOverboard()
-{
-	if (!HomeBoat || IsStandingOnBoat())
-	{
-		return;
-	}
-
-	// In the water: the feet well below the deck (the waterline is 20 cm under it), or drifted far from the boat.
-	// There's no swimming yet, so the character is hauled back aboard.
-	const FTransform Deck = HomeBoat->GetDeckSpotTransform(0);
-	const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, HalfHeight);
-	const float BelowDeck = FVector::DotProduct(Deck.GetLocation() - Feet, Deck.GetUnitAxis(EAxis::Z));
-	const bool bInWater = BelowDeck > OverboardDepth || FVector::Dist(Feet, Deck.GetLocation()) > 3000.f;
-	if (!bInWater)
-	{
-		return;
-	}
-
-	const FTransform Aft = HomeBoat->GetDeckSpotTransform(1);
-	GetCharacterMovement()->StopMovementImmediately();
-	SetActorLocation(Aft.GetLocation() + Aft.GetUnitAxis(EAxis::Z) * (HalfHeight + 2.f), false, nullptr, ETeleportType::TeleportPhysics);
-	GetCharacterMovement()->SetMovementMode(MOVE_Falling);
-	++OverboardCount;
-	OverboardMessageTimeLeft = 4.f;
-	UE_LOG(LogTemp, Log, TEXT("Riptide: %s went overboard at t=%.1f and was put back on deck"), *GetName(), GetWorld()->GetTimeSeconds());
 }
 
 void ARiptideCharacter::DrawHud() const
@@ -474,7 +569,15 @@ void ARiptideCharacter::DrawHud() const
 	{
 		return;
 	}
-	if (IsAtHelm())
+	if (IsAtLadder())
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Climb aboard"));
+	}
+	else if (IsInSea() && HomeBoat)
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Swimming: the boarding ladder is on the stern, port side.  Space up, C dive"));
+	}
+	else if (IsAtHelm())
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Take the helm"));
 	}
@@ -482,9 +585,5 @@ void ARiptideCharacter::DrawHud() const
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
 			FString::Printf(TEXT("E  Open the %s"), *HomeBoat->GetLockers()->GetStorage(Locker)->Title.ToString().ToLower()));
-	}
-	if (OverboardMessageTimeLeft > 0.f)
-	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 1, 0.f, FColor::Orange, TEXT("Man overboard! Swimming isn't in yet, so you're back on deck."));
 	}
 }

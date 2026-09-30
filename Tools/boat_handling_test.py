@@ -29,8 +29,13 @@ SCRIPT = [
     (66.0, 0.0, 0.0, "trim neutral"),    # full ahead at neutral trim
     (78.0, 0.0, 0.0, "trim out"),        # trims out to the stop (bow should ride higher)
     (92.0, 0.0, 0.0, "trim in"),         # trims in to the stop (bow should ride lower)
+    (106.0, -1.0, 0.0, "stop"),          # lever back through neutral into reverse to brake
+    (108.7, 0.0, 0.0, "astern"),
+    (111.0, 1.0, 0.0, "to neutral"),
+    (112.0, 0.0, 0.0, "drift"),          # then the crew member goes in the sea and climbs back aboard
 ]
-END_TIME = 106.0
+END_TIME = 124.0
+SWIM_IN_T, CLIMB_T, ABOARD_CHECK_T = 115.0, 117.0, 122.0
 # Points on the deck (cm, boat frame) checked against the sea surface every frame.
 DECK_POINTS = {"aft deck": (-300, 0, 20), "aft corner": (-320, 100, 20), "side deck": (0, 100, 20),
                "helm": (-110, 0, 20), "foredeck": (150, 0, 20), "bow": (300, 0, 29)}
@@ -112,8 +117,8 @@ def walk(world, boat, walker, t):
     half = walker.get_editor_property("capsule_component").get_scaled_capsule_half_height()
     feet = walker.get_actor_location() - unreal.Vector(0, 0, half)
     local = local_point(boat, feet)
-    if boat.get_helmsman() == walker:
-        pass  # driving: stands at the helm out of sight
+    if boat.get_helmsman() == walker or "in" in state.get("swim", {}):
+        pass  # driving (out of sight at the helm), or the swim test
     elif walker.is_standing_on_boat():
         w["on_deck"] += 1
         # Standing on the deck, the feet should glide with it. A jump of more than 10 cm in one frame is the
@@ -194,6 +199,41 @@ def storage_check(world, boat, walker, t):
     st["reach"] = walker.get_locker_in_reach()
     st["took"] = walker.take_from_locker(st["reach"]) if st["reach"] >= 0 else 0
     log("t=%5.1f by the forward locker: locker in reach %d, took %d stacks" % (t, st["reach"], st["took"]))
+
+
+def swim_check(world, boat, walker, t):
+    """Puts the crew member in the sea by the stern: they should swim, float with their head out, and climb the
+    boarding ladder back aboard."""
+    sw = state.setdefault("swim", {})
+    if t < SWIM_IN_T:
+        return
+    if "in" not in sw:
+        sw["overboard_before"] = walker.get_overboard_count()
+        # Just astern of the port trim tab, beside the ladder.
+        walker.set_actor_location(boat.get_actor_transform().transform_location(unreal.Vector(-465.0, -104.0, -40.0)), False, True)
+        sw["in"] = t
+        sw["head_out"] = sw["frames"] = 0
+        return
+    if t < CLIMB_T and t > SWIM_IN_T + 0.5:
+        sw["frames"] += 1
+        eye = walker.get_actor_location() + unreal.Vector(0, 0, 70)
+        if eye.z > boat.get_sea_surface_z(eye):
+            sw["head_out"] += 1
+        sw["swimming"] = sw.get("swimming", True) and walker.is_in_sea()
+        # Swim to the ladder, as a player would.
+        to_ladder = boat.get_ladder_foot_transform().translation - walker.get_actor_location()
+        to_ladder.z = 0.0
+        if to_ladder.length() > 60.0:
+            walker.add_movement_input(to_ladder.normal(), 1.0)
+    if t >= CLIMB_T and "climb" not in sw:
+        sw["at_ladder"] = walker.is_at_ladder()
+        walker.try_climb_aboard()
+        sw["climb"] = walker.is_climbing()
+        log("t=%5.1f in the sea: swimming %s, head out %d/%d frames, at the ladder %s, climbing %s (boat %.1f kn)"
+            % (t, sw.get("swimming"), sw["head_out"], sw["frames"], sw["at_ladder"], sw["climb"], boat.get_speed_knots()))
+    if t >= ABOARD_CHECK_T and "aboard" not in sw:
+        sw["aboard"] = walker.is_standing_on_boat()
+        log("t=%5.1f after the ladder: standing on the boat %s" % (t, sw["aboard"]))
 
 
 def in_phase(name):
@@ -298,7 +338,7 @@ def verdict():
                        w["laps"] >= 2 and w["laps_underway"] >= 1,
                        "%d laps, %d started underway" % (w["laps"], w["laps_underway"])))
         checks.append(("never stuck on the deck", not w["stuck"], "; ".join("t=%.0f %s->%s at %s" % x for x in w["stuck"])))
-        overboard = walker.get_overboard_count()
+        overboard = state.get("swim", {}).get("overboard_before", walker.get_overboard_count())
         checks.append(("never went overboard", overboard == 0, "%d times" % overboard))
         frac = w["on_deck"] / max(1, w["on_deck"] + w["off_deck"])
         checks.append(("keeps its footing (standing on the deck 95% of the time)", frac > 0.95,
@@ -310,6 +350,10 @@ def verdict():
         hops = w.get("hops", [])
         checks.append(("feet glide with the deck (never hop over 10 cm in a frame)", not hops,
                        "%d hops, first at x, y, dz, t = %s" % (len(hops), hops[:3]) if hops else ""))
+        sw = state.get("swim", {})
+        checks.append(("swims when in the sea, head above the water", bool(sw.get("swimming")) and sw.get("head_out", 0) > 0.8 * max(1, sw.get("frames", 0)),
+                       "head out %s of %s frames" % (sw.get("head_out"), sw.get("frames"))))
+        checks.append(("climbs the boarding ladder back aboard", bool(sw.get("at_ladder")) and bool(sw.get("climb")) and bool(sw.get("aboard")), ""))
         stc = state.get("storage", {})
         checks.append(("opens the forward locker from beside it and takes its gear", stc.get("reach") == 0 and stc.get("took", 0) >= 5,
                        "locker %s, %s stacks" % (stc.get("reach"), stc.get("took"))))
@@ -409,6 +453,7 @@ def _tick(_dt):
             walk(world, boat, state["walker"], t)
             helm_swap(world, boat, state["walker"], t)
             storage_check(world, boat, state["walker"], t)
+            swim_check(world, boat, state["walker"], t)
 
         # How often the prop and in-water readings flip, every frame: real ventilation comes and goes over a swell,
         # but a reading that flips back and forth every few frames is a glitch (the HUD and engine sound stutter).

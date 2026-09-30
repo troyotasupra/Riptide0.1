@@ -129,6 +129,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
 	URiptideStorageComponent* GetLockers() const { return Lockers; }
 
+	/** The foot of the boarding ladder on the transom (port side), at the waterline, and its top on the stern box. */
+	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
+	FTransform GetLadderFootTransform() const;
+
+	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
+	FTransform GetLadderTopTransform() const;
+
+	/** Where a climber steps down after coming over the transom: the cockpit deck, port side aft. */
+	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
+	FTransform GetLadderLandingTransform() const;
+
 	/** Whoever is driving, or null. */
 	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
 	ARiptideCharacter* GetHelmsman() const { return Helmsman; }

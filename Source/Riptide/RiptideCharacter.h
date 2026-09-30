@@ -26,7 +26,7 @@ class RIPTIDE_API ARiptideCharacter : public ACharacter
 	GENERATED_BODY()
 
 public:
-	ARiptideCharacter();
+	ARiptideCharacter(const FObjectInitializer& ObjectInitializer);
 
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
@@ -51,9 +51,23 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsStandingOnBoat() const;
 
-	/** How many times this character has gone overboard and been put back on deck. */
+	/** How many times this character has ended up in the sea. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	int32 GetOverboardCount() const { return OverboardCount; }
+
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsInSea() const;
+
+	/** True while swimming close enough to the home boat's boarding ladder to climb it. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsAtLadder() const;
+
+	/** Climbs the boarding ladder onto the boat, if swimming beside it. Called by the interact key; also for tests. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void TryClimbAboard();
+
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsClimbing() const { return bClimbing; }
 
 	/** What this crew member carries: pockets and a backpack. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
@@ -99,9 +113,11 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Crew")
 	float HelmReach = 110.f;
 
-	/** How far below the deck (cm) the feet can drop before the character counts as in the water. */
+	/** How close (cm) to the foot of the boarding ladder a swimmer has to be to climb it. */
 	UPROPERTY(EditAnywhere, Category = "Crew")
-	float OverboardDepth = 60.f;
+	float LadderReach = 160.f;
+
+	virtual void OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode = 0) override;
 
 	UPROPERTY(Replicated, VisibleInstanceOnly, Category = "Crew")
 	TObjectPtr<ARiptideBoat> HomeBoat;
@@ -114,7 +130,13 @@ private:
 	void OnLook(const FInputActionValue& Value);
 	void OnJump(const FInputActionValue& Value);
 	void OnInteract(const FInputActionValue& Value);
-	void CheckOverboard();
+	void OnSwimUp(const FInputActionValue& Value);
+	void OnDive(const FInputActionValue& Value);
+	void StartClimb();
+	void UpdateClimb(float DeltaSeconds);
+
+	UFUNCTION(Server, Reliable)
+	void ServerClimbAboard();
 	void DrawHud() const;
 
 	UFUNCTION(Server, Reliable)
@@ -155,6 +177,14 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> InventoryAction;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> DiveAction;
+
+	/** Climbing the ladder: time into the climb, and where it started on the boat. */
+	bool bClimbing = false;
+	float ClimbTime = 0.f;
+	FVector ClimbStart = FVector::ZeroVector;
+
 	TSharedPtr<SRiptideInventory> InventoryWidget;
 	TSharedPtr<class SWidget> InventoryWidgetContainer;
 
@@ -164,5 +194,4 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_OverboardCount)
 	int32 OverboardCount = 0;
 
-	float OverboardMessageTimeLeft = 0.f;
 };
