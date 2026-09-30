@@ -2,11 +2,11 @@
 
 No third-party model: the hull is lofted from cross-sections, the fittings are simple solids. Pure Python (no
 Unreal), so it runs anywhere. Coordinates are Unreal's: X forward, Y right (starboard), Z up, centimetres, with
-the origin at the centre of the boat's physics box (HullExtent 300 x 110 x 35 in ARiptideBoat), so the waterline
-sits at Z = -15.
+the origin at the centre of the boat's physics box (HullExtent 395 x 130 x 35 in ARiptideBoat), so the waterline
+sits at Z = -15. Full size for a 26 ft patrol boat: 7.9 m long, 2.6 m beam, with room to walk around the console.
 
     build_skiff()     -> Mesh   hull, collar, deck, console, leaning post, T-top, bow rail
-    build_outboard()  -> Mesh   the outboard, pivot at its steering axis (the model origin)
+    build_outboard()  -> Mesh   one outboard, pivot at its steering axis (the model origin); the boat carries two
     Mesh.write_obj(path)
 """
 
@@ -14,10 +14,10 @@ import math
 
 # --- Shape ------------------------------------------------------------------------------------------------------
 
-LENGTH = 600.0           # stern at X = -300, stem at X = +300
-HALF_BEAM = 110.0
-STERN_X = -300.0
-STATIONS = 48            # lengthwise resolution of the hull
+LENGTH = 790.0           # stern at X = -395, stem at X = +395
+HALF_BEAM = 130.0
+STERN_X = -395.0
+STATIONS = 60            # lengthwise resolution of the hull
 
 
 def smoothstep(a, b, x):
@@ -33,7 +33,7 @@ def station(t):
     else:
         u = (t - 0.35) / 0.65
         sheer_b = HALF_BEAM * max(0.0, math.cos(u * math.pi / 2)) ** 0.75
-    sheer_z = 35.0 + 50.0 * t ** 2.2                       # sheer sweeps up to a tall, proud bow
+    sheer_z = 60.0 + 45.0 * t ** 2.2                       # knee-high bulwarks aft, sweeping up to a proud bow
     keel_z = -42.0 + 30.0 * smoothstep(0.62, 1.0, t) ** 1.3 + 50.0 * smoothstep(0.93, 1.0, t)
     chine_b = sheer_b * (0.88 - 0.1 * smoothstep(0.6, 1.0, t))
     chine_z = -24.0 + 34.0 * smoothstep(0.55, 1.0, t)       # chine sweeps up into the bow
@@ -268,9 +268,10 @@ def _console(m):
 def _t_top(m):
     deck = 5.0
     top = 225.0
-    legs = [(-150.0, 52.0), (-150.0, -52.0), (20.0, 52.0), (20.0, -52.0)]
+    # Legs close in against the console and leaning post, leaving the side decks clear to walk.
+    legs = [(-150.0, 48.0), (-150.0, -48.0), (20.0, 48.0), (20.0, -48.0)]
     for x, y in legs:
-        m.tube([(x, y, deck), (x, y * 1.05, deck + 110.0), (x + (8.0 if x > 0 else -8.0), y * 1.15, top)], 3.5, "Frame")
+        m.tube([(x, y, deck), (x, y * 1.05, deck + 110.0), (x + (8.0 if x > 0 else -8.0), y * 1.25, top)], 3.5, "Frame")
     # Canopy frame and roof.
     ring = [(-158.0, 60.0, top), (28.0, 60.0, top), (28.0, -60.0, top), (-158.0, -60.0, top), (-158.0, 60.0, top)]
     m.tube(ring, 3.5, "Frame")

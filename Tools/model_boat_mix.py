@@ -43,6 +43,10 @@ SCENARIOS = {
 }
 
 
+TWIN_DETUNE = 1.012
+TWIN_GAIN = 0.5 ** 0.5
+
+
 def asset_volume(name):
     lufs, peak, target = LEVELS[name]
     return 10 ** (min(target - lufs, PEAK_CEILING_DBFS - peak) / 20)
@@ -84,7 +88,12 @@ def main(folder):
         ename, ev, ep = s["engine"]
         wv, wp = s["wash"]
         engine, engine_rate = engines[ename]
-        eng = looped(engine, engine_rate, ep, n, rate)
+        # Twin motors: each plays the layer at half power (-3 dB), the starboard one a touch sharper (as ARiptideBoat's
+        # StarboardEngineDetune) and started elsewhere in the loop, so the two never line up exactly.
+        port = looped(engine, engine_rate, ep, n, rate)
+        offset = len(engine) // 3
+        starboard = looped(engine[offset:] + engine[:offset], engine_rate, ep * TWIN_DETUNE, n, rate)
+        eng = [TWIN_GAIN * (a + b) for a, b in zip(port, starboard)]
         wsh = looped(wash, wash_rate, wp, n, rate)
         centre = [asset_volume(ename) * ev * a + asset_volume("hull_wash") * wv * b for a, b in zip(eng, wsh)]
         for at, strength in s["slaps"]:
