@@ -13,6 +13,10 @@ Every third-party asset in Riptide is CC0 (public domain). No attribution is req
 
 Apart from the engine excerpts, the files are unedited. Levels are set when the editor imports them (`Content/Python/init_unreal.py`).
 
+## Models
+
+The patrol skiff and outboard are our own, generated in code (`Content/Python/riptide_boat_mesh.py`).
+
 ## Engine content
 
 The ocean, the wake simulation and its boat force (`BP_FluidSim_01`, `M_Fluid_Sim_Force_Boat_Component`, `T_BoatForceFoam`), the churn's foam texture (`T_WaterFlow_01_Foam_Tiled`) and the placeholder shapes come with Unreal Engine (the Water plugin and engine basic shapes).

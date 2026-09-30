@@ -195,6 +195,12 @@ def _tick(_dt):
                 return
             state["boat"] = boats[0]
             log("boat found: %s" % state["boat"].get_name())
+            # RIPTIDE_TEST_HIDE="HullMesh,MotorMesh" hides those boat parts, for measuring what they cost to draw.
+            for name in filter(None, os.environ.get("RIPTIDE_TEST_HIDE", "").split(",")):
+                for comp in state["boat"].get_components_by_class(unreal.PrimitiveComponent):
+                    if comp.get_name() == name.strip():
+                        comp.set_visibility(False)
+                        log("hidden %s" % name.strip())
             if os.environ.get("RIPTIDE_TEST_CALM"):
                 # Flat water: shows how the hull trims on its own, without swell tilting it.
                 for ocean in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.WaterBodyOcean):
