@@ -41,8 +41,8 @@ AUDIO_LOG = bool(os.environ.get("RIPTIDE_TEST_AUDIO"))
 
 # Laps of the deck, as points on the boat (cm, X forward, Y starboard): from the helm down the port side past the
 # console, up to the bow, back down the starboard side, round the aft deck, and back to the helm.
-WALK_ROUTE = [(-85, 0), (-85, -85), (60, -85), (150, -40), (300, 0), (150, 40), (60, 85), (-85, 85), (-200, 85),
-              (-330, 70), (-330, -70), (-200, -85), (-85, -85), (-85, 0)]
+WALK_ROUTE = [(-100, 0), (-100, -85), (60, -85), (150, -40), (300, 0), (150, 40), (60, 85), (-85, 85), (-200, 85),
+              (-330, 70), (-330, -70), (-200, -85), (-100, -85), (-100, 0)]
 WALK_START, WALK_END = 6.0, 52.0          # walks laps from settling in until the turns end, finishing the last lap at the helm
 WALK_REACHED_CM = 35.0
 WALK_STUCK_S = 8.0                          # longest a single leg of the route may take
@@ -103,10 +103,18 @@ def walk(world, boat, walker, t):
         pass  # driving: stands at the helm out of sight
     elif walker.is_standing_on_boat():
         w["on_deck"] += 1
+        # Standing on the deck, the feet should glide with it. A jump of more than 10 cm in one frame is the
+        # character being shoved (it overlapped something), and shows as the view popping.
+        if w.get("prev_z") is not None and abs(local.z - w["prev_z"]) > 10.0:
+            w.setdefault("hops", []).append((round(local.x), round(local.y), round(local.z - w["prev_z"]), round(t, 1)))
+        w["prev_z"] = local.z
         w["lowest_on_deck"] = min(w["lowest_on_deck"], local.z)
-        w["highest_on_deck"] = max(w["highest_on_deck"], local.z)
+        if local.z > w["highest_on_deck"]:
+            w["highest_on_deck"] = local.z
+            w["highest_at"] = (round(local.x), round(local.y), round(t, 1))
     else:
         w["off_deck"] += 1
+        w["prev_z"] = None
     if t < WALK_START or (t >= WALK_END and w["leg"] == 1):
         return
 
@@ -237,8 +245,11 @@ def verdict():
         checks.append(("never went overboard", overboard == 0, "%d times" % overboard))
         frac = w["on_deck"] / max(1, w["on_deck"] + w["off_deck"])
         checks.append(("keeps its footing (standing on the deck 95% of the time)", frac > 0.95,
-                       "%.0f%%, feet %.0f..%.0f cm on the boat (deck is 5, foredeck up to 19)"
-                       % (frac * 100, w["lowest_on_deck"], w["highest_on_deck"])))
+                       "%.0f%%, feet %.0f..%.0f cm on the boat (deck is 5, foredeck up to 19), highest at x, y, t = %s"
+                       % (frac * 100, w["lowest_on_deck"], w["highest_on_deck"], w.get("highest_at"))))
+        hops = w.get("hops", [])
+        checks.append(("feet glide with the deck (never hop over 10 cm in a frame)", not hops,
+                       "%d hops, first at x, y, dz, t = %s" % (len(hops), hops[:3]) if hops else ""))
         checks.append(("takes the helm and drives", bool(h.get("at_helm")) and bool(h.get("took")), ""))
         checks.append(("leaves the helm and stands on the deck again", bool(h.get("left")) and bool(h.get("stood")), ""))
     else:

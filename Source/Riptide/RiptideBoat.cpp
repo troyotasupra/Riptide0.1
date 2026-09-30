@@ -58,7 +58,7 @@ namespace
 	// foredeck. Spots: the helm, behind the console; the aft deck; its two corners; the foredeck.
 	constexpr float DeckZ = 5.f;
 	const FVector DeckSpots[] = {
-		FVector(-85.f, 0.f, DeckZ),
+		FVector(-100.f, 0.f, DeckZ),
 		FVector(-270.f, 0.f, DeckZ),
 		FVector(-270.f, -70.f, DeckZ),
 		FVector(-270.f, 70.f, DeckZ),
@@ -142,10 +142,10 @@ ARiptideBoat::ARiptideBoat()
 	PropellerStarboard->SetupAttachment(HullBody);
 	PropellerStarboard->SetRelativeLocation(OutboardPivotStarboard + PropInOutboard);
 
-	// Standing at the helm, just behind the console, eyes about 1.7 m above the deck.
+	// Standing at the helm, an arm's length behind the wheel, eyes about 1.7 m above the deck.
 	HelmCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("HelmCamera"));
 	HelmCamera->SetupAttachment(HullBody);
-	HelmCamera->SetRelativeLocation(FVector(-85.f, 0.f, 175.f));
+	HelmCamera->SetRelativeLocation(FVector(-100.f, 0.f, 175.f));
 	HelmCamera->bUsePawnControlRotation = false;
 
 	// At the waterline, amidships.

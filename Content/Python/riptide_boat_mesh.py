@@ -249,20 +249,89 @@ def _hull(m):
 
 def _console(m):
     deck = 5.0
-    # Console: a box with a raked front, and a windscreen on top.
-    profile = [(-45.0, deck), (35.0, deck), (35.0, deck + 70.0), (5.0, deck + 112.0), (-45.0, deck + 112.0)]
+    top = deck + 112.0
+    # Console: raked front, flat top behind the windscreen, and a dash sloping down toward the helm.
+    profile = [(-45.0, deck), (35.0, deck), (35.0, deck + 70.0), (5.0, top), (-20.0, top), (-45.0, deck + 95.0)]
     m.prism(profile, -45.0, 45.0, "Console")
-    glass = [(5.0, deck + 112.0), (0.0, deck + 112.0), (-18.0, deck + 150.0), (-13.0, deck + 150.0)]
-    m.prism(glass, -42.0, 42.0, "Glass")
-    # Wheel and a dash panel.
-    m.box((-49.0, -30.0, deck + 95.0), (-45.0, 30.0, deck + 110.0), "Trim")
-    m.tube([(-52.0, 16.0 * math.cos(a), deck + 92.0 + 16.0 * math.sin(a)) for a in [2 * math.pi * i / 16 for i in range(17)]],
-           1.6, "Trim", sides=8)
-    m.tube([(-45.0, 0.0, deck + 92.0), (-52.0, 0.0, deck + 92.0)], 2.0, "Trim", sides=8)
+    _windscreen(m, top)
+    _dash_and_wheel(m, deck)
 
     # Leaning post behind the helm, with a padded bolster.
     m.box((-160.0, -40.0, deck), (-130.0, 40.0, deck + 70.0), "Console")
     m.box((-162.0, -42.0, deck + 70.0), (-128.0, 42.0, deck + 92.0), "Cushion")
+
+
+def _windscreen(m, base_z):
+    """Wraparound windscreen: a front pane that curves round into side wings, raked back, in an aluminium frame with a
+    grab rail along the top. Low enough to look over standing at the helm, like a centre console's."""
+    height = 38.0
+    front_lean, wing_lean = height * math.tan(math.radians(25.0)), height * math.tan(math.radians(8.0))
+    # Base outline on the console top (plan view), from the port wing round the front to the starboard wing.
+    corner_r, front_x, half = 13.0, 5.0, 45.0
+    cx, cy = front_x - corner_r, half - corner_r
+    port = [(-20.0, -half), (cx, -half)]
+    port += [(cx + corner_r * math.sin(a), -cy - corner_r * math.cos(a)) for a in [math.radians(15 * i) for i in range(1, 6)]]
+    port += [(front_x, -cy)]
+    base_xy = port + [(x, -y) for x, y in reversed(port)]
+
+    def inward(i):
+        # Horizontal normal pointing into the console at point i, from the outline's direction there.
+        a, b = base_xy[max(i - 1, 0)], base_xy[min(i + 1, len(base_xy) - 1)]
+        tx, ty = b[0] - a[0], b[1] - a[1]
+        l = math.hypot(tx, ty)
+        return (-ty / l, tx / l)   # the outline runs port -> front -> starboard, so this turns toward the centreline
+
+    base, top_row = [], []
+    for i, (x, y) in enumerate(base_xy):
+        nx, ny = inward(i)
+        lean = front_lean * nx * nx + wing_lean * ny * ny   # the front rakes well back; the wings stand nearly upright
+        base.append((x, y, base_z))
+        top_row.append((x + nx * lean, y + ny * lean, base_z + height))
+    m.grid([base, top_row], "Glass", outward_hint=lambda p: (-60.0, 0.0, p[2]))
+    # Frame: a grab rail along the top, posts at the wing ends and the front corners, and a trim strip along the base.
+    m.tube(top_row, 1.8, "Frame", sides=8)
+    for i in (0, 2 + 5 - 1, len(base) - 1 - (2 + 5 - 1), len(base) - 1):
+        m.tube([base[i], top_row[i]], 1.4, "Frame", sides=8)
+    m.tube(base, 1.2, "Trim", sides=6)
+
+
+def _dash_and_wheel(m, deck):
+    """Instrument panel on the dash slope, facing the helmsman, and the wheel on a tilted shaft below it."""
+    # The dash slope runs from (-45, deck + 95) up to (-20, deck + 112) in X/Z.
+    lo, hi = (-45.0, deck + 95.0), (-20.0, deck + 112.0)
+    sx, sz = hi[0] - lo[0], hi[1] - lo[1]
+    sl = math.hypot(sx, sz)
+    ux, uz = sx / sl, sz / sl          # up the slope
+    nx, nz = -uz, ux                   # out of the slope, toward the helm (back and up)
+
+    def on_slope(f, y, out=0.6):
+        return (lo[0] + sx * f + nx * out, y, lo[1] + sz * f + nz * out)
+    # Black panel across the dash, with a chart display in the middle and a gauge either side.
+    panel = [on_slope(0.08, -38.0), on_slope(0.08, 38.0), on_slope(0.92, 38.0), on_slope(0.92, -38.0)]
+    m._part(panel, [(0, 1, 2), (0, 2, 3)], "Trim", outward_hint=lambda p: (p[0] - 50.0 * nx, p[1], p[2] - 50.0 * nz))
+    screen = [on_slope(0.2, -13.0, 1.0), on_slope(0.2, 13.0, 1.0), on_slope(0.85, 13.0, 1.0), on_slope(0.85, -13.0, 1.0)]
+    m._part(screen, [(0, 1, 2), (0, 2, 3)], "Glass", outward_hint=lambda p: (p[0] - 50.0 * nx, p[1], p[2] - 50.0 * nz))
+    for gy in (-26.0, 26.0):
+        c = on_slope(0.5, gy, 1.2)
+        ring = [(c[0] + 5.5 * math.sin(a) * ux, c[1] + 5.5 * math.cos(a), c[2] + 5.5 * math.sin(a) * uz)
+                for a in [2 * math.pi * i / 16 for i in range(17)]]
+        m.tube(ring, 0.8, "Frame", sides=6)
+
+    # Wheel: tilted back toward the helmsman, on a shaft coming out of the console's rear face.
+    tilt = math.radians(35.0)
+    axis = (-math.cos(tilt), 0.0, math.sin(tilt))      # the wheel faces back and up
+    up = (math.sin(tilt), 0.0, math.cos(tilt))          # in the wheel's plane, pointing up
+    centre = (-57.0, 0.0, deck + 88.0)
+    hub_in = (centre[0] - axis[0] * 14.0, 0.0, centre[2] - axis[2] * 14.0)
+    m.tube([hub_in, centre], 2.2, "Trim", sides=8)
+    radius = 18.0
+
+    def rim(a, r=radius):
+        return (centre[0] + r * math.sin(a) * up[0], r * math.cos(a), centre[2] + r * math.sin(a) * up[2])
+    m.tube([rim(a) for a in [2 * math.pi * i / 24 for i in range(25)]], 1.7, "Trim", sides=8)
+    for k in range(3):
+        a = math.pi / 2 + 2 * math.pi * k / 3
+        m.tube([centre, rim(a, radius - 1.0)], 1.0, "Trim", sides=6)
 
 
 def _t_top(m):
