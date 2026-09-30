@@ -174,6 +174,7 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	if (UEnhancedInputComponent* Input = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		Input->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnMove);
+		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetLadderInput(0.f); });
 		Input->BindAction(LookAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnLook);
 		Input->BindAction(JumpAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnJump);
 		Input->BindAction(JumpAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnSwimUp);
@@ -192,6 +193,11 @@ void ARiptideCharacter::OnMove(const FInputActionValue& Value)
 		return;
 	}
 	const FVector2D Axis = Value.Get<FVector2D>();
+	if (IsClimbing())
+	{
+		SetLadderInput(Axis.Y);     // W up, S down, nothing held: hang on
+		return;
+	}
 	// Swimming goes where you look (down to dive, up to surface); walking stays level.
 	const FRotator Facing = IsInSea() ? GetControlRotation() : FRotator(0.f, GetControlRotation().Yaw, 0.f);
 	AddMovementInput(FRotationMatrix(Facing).GetUnitAxis(EAxis::X), Axis.Y);
@@ -214,7 +220,11 @@ void ARiptideCharacter::OnLook(const FInputActionValue& Value)
 
 void ARiptideCharacter::OnJump(const FInputActionValue& Value)
 {
-	if (!IsInSea())
+	if (bOnLadder)
+	{
+		LetGoOfLadder();
+	}
+	else if (!IsInSea() && !bClimbingOver)
 	{
 		Jump();
 	}
@@ -246,8 +256,248 @@ bool ARiptideCharacter::IsInSea() const
 
 bool ARiptideCharacter::IsAtLadder() const
 {
-	return HomeBoat && !bClimbing && IsInSea()
+	return HomeBoat && !IsClimbing() && IsInSea()
 		&& FVector::Dist(GetActorLocation(), HomeBoat->GetLadderFootTransform().GetLocation()) <= LadderReach;
+}
+
+namespace
+{
+	// The ladder in the boat's frame, from its foot (ARiptideBoat's GetLadderFootTransform): where a climber's body
+	// is (just aft of the rails, facing the transom), and how high their feet go, from hanging off the bottom rung
+	// with the head just out of the water to standing on a rung with the transom's top at the hips.
+	constexpr float LadderBodyAft = 24.f;
+	constexpr float LadderLowestFeet = -120.f;   // below the foot
+	constexpr float LadderHighestFeet = 40.f;    // above it
+	constexpr float LadderGrabRadius = 45.f;
+	constexpr float ClimbOverLeg = 0.45f;        // seconds for each of the two moves over the top
+}
+
+bool ARiptideCharacter::IsAtLadderGrab() const
+{
+	// Swum right into the ladder.
+	if (!HomeBoat || IsClimbing() || !IsInSea() || LadderRegrabBlock > 0.f)
+	{
+		return false;
+	}
+	const FTransform Boat = HomeBoat->GetActorTransform();
+	const FVector Foot = Boat.InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation());
+	const FVector Me = Boat.InverseTransformPosition(GetActorLocation());
+	return FVector2D::Distance(FVector2D(Me.X, Me.Y), FVector2D(Foot.X - LadderBodyAft, Foot.Y)) <= LadderGrabRadius
+		&& Me.Z > Foot.Z - 250.f && Me.Z < Foot.Z + 150.f;
+}
+
+void ARiptideCharacter::TryClimbAboard()
+{
+	if (!IsAtLadder())
+	{
+		return;
+	}
+	GrabLadder();
+	if (!HasAuthority())
+	{
+		ServerClimbAboard();
+	}
+}
+
+void ARiptideCharacter::ServerClimbAboard_Implementation()
+{
+	if (!IsClimbing() && IsAtLadder())
+	{
+		GrabLadder();
+	}
+}
+
+void ARiptideCharacter::GrabLadder()
+{
+	const FTransform Boat = HomeBoat->GetActorTransform();
+	const FVector Foot = Boat.InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation());
+	const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	bOnLadder = true;
+	bClimbingOver = false;
+	LadderInput = 0.f;
+	LadderFeetZ = FMath::Clamp(Boat.InverseTransformPosition(GetActorLocation()).Z - HalfHeight,
+		Foot.Z + LadderLowestFeet, Foot.Z + LadderHighestFeet);
+	GetCharacterMovement()->StopMovementImmediately();
+	GetCharacterMovement()->DisableMovement();
+	SetActorEnableCollision(false);
+}
+
+void ARiptideCharacter::SetLadderInput(float Axis)
+{
+	LadderInput = FMath::Clamp(Axis, -1.f, 1.f);
+	if (!HasAuthority() && IsLocallyControlled() && FMath::Abs(LadderInput - SentLadderInput) > 0.05f)
+	{
+		SentLadderInput = LadderInput;
+		ServerSetLadderInput(LadderInput);
+	}
+}
+
+void ARiptideCharacter::ServerSetLadderInput_Implementation(float Axis)
+{
+	LadderInput = FMath::Clamp(Axis, -1.f, 1.f);
+}
+
+void ARiptideCharacter::LetGoOfLadder()
+{
+	if (!bOnLadder)
+	{
+		return;
+	}
+	// Pushing off backwards, away from the motors and the ladder.
+	LeaveLadder(-HomeBoat->GetActorForwardVector() * 120.f);
+	LadderRegrabBlock = 1.5f;
+	if (!HasAuthority())
+	{
+		ServerLetGoOfLadder();
+	}
+}
+
+void ARiptideCharacter::ServerLetGoOfLadder_Implementation()
+{
+	LetGoOfLadder();
+}
+
+void ARiptideCharacter::LeaveLadder(const FVector& ExtraVelocity)
+{
+	bOnLadder = false;
+	bClimbingOver = false;
+	LadderInput = 0.f;
+	SetActorEnableCollision(true);
+	UCharacterMovementComponent* Move = GetCharacterMovement();
+	Move->SetMovementMode(MOVE_Falling);
+	Move->Velocity = (HomeBoat ? HomeBoat->GetDeckPointVelocity(GetActorLocation()) : FVector::ZeroVector) + ExtraVelocity;
+}
+
+void ARiptideCharacter::StartClimbOver()
+{
+	bOnLadder = false;
+	bClimbingOver = true;
+	ClimbOverTime = 0.f;
+	ClimbOverStart = HomeBoat->GetActorTransform().InverseTransformPosition(GetActorLocation());
+}
+
+void ARiptideCharacter::UpdateLadder(float DeltaSeconds)
+{
+	LadderRegrabBlock = FMath::Max(0.f, LadderRegrabBlock - DeltaSeconds);
+	if (!HomeBoat)
+	{
+		return;
+	}
+	if (IsAtLadderGrab())
+	{
+		GrabLadder();
+		if (!HasAuthority())
+		{
+			ServerClimbAboard();
+		}
+	}
+	const FTransform Boat = HomeBoat->GetActorTransform();
+	const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	const FVector Foot = Boat.InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation());
+	if (bOnLadder)
+	{
+		// Hand over hand while W or S is held; holding on where you are when neither is.
+		const float Low = Foot.Z + LadderLowestFeet;
+		const float High = Foot.Z + LadderHighestFeet;
+		LadderFeetZ += LadderInput * LadderClimbSpeed * DeltaSeconds;
+		if (LadderInput > 0.1f && LadderFeetZ >= High)
+		{
+			LadderFeetZ = High;
+			StartClimbOver();
+		}
+		else if (LadderInput < -0.1f && LadderFeetZ <= Low)
+		{
+			LadderFeetZ = Low;
+			SetActorLocation(Boat.TransformPosition(FVector(Foot.X - LadderBodyAft, Foot.Y, LadderFeetZ + HalfHeight)), false, nullptr,
+				ETeleportType::TeleportPhysics);
+			LeaveLadder(FVector::ZeroVector);      // climbed off the bottom, back to swimming
+			LadderRegrabBlock = 1.5f;
+			return;
+		}
+		LadderFeetZ = FMath::Clamp(LadderFeetZ, Low, High);
+		SetActorLocation(Boat.TransformPosition(FVector(Foot.X - LadderBodyAft, Foot.Y, LadderFeetZ + HalfHeight)), false, nullptr,
+			ETeleportType::TeleportPhysics);
+	}
+	if (bClimbingOver)
+	{
+		// A leg over the transom onto the stern box, and down into the cockpit.
+		ClimbOverTime += DeltaSeconds;
+		const FVector Top = Boat.InverseTransformPosition(HomeBoat->GetLadderTopTransform().GetLocation()) + FVector(0.f, 0.f, HalfHeight);
+		const FVector Landing = Boat.InverseTransformPosition(HomeBoat->GetLadderLandingTransform().GetLocation()) + FVector(0.f, 0.f, HalfHeight + 4.f);
+		FVector Where;
+		if (ClimbOverTime < ClimbOverLeg)
+		{
+			Where = FMath::Lerp(ClimbOverStart, Top, FMath::SmoothStep(0.f, 1.f, ClimbOverTime / ClimbOverLeg));
+		}
+		else
+		{
+			Where = FMath::Lerp(Top, Landing, FMath::SmoothStep(0.f, 1.f, FMath::Min(1.f, (ClimbOverTime - ClimbOverLeg) / ClimbOverLeg)));
+		}
+		SetActorLocation(Boat.TransformPosition(Where), false, nullptr, ETeleportType::TeleportPhysics);
+		if (ClimbOverTime >= 2.f * ClimbOverLeg)
+		{
+			LeaveLadder(FVector::ZeroVector);      // aboard, moving with the deck
+		}
+	}
+}
+
+// --- The radio mic ---
+
+bool ARiptideCharacter::IsLookingAt(const FVector& World, float Reach, float Radius) const
+{
+	const FVector Eye = FirstPersonCamera->GetComponentLocation();
+	const FVector View = GetControlRotation().Vector();
+	const FVector To = World - Eye;
+	const float Along = FVector::DotProduct(To, View);
+	return Along > 0.f && Along <= Reach && (To - View * Along).Size() <= Radius;
+}
+
+bool ARiptideCharacter::IsHoldingMic() const
+{
+	return HomeBoat && HomeBoat->GetMicHolder() == this;
+}
+
+bool ARiptideCharacter::CanGrabMic() const
+{
+	return HomeBoat && !HomeBoat->GetMicHolder() && !bManningHelm && !IsInSea() && !IsClimbing()
+		&& IsLookingAt(HomeBoat->GetMicHookLocation() - FVector(0.f, 0.f, 6.f), MicReach, 14.f);
+}
+
+void ARiptideCharacter::TryToggleMic()
+{
+	const bool bTake = !IsHoldingMic();
+	if (bTake && !CanGrabMic())
+	{
+		return;
+	}
+	if (HasAuthority())
+	{
+		ServerToggleMic_Implementation(bTake);
+	}
+	else
+	{
+		ServerToggleMic(bTake);
+	}
+}
+
+void ARiptideCharacter::ServerToggleMic_Implementation(bool bTake)
+{
+	if (!HomeBoat)
+	{
+		return;
+	}
+	if (bTake)
+	{
+		// Checked here too, by distance (the server doesn't know exactly where the client was looking).
+		if (!HomeBoat->GetMicHolder() && FVector::Dist(FirstPersonCamera->GetComponentLocation(), HomeBoat->GetMicHookLocation()) <= MicReach + 30.f)
+		{
+			HomeBoat->GrabMic(this);
+		}
+	}
+	else if (IsHoldingMic())
+	{
+		HomeBoat->HangUpMic();
+	}
 }
 
 void ARiptideCharacter::OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode)
@@ -260,78 +510,15 @@ void ARiptideCharacter::OnMovementModeChanged(EMovementMode PrevMovementMode, ui
 	}
 }
 
-void ARiptideCharacter::TryClimbAboard()
-{
-	if (!IsAtLadder())
-	{
-		return;
-	}
-	StartClimb();
-	if (!HasAuthority())
-	{
-		ServerClimbAboard();
-	}
-}
-
-void ARiptideCharacter::ServerClimbAboard_Implementation()
-{
-	if (IsAtLadder())
-	{
-		StartClimb();
-	}
-}
-
-void ARiptideCharacter::StartClimb()
-{
-	bClimbing = true;
-	ClimbTime = 0.f;
-	ClimbStart = HomeBoat->GetActorTransform().InverseTransformPosition(GetActorLocation());
-	GetCharacterMovement()->StopMovementImmediately();
-	GetCharacterMovement()->DisableMovement();
-	SetActorEnableCollision(false);
-}
-
-void ARiptideCharacter::UpdateClimb(float DeltaSeconds)
-{
-	if (!bClimbing || !HomeBoat)
-	{
-		return;
-	}
-	// Onto the ladder, up it hand over hand, over the transom and down into the cockpit, following the boat as it moves.
-	ClimbTime += DeltaSeconds;
-	const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	const FTransform Boat = HomeBoat->GetActorTransform();
-	const FVector Foot = Boat.InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation()) + FVector(-18.f, 0.f, HalfHeight - 20.f);
-	const FVector Top = Boat.InverseTransformPosition(HomeBoat->GetLadderTopTransform().GetLocation()) + FVector(0.f, 0.f, HalfHeight);
-	const FVector UpLadder(Foot.X, Foot.Y, Top.Z);
-	const FVector Landing = Boat.InverseTransformPosition(HomeBoat->GetLadderLandingTransform().GetLocation()) + FVector(0.f, 0.f, HalfHeight + 4.f);
-	const float Legs[] = { 0.5f, 1.3f, 0.5f, 0.5f };
-	const FVector Points[] = { ClimbStart, Foot, UpLadder, Top, Landing };
-	constexpr int32 NumLegs = UE_ARRAY_COUNT(Legs);
-	float T = ClimbTime;
-	int32 Leg = 0;
-	while (Leg < NumLegs && T > Legs[Leg])
-	{
-		T -= Legs[Leg];
-		++Leg;
-	}
-	if (Leg >= NumLegs)
-	{
-		bClimbing = false;
-		SetActorLocation(Boat.TransformPosition(Landing), false, nullptr, ETeleportType::TeleportPhysics);
-		SetActorEnableCollision(true);
-		GetCharacterMovement()->SetMovementMode(MOVE_Falling);
-		return;
-	}
-	const float Alpha = FMath::SmoothStep(0.f, 1.f, T / Legs[Leg]);
-	SetActorLocation(Boat.TransformPosition(FMath::Lerp(Points[Leg], Points[Leg + 1], Alpha)), false, nullptr, ETeleportType::TeleportPhysics);
-}
-
 void ARiptideCharacter::OnInteract(const FInputActionValue& Value)
 {
 	if (IsAtLadder())
 	{
 		TryClimbAboard();
+	}
+	else if (CanGrabMic() || (IsHoldingMic() && HomeBoat && IsLookingAt(HomeBoat->GetMicHookLocation(), MicReach + 60.f, 25.f)))
+	{
+		TryToggleMic();          // take the mic off its clip, or hang it back on it
 	}
 	else if (IsAtHelm())
 	{
@@ -582,7 +769,7 @@ void ARiptideCharacter::SetManningHelm(bool bManning)
 	else
 	{
 		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		SetActorLocation(Stand.GetLocation() + FVector(0.f, 0.f, HalfHeight + 2.f), false, nullptr, ETeleportType::TeleportPhysics);
+		SetActorLocation(Stand.GetLocation() + Stand.GetUnitAxis(EAxis::Z) * (HalfHeight + 4.f), false, nullptr, ETeleportType::TeleportPhysics);
 		ApplyManningHelm();
 	}
 }
@@ -597,7 +784,11 @@ void ARiptideCharacter::ApplyManningHelm()
 	}
 	else
 	{
-		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+		// Stepping off moving with the deck: dropped standing still while the boat runs at speed, the deck would
+		// sweep on under the feet and the body would end up in it.
+		UCharacterMovementComponent* Move = GetCharacterMovement();
+		Move->SetMovementMode(MOVE_Falling);
+		Move->Velocity = HomeBoat ? HomeBoat->GetDeckPointVelocity(GetActorLocation()) : FVector::ZeroVector;
 	}
 }
 
@@ -698,7 +889,7 @@ void ARiptideCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (!bManningHelm && !bClimbing && !IsInSea())
+	if (!bManningHelm && !IsClimbing() && !IsInSea())
 	{
 		UpdateBalance(DeltaSeconds);
 	}
@@ -710,7 +901,7 @@ void ARiptideCharacter::Tick(float DeltaSeconds)
 
 	if (HasAuthority() || IsLocallyControlled())
 	{
-		UpdateClimb(DeltaSeconds);
+		UpdateLadder(DeltaSeconds);
 	}
 	if (IsLocallyControlled())
 	{
@@ -730,9 +921,19 @@ void ARiptideCharacter::DrawHud() const
 	{
 		return;
 	}
-	if (IsAtLadder())
+	if (bOnLadder && HomeBoat)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Climb aboard"));
+		const float Top = HomeBoat->GetActorTransform().InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation()).Z + LadderHighestFeet;
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, LadderFeetZ >= Top - 1.f
+			? TEXT("On the ladder:  W  Climb aboard    S  Climb down    Space  Let go")
+			: TEXT("On the ladder:  W  Climb    S  Climb down    Space  Let go"));
+	}
+	else if (bClimbingOver)
+	{
+	}
+	else if (IsAtLadder())
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Swim into the ladder to take hold of it"));
 	}
 	else if (IsKnockedDown())
 	{
@@ -742,9 +943,18 @@ void ARiptideCharacter::DrawHud() const
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Swimming: the boarding ladder is on the stern, port side.  Space up, C dive"));
 	}
+	else if (CanGrabMic())
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Take the radio mic"));
+	}
+	else if (IsHoldingMic() && HomeBoat && IsLookingAt(HomeBoat->GetMicHookLocation(), MicReach + 60.f, 25.f))
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Hang up the mic"));
+	}
 	else if (IsAtHelm())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Take the helm"));
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+			IsHoldingMic() ? TEXT("E  Take the helm    (holding the radio mic: look at its clip and press E to hang it up)") : TEXT("E  Take the helm"));
 	}
 	else if (HomeBoat && IsStandingOnBoat() && HomeBoat->GetSpeedKnots() > 12.f)
 	{

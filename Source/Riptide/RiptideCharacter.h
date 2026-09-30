@@ -58,16 +58,53 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsInSea() const;
 
-	/** True while swimming close enough to the home boat's boarding ladder to climb it. */
+	// The boarding ladder: swim into it and you take hold. W climbs, S climbs down, and letting go of both keeps you
+	// hanging where you are (to look over the transom before committing). At the top W takes you over onto the
+	// boat; at the bottom S, or Space anywhere, lets go into the sea.
+
+	/** True while swimming near the boarding ladder. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsAtLadder() const;
 
-	/** Climbs the boarding ladder onto the boat, if swimming beside it. Called by the interact key; also for tests. */
+	/** Takes hold of the ladder if swimming at it (swimming into it does the same). For tests and AI. */
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void TryClimbAboard();
 
+	/** On the ladder: holding on, climbing, or going over the top onto the boat. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
-	bool IsClimbing() const { return bClimbing; }
+	bool IsClimbing() const { return bOnLadder || bClimbingOver; }
+
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsOnLadder() const { return bOnLadder; }
+
+	/** How high the feet are on the ladder, in the boat's frame (cm). */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	float GetLadderFeetZ() const { return LadderFeetZ; }
+
+	/** Climbs as if W (1) or S (-1) were held; 0 hangs on. For tests and AI. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetLadderInput(float Axis);
+
+	/** Lets go of the ladder, into the sea. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void LetGoOfLadder();
+
+	/** Holding the boat radio's hand mic. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsHoldingMic() const;
+
+	/** Looking at the radio's hand mic on its clip, close enough to take it. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool CanGrabMic() const;
+
+	/** Takes the radio mic (if it can), or hangs it back up (if holding it). */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void TryToggleMic();
+
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsManningHelm() const { return bManningHelm; }
+
+	UCameraComponent* GetFirstPersonCamera() const { return FirstPersonCamera; }
 
 	/** Holding on to something solid (Shift near a handhold), or at the helm: slams and turns don't throw you. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
@@ -158,9 +195,17 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
 	float BracedWalkSpeed = 150.f;
 
-	/** How close (cm) to the foot of the boarding ladder a swimmer has to be to climb it. */
+	/** How close (cm) to the foot of the boarding ladder counts as at it (for the prompt). */
 	UPROPERTY(EditAnywhere, Category = "Crew")
 	float LadderReach = 160.f;
+
+	/** Climbing speed on the ladder (cm/s). */
+	UPROPERTY(EditAnywhere, Category = "Crew")
+	float LadderClimbSpeed = 60.f;
+
+	/** How close (cm) to the radio's hand mic you have to be to take it off its clip. */
+	UPROPERTY(EditAnywhere, Category = "Crew")
+	float MicReach = 140.f;
 
 	virtual void OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode = 0) override;
 
@@ -181,11 +226,27 @@ private:
 	UFUNCTION(Server, Reliable)
 	void ServerSetBracing(bool bHold);
 	void OnDive(const FInputActionValue& Value);
-	void StartClimb();
-	void UpdateClimb(float DeltaSeconds);
+	bool IsAtLadderGrab() const;
+	void GrabLadder();
+	void UpdateLadder(float DeltaSeconds);
+	void StartClimbOver();
+	/** Back on the boat's deck or in the sea: movement and collision on, moving with the deck. */
+	void LeaveLadder(const FVector& ExtraVelocity);
 
 	UFUNCTION(Server, Reliable)
 	void ServerClimbAboard();
+
+	UFUNCTION(Server, Unreliable)
+	void ServerSetLadderInput(float Axis);
+
+	UFUNCTION(Server, Reliable)
+	void ServerLetGoOfLadder();
+
+	UFUNCTION(Server, Reliable)
+	void ServerToggleMic(bool bTake);
+
+	/** True if the view is on World (within Radius cm of the line of sight) no further than Reach away. */
+	bool IsLookingAt(const FVector& World, float Reach, float Radius) const;
 	void DrawHud() const;
 
 	UFUNCTION(Server, Reliable)
@@ -255,10 +316,16 @@ private:
 	int32 KnockdownCount = 0;
 	FVector SmoothedDeckAccel = FVector::ZeroVector;
 
-	/** Climbing the ladder: time into the climb, and where it started on the boat. */
-	bool bClimbing = false;
-	float ClimbTime = 0.f;
-	FVector ClimbStart = FVector::ZeroVector;
+	/** On the ladder: the feet's height on it (boat frame), the climb input, and going over the top (time into it,
+	 * where it started on the boat). After letting go it can't be grabbed again for a moment. */
+	bool bOnLadder = false;
+	float LadderFeetZ = 0.f;
+	float LadderInput = 0.f;
+	float SentLadderInput = 0.f;
+	bool bClimbingOver = false;
+	float ClimbOverTime = 0.f;
+	FVector ClimbOverStart = FVector::ZeroVector;
+	float LadderRegrabBlock = 0.f;
 
 	TSharedPtr<SRiptideInventory> InventoryWidget;
 	TSharedPtr<class SWidget> InventoryWidgetContainer;

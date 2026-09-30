@@ -31,6 +31,7 @@
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
 #include "Net/UnrealNetwork.h"
+#include "ProceduralMeshComponent.h"
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
@@ -76,6 +77,21 @@ namespace
 
 	// The radar antenna's hub, on its pedestal on the T-top (riptide_boat_mesh.py's RADAR).
 	const FVector RadarHub(-70.f, 0.f, DeckZ + 258.f);
+
+	// The steering wheel's hub on the helm's shaft, its face tilted back toward the helmsman (WHEEL_CENTRE and
+	// WHEEL_TILT_DEG).
+	const FVector WheelCentre(-53.f, 0.f, DeckZ + 88.f);
+	constexpr float WheelTiltDeg = 35.f;
+
+	// The radio's hand mic: its clip under the overhead box, the cord's jack on the radio, and where the cord leaves
+	// the mic (MIC_HOOK, MIC_CORD_JACK, MIC_CORD_EXIT). The cord is coiled: this long hanging slack.
+	const FVector MicHook(-77.5f, 29.f, DeckZ + 199.f);
+	const FVector MicCordJack(-77.f, 20.5f, DeckZ + 202.5f);
+	const FVector MicCordExit(0.f, 0.f, -12.6f);
+	constexpr float MicCordRestLength = 32.f;
+	// In the hand: in front of the eyes, low and to the right, its grille toward the mouth.
+	const FVector MicInHand(24.f, 8.f, -3.f);
+	const FRotator MicInHandRotation(-12.f, -12.f, 0.f);
 
 	// The dash (riptide_boat_mesh.py's _dash_and_wheel): a slope from (-45, DeckZ + 95) up to (-20, DeckZ + 112),
 	// facing the helm. Returns a point Fraction of the way up it, Y across, Out off its face.
@@ -289,6 +305,30 @@ ARiptideBoat::ARiptideBoat()
 	PropellerStarboard->SetupAttachment(HullBody);
 	PropellerStarboard->SetRelativeLocation(OutboardPivotStarboard + PropInOutboard);
 
+	// The props, spinning on each motor's shaft, and the steering wheel.
+	PropMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PropMesh"));
+	PropMesh->SetupAttachment(MotorMesh);
+	PropMeshStarboard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PropMeshStarboard"));
+	PropMeshStarboard->SetupAttachment(MotorMeshStarboard);
+	WheelMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("WheelMesh"));
+	WheelMesh->SetupAttachment(HullBody);
+	WheelMesh->SetRelativeLocationAndRotation(WheelCentre, FRotator(WheelTiltDeg, 180.f, 0.f));
+	// The radio's hand mic on its clip, and its cord.
+	MicMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MicMesh"));
+	MicMesh->SetupAttachment(HullBody);
+	MicMesh->SetRelativeLocation(MicHook);
+	MicCord = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("MicCord"));
+	MicCord->SetupAttachment(HullBody);
+	MicCord->bUseAsyncCooking = true;
+	for (UPrimitiveComponent* Part : { (UPrimitiveComponent*)PropMesh.Get(), (UPrimitiveComponent*)PropMeshStarboard.Get(),
+			(UPrimitiveComponent*)WheelMesh.Get(), (UPrimitiveComponent*)MicMesh.Get(), (UPrimitiveComponent*)MicCord.Get() })
+	{
+		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	PropellerModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_Propeller.SM_Propeller")));
+	WheelModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_HelmWheel.SM_HelmWheel")));
+	MicModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_RadioMic.SM_RadioMic")));
+
 	// Standing at the helm, an arm's length behind the wheel, eyes about 1.7 m above the deck.
 	HelmCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("HelmCamera"));
 	HelmCamera->SetupAttachment(HullBody);
@@ -413,6 +453,21 @@ void ARiptideBoat::ApplyModels()
 		ThrottleLeverPort->SetStaticMesh(Lever);
 		ThrottleLeverStarboard->SetStaticMesh(Lever);
 	}
+	if (UStaticMesh* Prop = PropellerModel.LoadSynchronous())
+	{
+		PropMesh->SetStaticMesh(Prop);
+		PropMeshStarboard->SetStaticMesh(Prop);
+		PropMesh->SetRelativeLocation(PropInOutboard);
+		PropMeshStarboard->SetRelativeLocation(PropInOutboard);
+	}
+	if (UStaticMesh* Wheel = WheelModel.LoadSynchronous())
+	{
+		WheelMesh->SetStaticMesh(Wheel);
+	}
+	if (UStaticMesh* Mic = MicModel.LoadSynchronous())
+	{
+		MicMesh->SetStaticMesh(Mic);
+	}
 }
 
 void ARiptideBoat::BeginPlay()
@@ -497,6 +552,16 @@ void ARiptideBoat::StartWakeFoam()
 	SternFoamTrail = WakeFoam->AddTrail(Churn);
 
 	Spray->SetMaterial(0, SprayMaterial.LoadSynchronous());
+	// Spray never shows inside the boat: water that ends up inside the hull (a turn sliding the boat into its own
+	// spray, or a burst falling into the cockpit) is gone.
+	TWeakObjectPtr<ARiptideBoat> WeakThis(this);
+	Spray->IsInsideSolid = [WeakThis](const FVector& World) { return WeakThis.IsValid() && WeakThis->IsInsideHull(World); };
+
+	// The mic's cord, in the hand mic's own black.
+	const int32 Trim = HullMesh->GetMaterialIndex(TEXT("Trim"));
+	MicCord->SetMaterial(0, Trim != INDEX_NONE ? HullMesh->GetMaterial(Trim) : nullptr);
+	MicCord->SetCastShadow(false);
+	ApplyMicHolder();
 }
 
 void ARiptideBoat::UpdateWakeFoam(float DeltaSeconds)
@@ -555,7 +620,7 @@ void ARiptideBoat::SetUpLockers()
 	Stock(Anchor, TEXT("rope"), 20);
 }
 
-void ARiptideBoat::HullSection(float X, float& OutChineY, float& OutChineZ, float& OutKeelZ)
+void ARiptideBoat::HullSection(float X, float& OutChineY, float& OutChineZ, float& OutKeelZ, float* OutSheerY, float* OutSheerZ)
 {
 	// riptide_boat_mesh.py's station(): full beam aft, narrowing to the stem; a deep V whose keel and chines sweep
 	// up into the bow.
@@ -565,6 +630,62 @@ void ARiptideBoat::HullSection(float X, float& OutChineY, float& OutChineZ, floa
 	OutKeelZ = -42.f + 30.f * FMath::Pow(FMath::SmoothStep(0.62f, 1.f, T), 1.3f) + 50.f * FMath::SmoothStep(0.93f, 1.f, T);
 	OutChineY = SheerHalf * (0.88f - 0.1f * FMath::SmoothStep(0.6f, 1.f, T));
 	OutChineZ = FMath::Min(-24.f + 34.f * FMath::SmoothStep(0.55f, 1.f, T), SheerZ - 6.f);
+	// The keel runs up into the stem to meet the chines there, always below them.
+	OutKeelZ = FMath::Min(OutKeelZ, OutChineZ - 18.f * (1.f - FMath::SmoothStep(0.9f, 1.f, T)) - 0.5f);
+	if (OutSheerY)
+	{
+		*OutSheerY = SheerHalf;
+	}
+	if (OutSheerZ)
+	{
+		*OutSheerZ = SheerZ;
+	}
+}
+
+float ARiptideBoat::HullHalfWidthAt(float X, float Z)
+{
+	// The bottom's V from the keel out to the chine, then the topsides flaring out to the sheer.
+	float ChineY, ChineZ, KeelZ, SheerY, SheerZ;
+	HullSection(X, ChineY, ChineZ, KeelZ, &SheerY, &SheerZ);
+	if (Z <= KeelZ)
+	{
+		return 0.f;
+	}
+	if (Z <= ChineZ)
+	{
+		return ChineY * FMath::Pow(FMath::Clamp((Z - KeelZ) / FMath::Max(ChineZ - KeelZ, 1.f), 0.f, 1.f), 1.f / 0.9f);
+	}
+	const float Shelf = ChineY + (SheerY - ChineY) * 0.35f;
+	return FMath::Lerp(Shelf, SheerY, FMath::Clamp((Z - ChineZ) / FMath::Max(SheerZ - ChineZ, 1.f), 0.f, 1.f));
+}
+
+bool ARiptideBoat::IsInsideHull(const FVector& World) const
+{
+	const FVector Local = HullBody->GetComponentTransform().InverseTransformPosition(World);
+	if (FMath::Abs(Local.X) > HullExtent.X)
+	{
+		return false;
+	}
+	float ChineY, ChineZ, KeelZ, SheerY, SheerZ;
+	HullSection(Local.X, ChineY, ChineZ, KeelZ, &SheerY, &SheerZ);
+	if (Local.Z < KeelZ || Local.Z > SheerZ + 4.f)
+	{
+		return false;
+	}
+	// The fender collar stands 9 cm out round the top.
+	const float Collar = Local.Z > SheerZ - 16.f ? 9.f : 0.f;
+	return FMath::Abs(Local.Y) < HullHalfWidthAt(Local.X, FMath::Min(Local.Z, SheerZ)) + Collar;
+}
+
+FVector ARiptideBoat::SprayOriginAt(float X, float LocalSeaZ, float Side) const
+{
+	float ChineY, ChineZ, KeelZ, SheerY, SheerZ;
+	HullSection(X, ChineY, ChineZ, KeelZ, &SheerY, &SheerZ);
+	// At the sea's height on the hull there (on the V of the bottom, or up the topsides if the sea is over the
+	// chine), just outside the skin: never inside it, where the topsides flare out above the chine.
+	const float Z = FMath::Clamp(LocalSeaZ, KeelZ + 1.f, SheerZ - 16.f);
+	const float Y = HullHalfWidthAt(X, Z) + 7.f + (Z > SheerZ - 20.f ? 9.f : 0.f);
+	return HullBody->GetComponentTransform().TransformPosition(FVector(X, Side * Y, Z));
 }
 
 void ARiptideBoat::SampleChines(FChineSample (&Out)[2][ChineSamples]) const
@@ -585,19 +706,9 @@ void ARiptideBoat::SampleChines(FChineSample (&Out)[2][ChineSamples]) const
 			Sample.SeaZ = GetSeaSurfaceZ(Sample.Chine);
 			Sample.KeelDepth = Sample.SeaZ - Keel.Z;
 			Sample.ChineDepth = Sample.SeaZ - Sample.Chine.Z;
+			Sample.LocalSeaZ = Xf.InverseTransformPosition(FVector(Sample.Chine.X, Sample.Chine.Y, Sample.SeaZ)).Z;
 		}
 	}
-}
-
-/** Where water leaving the hull at a station starts from: its waterline on the V of the bottom, or on the topsides if
- * the sea is over the chine there. Just outside the skin. */
-static FVector SprayOrigin(const FVector& Keel, const FVector& Chine, float SeaZ, const FVector& Out)
-{
-	const float Up = Chine.Z - Keel.Z;
-	const float F = FMath::Abs(Up) > 1.f ? FMath::Clamp((SeaZ - Keel.Z) / Up, 0.f, 1.f) : 1.f;
-	FVector Origin = FMath::Lerp(Keel, Chine, F) + Out * 6.f;
-	Origin.Z = FMath::Max(Origin.Z, SeaZ);
-	return Origin;
 }
 
 void ARiptideBoat::SprayAtBow(float Strength)
@@ -627,7 +738,7 @@ void ARiptideBoat::SprayAtBow(float Strength)
 			{
 				continue;
 			}
-			const FVector Origin = SprayOrigin(At.Keel, At.Chine, At.SeaZ, Right * Side);
+			const FVector Origin = SprayOriginAt(At.X, At.LocalSeaZ, Side);
 			const float Fwd01 = FMath::Clamp((At.X + 60.f) / (HullExtent.X + 60.f), 0.f, 1.f);
 			const float Immersed = FMath::Clamp((At.ChineDepth + 25.f) / 40.f, 0.3f, 1.f);
 			// Mostly out, some up (more where the flare is steeper, forward), with only a little of the boat's way on.
@@ -728,7 +839,7 @@ void ARiptideBoat::UpdateSpray(float DeltaSeconds)
 			const FChineSample& SB = Samples[S][B];
 			const float SeaZ = FMath::Lerp(SA.SeaZ, SB.SeaZ, F);
 			const float ChineDepth = FMath::Lerp(SA.ChineDepth, SB.ChineDepth, F);
-			const FVector Origin = SprayOrigin(FMath::Lerp(SA.Keel, SB.Keel, F), FMath::Lerp(SA.Chine, SB.Chine, F), SeaZ, Right * Side);
+			const FVector Origin = SprayOriginAt(FMath::Lerp(SA.X, SB.X, F), FMath::Lerp(SA.LocalSeaZ, SB.LocalSeaZ, F), Side);
 			const FVector PointVelocity = GetDeckPointVelocity(Origin);
 			const float U = FMath::Max(0.f, FVector::DotProduct(PointVelocity, Fwd));
 			const float Angle = FMath::DegreesToRadians(FMath::FRandRange(15.f, 30.f));
@@ -742,7 +853,7 @@ void ARiptideBoat::UpdateSpray(float DeltaSeconds)
 		if (FMath::FRand() < DeltaSeconds * 10.f * Speed01 * Load)
 		{
 			const FChineSample& At = Samples[S][FMath::Min(Root + FMath::RandRange(0, 4), ChineSamples - 1)];
-			const FVector Origin = SprayOrigin(At.Keel, At.Chine, At.SeaZ, Right * Side) + Right * Side * 60.f + FVector::UpVector * 15.f;
+			const FVector Origin = SprayOriginAt(At.X, At.LocalSeaZ, Side) + Right * Side * 60.f + FVector::UpVector * 15.f;
 			Spray->ThrowSpray(Origin, HullVelocity * 0.25f + Right * Side * 220.f + FVector::UpVector * 60.f, 60.f, 1, 60.f, 200.f, 1.4f,
 				At.SeaZ, 0.07f, 0.f);
 		}
@@ -1026,6 +1137,7 @@ void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ARiptideBoat, ThrottleLever);
 	DOREPLIFETIME(ARiptideBoat, EngineOutput);
 	DOREPLIFETIME(ARiptideBoat, SteerAngleDeg);
+	DOREPLIFETIME(ARiptideBoat, MicHolder);
 	DOREPLIFETIME(ARiptideBoat, TrimDeg);
 	DOREPLIFETIME(ARiptideBoat, FuelLiters);
 	DOREPLIFETIME(ARiptideBoat, EngineHealthPort);
@@ -1105,6 +1217,9 @@ void ARiptideBoat::BuildInput()
 	DeckLightsAction = NewObject<UInputAction>(this, TEXT("IA_DeckLights"));
 	DeckLightsAction->ValueType = EInputActionValueType::Boolean;
 	HelmMapping->MapKey(DeckLightsAction, EKeys::K);
+	MicAction = NewObject<UInputAction>(this, TEXT("IA_Mic"));
+	MicAction->ValueType = EInputActionValueType::Boolean;
+	HelmMapping->MapKey(MicAction, EKeys::M);
 	HelmMapping->MapKey(DeckLightsAction, EKeys::Gamepad_DPad_Right);
 
 	// Gamepad: right trigger / left trigger for throttle, left stick to steer, right stick to look.
@@ -1131,6 +1246,7 @@ void ARiptideBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindActionValueLambda(SearchlightAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(0); });
 		Input->BindActionValueLambda(NavLightsAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(1); });
 		Input->BindActionValueLambda(DeckLightsAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(2); });
+		Input->BindActionValueLambda(MicAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleMic(); });
 		Input->BindAction(ThrottleAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnThrottle);
 		Input->BindAction(ThrottleAction, ETriggerEvent::Completed, this, &ARiptideBoat::OnThrottleReleased);
 		Input->BindAction(SteerAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnSteer);
@@ -1452,6 +1568,7 @@ bool ARiptideBoat::TakeHelm(ARiptideCharacter* Crew)
 	Helmsman = Crew;
 	Crew->SetManningHelm(true);
 	Driver->Possess(this);
+	ApplyMicHolder();
 	UE_LOG(LogRiptideBoat, Log, TEXT("%s took the helm of %s"), *Crew->GetName(), *GetName());
 	return true;
 }
@@ -1476,6 +1593,7 @@ void ARiptideBoat::LeaveHelm()
 		Driver->ClientSetRotation(FRotator(View.Pitch, View.Yaw, 0.f));
 		Driver->SetControlRotation(FRotator(View.Pitch, View.Yaw, 0.f));
 	}
+	ApplyMicHolder();
 	UE_LOG(LogRiptideBoat, Log, TEXT("%s left the helm of %s"), *Crew->GetName(), *GetName());
 }
 
@@ -1524,6 +1642,20 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 	UpdateSounds(DeltaSeconds);
 	UpdateWakeFoam(DeltaSeconds);
 	UpdateSpray(DeltaSeconds);
+	UpdatePropsAndWheel(DeltaSeconds);
+
+	// The mic's cord only reaches so far: walk off with the mic, or go over the side, and it's pulled from the hand
+	// back onto its clip.
+	if (HasAuthority() && MicHolder)
+	{
+		const bool bGone = !IsValid(MicHolder) || MicHolder->IsInSea() || MicHolder->GetHomeBoat() != this
+			|| FVector::Dist(GetMicLocation(), HullBody->GetComponentTransform().TransformPosition(MicCordJack)) > MicCordReach;
+		if (bGone)
+		{
+			HangUpMic();
+		}
+	}
+	UpdateMicCord();
 
 	// Carry the wake simulation's patch of water along with the boat, at sea level.
 	if (AActor* Sim = WakeSimulation.Get())
@@ -1902,7 +2034,8 @@ void ARiptideBoat::DrawDebugHud() const
 	const uint64 KeyBase = 0x52495054ull;
 	if (Helmsman)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, TEXT("E  Leave the helm      H  Tuning readout"));
+		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, MicHolder && MicHolder == Helmsman ? TEXT("E  Leave the helm      M  Hang up the mic      H  Tuning readout")
+			: TEXT("E  Leave the helm      M  Radio mic      H  Tuning readout"));
 	}
 	if (!bShowDebugHud)
 	{
@@ -1920,3 +2053,199 @@ void ARiptideBoat::DrawDebugHud() const
 		bPort && bStarboard ? TEXT("Props in water") : bPort || bStarboard ? TEXT("One prop out of water") : TEXT("Props out of water"));
 }
 
+// --- Props and wheel ---
+
+float ARiptideBoat::GetWheelAngleDeg() const
+{
+	return SteerAngleDeg * WheelTurnRatio;
+}
+
+void ARiptideBoat::UpdatePropsAndWheel(float DeltaSeconds)
+{
+	// Each prop turns with its motor while in gear: slowly at idle, fast at full throttle, backwards astern, and
+	// winding down when the motor's in neutral or stops. Drawn below the real speed (thousands of rpm), which a
+	// screen can't show without the blades seeming to stand still or turn backwards: never more than 40 degrees a
+	// frame, under half the gap between two of the three blades.
+	const ERiptideGear Gear = GetGear();
+	const float GearSign = Gear == ERiptideGear::Forward ? 1.f : Gear == ERiptideGear::Reverse ? -1.f : 0.f;
+	UStaticMeshComponent* Props[2] = { PropMesh, PropMeshStarboard };
+	for (int32 Motor = 0; Motor < 2; ++Motor)
+	{
+		const float Target = IsMotorRunning(Motor) ? GearSign * (3.f + 6.f * MotorRevs[Motor]) : 0.f;
+		PropSpinRate[Motor] = FMath::FInterpTo(PropSpinRate[Motor], Target, DeltaSeconds, 3.f);
+		const float MaxStep = 40.f;
+		const float Step = FMath::Clamp(PropSpinRate[Motor] * 360.f * DeltaSeconds, -MaxStep, MaxStep);
+		// Right-handed props: clockwise seen from astern when going ahead (and the starboard one counter-rotating,
+		// as twin installations do, so neither pulls the boat sideways).
+		PropAngle[Motor] = FMath::Fmod(PropAngle[Motor] + (Motor == 0 ? Step : -Step), 360.f);
+		Props[Motor]->SetRelativeRotation(FRotator(0.f, 0.f, PropAngle[Motor]));
+	}
+	// The wheel follows the motors (a hydraulic helm): turned right, the top of the wheel goes right.
+	WheelMesh->SetRelativeRotation(FRotator(WheelTiltDeg, 180.f, -GetWheelAngleDeg()));
+}
+
+// --- The radio's hand mic ---
+
+bool ARiptideBoat::GrabMic(ARiptideCharacter* Crew)
+{
+	if (!HasAuthority() || !Crew || (MicHolder && MicHolder != Crew))
+	{
+		return false;
+	}
+	MicHolder = Crew;
+	ApplyMicHolder();
+	return true;
+}
+
+void ARiptideBoat::HangUpMic()
+{
+	if (!HasAuthority() || !MicHolder)
+	{
+		return;
+	}
+	MicHolder = nullptr;
+	ApplyMicHolder();
+}
+
+void ARiptideBoat::ServerToggleMic_Implementation()
+{
+	if (!Helmsman)
+	{
+		return;
+	}
+	if (MicHolder == Helmsman)
+	{
+		HangUpMic();
+	}
+	else
+	{
+		GrabMic(Helmsman);
+	}
+}
+
+void ARiptideBoat::OnRep_MicHolder()
+{
+	ApplyMicHolder();
+}
+
+void ARiptideBoat::ApplyMicHolder()
+{
+	if (!MicMesh)
+	{
+		return;
+	}
+	USceneComponent* Hand = nullptr;
+	if (MicHolder)
+	{
+		// In front of the holder's eyes; the helmsman's eyes are the helm camera.
+		Hand = MicHolder == Helmsman ? static_cast<USceneComponent*>(HelmCamera) : MicHolder->GetFirstPersonCamera();
+	}
+	if (Hand)
+	{
+		MicMesh->AttachToComponent(Hand, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+		MicMesh->SetRelativeLocationAndRotation(MicInHand, MicInHandRotation);
+	}
+	else
+	{
+		MicMesh->AttachToComponent(HullBody, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+		MicMesh->SetRelativeLocationAndRotation(MicHook, FRotator::ZeroRotator);
+	}
+	bMicCordAtRest = false;
+}
+
+FVector ARiptideBoat::GetMicLocation() const
+{
+	return MicMesh->GetComponentLocation();
+}
+
+FVector ARiptideBoat::GetMicHookLocation() const
+{
+	return HullBody->GetComponentTransform().TransformPosition(MicHook);
+}
+
+/** A coiled cord from A to B (in one frame): a tight coil wound round a line that sags into a loop when the cord is
+ * slack and runs straight when it's stretched, the coils drawing out as it stretches. */
+static void BuildCoiledCord(const FVector& A, const FVector& B, float RestLength, float Reach, TArray<FVector>& Verts,
+	TArray<int32>& Tris, TArray<FVector>& Normals)
+{
+	const float Dist = FVector::Dist(A, B);
+	const float Slack = FMath::Max(0.f, RestLength - Dist);
+	const float Stretch = FMath::Clamp((Dist - RestLength) / FMath::Max(Reach - RestLength, 1.f), 0.f, 1.f);
+	// The slack hangs in a loop below the ends (a quadratic curve whose middle sags by about half the slack).
+	const FVector Mid = (A + B) * 0.5f - FVector::UpVector * (Slack * 0.9f + 3.f * (1.f - Stretch));
+	auto Line = [&](float T) { return FMath::Lerp(FMath::Lerp(A, Mid, T), FMath::Lerp(Mid, B, T), T); };
+
+	constexpr int32 Turns = 34;
+	constexpr int32 PerTurn = 8;
+	constexpr int32 Samples = Turns * PerTurn;
+	constexpr int32 Sides = 5;
+	const float CoilRadius = FMath::Lerp(0.95f, 0.45f, Stretch);
+	const float WireRadius = 0.3f;
+
+	TArray<FVector> Coil;
+	Coil.SetNum(Samples + 1);
+	FVector Ref = FVector::UpVector;
+	for (int32 i = 0; i <= Samples; ++i)
+	{
+		const float T = float(i) / Samples;
+		const FVector P = Line(T);
+		const FVector D = (Line(FMath::Min(1.f, T + 0.01f)) - Line(FMath::Max(0.f, T - 0.01f))).GetSafeNormal();
+		if (FMath::Abs(FVector::DotProduct(D, Ref)) > 0.95f)
+		{
+			Ref = FVector::ForwardVector;
+		}
+		const FVector U = FVector::CrossProduct(D, Ref).GetSafeNormal();
+		const FVector W = FVector::CrossProduct(D, U);
+		// Straight for the last centimetre or so at each end, where it plugs in.
+		const float EndTaper = FMath::SmoothStep(0.f, 0.04f, T) * FMath::SmoothStep(0.f, 0.04f, 1.f - T);
+		const float Phase = UE_TWO_PI * i / PerTurn;
+		Coil[i] = P + (U * FMath::Cos(Phase) + W * FMath::Sin(Phase)) * CoilRadius * EndTaper;
+	}
+	Verts.Reset();
+	Tris.Reset();
+	Normals.Reset();
+	for (int32 i = 0; i <= Samples; ++i)
+	{
+		const FVector D = (Coil[FMath::Min(i + 1, Samples)] - Coil[FMath::Max(i - 1, 0)]).GetSafeNormal();
+		const FVector Side = FMath::Abs(D.Z) < 0.9f ? FVector::UpVector : FVector::ForwardVector;
+		const FVector U = FVector::CrossProduct(D, Side).GetSafeNormal();
+		const FVector W = FVector::CrossProduct(D, U);
+		for (int32 k = 0; k < Sides; ++k)
+		{
+			const float Angle = UE_TWO_PI * k / Sides;
+			const FVector N = U * FMath::Cos(Angle) + W * FMath::Sin(Angle);
+			Verts.Add(Coil[i] + N * WireRadius);
+			Normals.Add(N);
+		}
+		if (i > 0)
+		{
+			const int32 Base = (i - 1) * Sides;
+			for (int32 k = 0; k < Sides; ++k)
+			{
+				const int32 A0 = Base + k, A1 = Base + (k + 1) % Sides, B0 = A0 + Sides, B1 = A1 + Sides;
+				Tris.Append({ A0, B0, A1, A1, B0, B1 });
+			}
+		}
+	}
+}
+
+void ARiptideBoat::UpdateMicCord()
+{
+	if (!FApp::CanEverRender() || !MicCord)
+	{
+		return;
+	}
+	// Hanging on its clip the cord doesn't move (it's in the boat's frame): drawn once. In a hand it's redrawn every
+	// frame between the radio and the mic.
+	if (!MicHolder && bMicCordAtRest)
+	{
+		return;
+	}
+	const FTransform& Boat = HullBody->GetComponentTransform();
+	const FVector Exit = Boat.InverseTransformPosition(MicMesh->GetComponentTransform().TransformPosition(MicCordExit));
+	TArray<FVector> Verts, Normals;
+	TArray<int32> Tris;
+	BuildCoiledCord(MicCordJack, Exit, MicCordRestLength, MicCordReach, Verts, Tris, Normals);
+	MicCord->CreateMeshSection(0, Verts, Tris, Normals, TArray<FVector2D>(), TArray<FColor>(), TArray<FProcMeshTangent>(), false);
+	bMicCordAtRest = !MicHolder;
+}

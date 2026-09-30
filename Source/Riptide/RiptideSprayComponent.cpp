@@ -58,9 +58,9 @@ void URiptideSprayComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 		C.Velocity.Z += Gravity * DeltaTime;
 		C.Velocity *= DragFactor;
 		C.Position += C.Velocity * DeltaTime;
-		// Gone once it has lived out its time, or fallen back into the sea.
+		// Gone once it has lived out its time, fallen back into the sea, or ended up inside the boat.
 		const bool bInSea = C.Velocity.Z < 0.f && C.Position.Z < C.SeaZ - 15.f;
-		if (C.Age >= C.Life || bInSea)
+		if (C.Age >= C.Life || bInSea || (IsInsideSolid && IsInsideSolid(C.Position)))
 		{
 			Clouds.RemoveAtSwap(i, 1, EAllowShrinking::No);
 		}

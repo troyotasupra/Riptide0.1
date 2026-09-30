@@ -10,6 +10,7 @@ class UAudioComponent;
 class UStaticMesh;
 class UMaterialInterface;
 class URiptideSprayComponent;
+class UProceduralMeshComponent;
 class URiptideStorageComponent;
 class UPointLightComponent;
 class USpotLightComponent;
@@ -205,6 +206,42 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Boat")
 	void SprayAtBow(float Strength);
 
+	/** True if a world point is inside the hull (below its gunwale, within its sides). */
+	bool IsInsideHull(const FVector& World) const;
+
+	// --- The radio ---
+	// The VHF in the overhead box has a hand mic on a coiled cord, hanging on a clip beside it. Anyone within the
+	// cord's reach can take it; walking out of reach pulls it from their hand, back onto its clip.
+
+	/** Whoever is holding the radio's hand mic, or null while it hangs on its clip. */
+	UFUNCTION(BlueprintPure, Category = "Boat|Radio")
+	ARiptideCharacter* GetMicHolder() const { return MicHolder; }
+
+	/** Takes the mic off its clip for a crew member in reach of it. Server only. False if someone else has it. */
+	bool GrabMic(ARiptideCharacter* Crew);
+
+	/** Hangs the mic back on its clip. Server only. */
+	void HangUpMic();
+
+	/** Where the mic is now (on its clip or in a hand), in the world. */
+	UFUNCTION(BlueprintPure, Category = "Boat|Radio")
+	FVector GetMicLocation() const;
+
+	/** Where the mic's clip is, in the world. */
+	UFUNCTION(BlueprintPure, Category = "Boat|Radio")
+	FVector GetMicHookLocation() const;
+
+	/** How far from the radio (cm) the mic can be carried before its cord pulls it back. */
+	float GetMicCordReach() const { return MicCordReach; }
+
+	/** The helm's wheel angle (degrees; turned right is positive), following the motors. */
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetWheelAngleDeg() const;
+
+	/** How fast each prop is turning (revolutions per second as drawn; negative is astern). */
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetPropSpinRate(int32 Motor) const { return Motor == 0 || Motor == 1 ? PropSpinRate[Motor] : 0.f; }
+
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UBoxComponent> HullBody;
@@ -341,6 +378,57 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UCameraComponent> HelmCamera;
+
+	/** The props themselves, spinning on each motor's shaft with the engine (the scene components above are where
+	 * the thrust pushes). */
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> PropMesh;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> PropMeshStarboard;
+
+	UPROPERTY(EditAnywhere, Category = "Boat")
+	TSoftObjectPtr<UStaticMesh> PropellerModel;
+
+	/** The steering wheel, which turns with the motors. */
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> WheelMesh;
+
+	UPROPERTY(EditAnywhere, Category = "Boat")
+	TSoftObjectPtr<UStaticMesh> WheelModel;
+
+	/** Degrees the wheel turns per degree the motors steer (a hydraulic helm: about three-quarters of a turn each
+	 * way to full lock). */
+	UPROPERTY(EditAnywhere, Category = "Boat")
+	float WheelTurnRatio = 9.f;
+
+	/** The radio's hand mic, and its coiled cord (drawn live between the radio and the mic). */
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Radio")
+	TObjectPtr<UStaticMeshComponent> MicMesh;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Radio")
+	TObjectPtr<UProceduralMeshComponent> MicCord;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Radio")
+	TSoftObjectPtr<UStaticMesh> MicModel;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Radio")
+	float MicCordReach = 190.f;
+
+	UPROPERTY(ReplicatedUsing = OnRep_MicHolder)
+	TObjectPtr<ARiptideCharacter> MicHolder;
+
+	UFUNCTION()
+	void OnRep_MicHolder();
+
+	/** Puts the mic mesh where MicHolder says: on its clip, or in the holder's hand. */
+	void ApplyMicHolder();
+	void UpdateMicCord();
+	bool bMicCordAtRest = false;
+
+	void UpdatePropsAndWheel(float DeltaSeconds);
+	float PropSpinRate[2] = { 0.f, 0.f };
+	float PropAngle[2] = { 0.f, 0.f };
 
 	// The wake is the Water plugin's fluid simulation (BP_FluidSim_01): a ripple solver on a patch of water that
 	// follows the player. The hull pushes it with Epic's boat force (a hull-shaped push plus foam), so the waves
@@ -699,7 +787,14 @@ private:
 
 	/** The hull's cross-section at X along it, in the boat's frame (riptide_boat_mesh.py's station): the chine's
 	 * half-width and height, and the keel's height (cm). */
-	static void HullSection(float X, float& OutChineY, float& OutChineZ, float& OutKeelZ);
+	static void HullSection(float X, float& OutChineY, float& OutChineZ, float& OutKeelZ, float* OutSheerY = nullptr,
+		float* OutSheerZ = nullptr);
+
+	/** Half the hull's width at X and height Z in the boat's frame (0 below the keel). */
+	static float HullHalfWidthAt(float X, float Z);
+
+	/** Where water leaving the hull at a sample starts from, just outside the skin at the sea's height there. */
+	FVector SprayOriginAt(float X, float LocalSeaZ, float Side) const;
 
 	/** Where each side's chine meets the sea this frame, sampled bow to stern: the spray comes off there. */
 	struct FChineSample
@@ -710,6 +805,7 @@ private:
 		float SeaZ = 0.f;
 		float KeelDepth = 0.f;                 // how far the keel there is under the sea (cm); <= 0 is clear of it
 		float ChineDepth = 0.f;                // the same for the chine
+		float LocalSeaZ = 0.f;                 // the sea's height at the chine, in the boat's frame
 	};
 	static constexpr int32 ChineSamples = 20;
 	void SampleChines(FChineSample (&Out)[2][ChineSamples]) const;
@@ -741,6 +837,13 @@ private:
 
 	UFUNCTION(Server, Reliable)
 	void ServerToggleLight(uint8 Which);
+
+	/** The helmsman takes the mic, or hangs it up (M at the helm). */
+	UFUNCTION(Server, Reliable)
+	void ServerToggleMic();
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> MicAction;
 
 	UFUNCTION(Server, Unreliable)
 	void ServerAimSearchlight(float YawDeg, float PitchDeg);
@@ -801,8 +904,12 @@ private:
 	/** How hard the engines (or one motor: 0 port, 1 starboard) are driving the props, 0 (idle or neutral) to 1. */
 	float GetDriveFraction(int32 Motor = -1) const;
 
-	UPROPERTY(Replicated, Transient)
+	UPROPERTY(ReplicatedUsing = OnRep_Helmsman, Transient)
 	TObjectPtr<ARiptideCharacter> Helmsman;
+
+	/** The mic moves between the helm camera and the character's own eyes as its holder takes or leaves the helm. */
+	UFUNCTION()
+	void OnRep_Helmsman() { ApplyMicHolder(); }
 
 	// Raw input from whoever is at the helm. On the server these come from ServerSetControls.
 	float ThrottleInput = 0.f;

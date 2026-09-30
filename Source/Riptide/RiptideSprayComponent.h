@@ -40,6 +40,9 @@ public:
 
 	int32 GetCloudCount() const { return Clouds.Num(); }
 
+	/** Spray that ends up somewhere this says is solid (inside the hull it flew off) disappears. */
+	TFunction<bool(const FVector&)> IsInsideSolid;
+
 private:
 	struct FCloud
 	{

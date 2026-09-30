@@ -38,7 +38,8 @@ SCRIPT = [
     (127.5, 0.0, 0.0, "one engine run"),
 ]
 END_TIME = 134.0
-SWIM_IN_T, CLIMB_T, ABOARD_CHECK_T = 115.0, 117.0, 122.0
+SWIM_IN_T, CLIMB_T, ABOARD_CHECK_T = 112.5, 116.0, 122.8
+HANG_START, HANG_END = 1.0, 2.0              # seconds into the climb: lets go of W and should hang there
 # Points on the deck (cm, boat frame) checked against the sea surface every frame.
 DECK_POINTS = {"aft deck": (-300, 0, 20), "aft corner": (-320, 100, 20), "side deck": (0, 100, 20),
                "helm": (-110, 0, 20), "foredeck": (150, 0, 20), "bow": (300, 0, 29)}
@@ -93,6 +94,7 @@ def sample(boat, t, phase):
         "kn": boat.get_speed_knots(), "lever": boat.get_throttle_lever(),
         "engine": boat.get_engine_output(), "prop": boat.is_propeller_submerged(),
         "fuel": boat.get_fuel_liters(), "trim": boat.get_trim_deg(),
+        "prop_spin": boat.get_prop_spin_rate(0), "wheel": boat.get_wheel_angle_deg(),
     }
     for comp in boat.get_components_by_class(unreal.StaticMeshComponent):
         if comp.get_name() == "MotorMesh":
@@ -190,10 +192,82 @@ def helm_swap(world, boat, walker, t):
     if t >= HELM_LEAVE_T and h.get("took") and "left" not in h:
         boat.leave_helm()
         h["left"] = pc.get_controlled_pawn() == walker and boat.get_helmsman() is None
-        log("t=%5.1f leave the helm: back on foot %s" % (t, h["left"]))
+        h["leave_kn"] = boat.get_speed_knots()
+        h["lowest_feet"] = 1e9
+        log("t=%5.1f leave the helm at %.1f kn: back on foot %s" % (t, h["leave_kn"], h["left"]))
+    if "left" in h and "stood" not in h:
+        # The feet never sink into the deck after stepping off, even with the boat under way.
+        feet = boat.get_actor_transform().inverse_transform_location(walker.get_actor_location()).z - 88.0
+        h["lowest_feet"] = min(h["lowest_feet"], feet)
     if "left" in h and "stood" not in h and t >= HELM_LEAVE_T + 1.5:
-        h["stood"] = walker.is_standing_on_boat()
-        log("t=%5.1f standing on the deck after leaving the helm: %s" % (t, h["stood"]))
+        h["stood"] = walker.is_standing_on_boat() and h["lowest_feet"] > 12.0
+        log("t=%5.1f standing on the deck after leaving the helm: %s (feet never below %.0f cm, deck at 20)" % (t, h["stood"], h["lowest_feet"]))
+
+
+def helm_at_speed(world, boat, walker, t):
+    """Takes the helm and steps off it again with the boat at full speed: the crew member should land on the deck
+    and stay on it, not sink into it or be left behind."""
+    hs = state.setdefault("helm_fast", {})
+    if t < 71.0 or "stood" in hs:
+        return
+    if "placed" not in hs:
+        stand = boat.get_helm_stand_transform().translation
+        walker.set_actor_location(stand + unreal.Vector(0, 0, 92.0), False, True)
+        hs["placed"] = t
+        return
+    if "took" not in hs and t >= 72.0:
+        walker.try_take_helm()
+        hs["took"] = boat.get_helmsman() == walker
+        return
+    if hs.get("took") and "left" not in hs and t >= 74.0:
+        boat.leave_helm()
+        hs["left"] = boat.get_helmsman() is None
+        hs["kn"] = boat.get_speed_knots()
+        hs["lowest"] = 1e9
+        hs["far"] = 0.0
+        return
+    if "left" in hs:
+        local = boat.get_actor_transform().inverse_transform_location(walker.get_actor_location())
+        hs["lowest"] = min(hs["lowest"], local.z - 88.0)
+        hs["far"] = max(hs["far"], math.hypot(local.x + 110.0, local.y))
+        if t >= 75.5:
+            hs["stood"] = walker.is_standing_on_boat() and hs["lowest"] > 12.0 and hs["far"] < 60.0
+            log("t=%5.1f stepped off the helm at %.1f kn: standing on the deck %s, feet never below %.0f cm (deck 20), "
+                "drifted at most %.0f cm from the helm spot" % (t, hs["kn"], walker.is_standing_on_boat(), hs["lowest"], hs["far"]))
+
+
+def mic_check(world, boat, walker, t):
+    """Stands at the helm looking at the radio mic and takes it; then walks off past the cord's reach, which should
+    pull it back onto its clip."""
+    mc = state.setdefault("mic", {})
+    if t < 62.6 or "pulled_back" in mc:
+        return
+    pc = unreal.GameplayStatics.get_player_controller(world, 0)
+    if "took" not in mc:
+        # Look straight at it (from where the eyes are this frame), then take it.
+        eye = walker.get_component_by_class(unreal.CameraComponent).get_world_location()
+        to = boat.get_mic_hook_location() - unreal.Vector(0, 0, 6) - eye
+        pc.set_control_rotation(unreal.Rotator(roll=0.0, pitch=math.degrees(math.atan2(to.z, math.hypot(to.x, to.y))),
+                                               yaw=math.degrees(math.atan2(to.y, to.x))))
+        mc["could"] = walker.can_grab_mic()
+        cam = walker.get_component_by_class(unreal.CameraComponent)
+        eye = cam.get_world_location()
+        view = pc.get_control_rotation().get_forward_vector()
+        to = boat.get_mic_hook_location() - unreal.Vector(0, 0, 6) - eye
+        along = to.dot(view)
+        log("  mic look: eye %s view %s to-mic %s, along %.0f cm, off the line of sight %.1f cm, holder %s, manning %s" % (
+            eye, view, to, along, (to - view * along).length(), boat.get_mic_holder(), walker.is_manning_helm()))
+        walker.try_toggle_mic()
+        mc["took"] = walker.is_holding_mic() and boat.get_mic_holder() == walker
+        log("t=%5.1f at the helm, looking at the radio mic: can take it %s, holding it %s" % (t, mc["could"], mc["took"]))
+        return
+    if "walked" not in mc and t >= 63.0:
+        walker.set_actor_location(boat.get_actor_transform().transform_location(unreal.Vector(-300.0, 0.0, 20.0 + 92.0)), False, True)
+        mc["walked"] = t
+        return
+    if "walked" in mc and t >= mc["walked"] + 0.4:
+        mc["pulled_back"] = boat.get_mic_holder() is None
+        log("t=%5.1f walked to the aft deck with the mic: pulled back onto its clip %s" % (t, mc["pulled_back"]))
 
 
 def storage_check(world, boat, walker, t):
@@ -221,8 +295,8 @@ def swim_check(world, boat, walker, t):
         return
     if "in" not in sw:
         sw["overboard_before"] = walker.get_overboard_count()
-        # Just astern of the port trim tab, beside the ladder.
-        walker.set_actor_location(boat.get_actor_transform().transform_location(unreal.Vector(-465.0, -104.0, -40.0)), False, True)
+        # Right behind the ladder (the boat is still drifting at about 3 kn, faster than anyone swims).
+        walker.set_actor_location(boat.get_actor_transform().transform_location(unreal.Vector(-462.0, -104.0, -40.0)), False, True)
         sw["in"] = t
         sw["head_out"] = sw["frames"] = 0
         return
@@ -231,18 +305,29 @@ def swim_check(world, boat, walker, t):
         eye = walker.get_actor_location() + unreal.Vector(0, 0, 70)
         if eye.z > boat.get_sea_surface_z(eye):
             sw["head_out"] += 1
-        sw["swimming"] = sw.get("swimming", True) and walker.is_in_sea()
-        # Swim to the ladder, as a player would.
-        to_ladder = boat.get_ladder_foot_transform().translation - walker.get_actor_location()
-        to_ladder.z = 0.0
-        if to_ladder.length() > 60.0:
+        sw["swimming"] = sw.get("swimming", True) and (walker.is_in_sea() or walker.is_on_ladder())
+        # Swim into the ladder, as a player would: that takes hold of it.
+        if not walker.is_on_ladder():
+            to_ladder = boat.get_ladder_foot_transform().translation - walker.get_actor_location()
+            to_ladder.z = 0.0
             walker.add_movement_input(to_ladder.normal(), 1.0)
-    if t >= CLIMB_T and "climb" not in sw:
-        sw["at_ladder"] = walker.is_at_ladder()
-        walker.try_climb_aboard()
-        sw["climb"] = walker.is_climbing()
-        log("t=%5.1f in the sea: swimming %s, head out %d/%d frames, at the ladder %s, climbing %s (boat %.1f kn)"
-            % (t, sw.get("swimming"), sw["head_out"], sw["frames"], sw["at_ladder"], sw["climb"], boat.get_speed_knots()))
+    if t >= CLIMB_T and "at_ladder" not in sw:
+        sw["at_ladder"] = walker.is_on_ladder()
+        sw["start_feet"] = walker.get_ladder_feet_z()
+        log("t=%5.1f in the sea: swimming %s, head out %d/%d frames, took hold of the ladder by swimming into it %s (boat %.1f kn)"
+            % (t, sw.get("swimming"), sw["head_out"], sw["frames"], sw["at_ladder"], boat.get_speed_knots()))
+    if t >= CLIMB_T and "aboard" not in sw:
+        into = t - CLIMB_T
+        hanging = HANG_START <= into < HANG_END
+        walker.set_ladder_input(0.0 if hanging else 1.0)
+        if hanging and "hang_feet" not in sw and into >= HANG_START + 0.1:
+            sw["hang_feet"] = walker.get_ladder_feet_z()
+        if into >= HANG_END - 0.05 and "hang_drift" not in sw and "hang_feet" in sw:
+            sw["hang_drift"] = abs(walker.get_ladder_feet_z() - sw["hang_feet"])
+            sw["climbed"] = sw["hang_feet"] - sw["start_feet"]
+            log("t=%5.1f on the ladder: climbed %.0f cm, then let go of W and hung on (moved %.1f cm in %.1f s), on it %s"
+                % (t, sw["climbed"], sw["hang_drift"], HANG_END - HANG_START - 0.1, walker.is_on_ladder()))
+            sw["hung"] = walker.is_on_ladder() and sw["climbed"] > 30.0 and sw["hang_drift"] < 1.0
     if t >= ABOARD_CHECK_T and "aboard" not in sw:
         sw["aboard"] = walker.is_standing_on_boat()
         log("t=%5.1f after the ladder: standing on the boat %s" % (t, sw["aboard"]))
@@ -358,6 +443,21 @@ def verdict():
         yaws = [s.get("motor_yaw", 0.0) for s in right_turn]
         checks.append(("the outboards swing with the steering", all(y < -25.0 for y in yaws),
                        "motor yaw %.0f..%.0f deg steering hard right" % (min(yaws), max(yaws))))
+        wheels = [s["wheel"] for s in right_turn]
+        checks.append(("the wheel turns with the motors", all(w > 200.0 for w in wheels),
+                       "wheel %.0f..%.0f deg steering hard right" % (min(wheels), max(wheels))))
+    ahead = [s for s in state["samples"] if s["phase"] == "full ahead" and s["t"] >= 20.0]
+    astern = [s for s in state["samples"] if s["phase"] == "astern" and s["t"] >= 109.5]
+    if ahead and astern:
+        checks.append(("the props spin ahead at full throttle and astern in reverse",
+                       min(s["prop_spin"] for s in ahead) > 5.0 and max(s["prop_spin"] for s in astern) < -1.0,
+                       "%.1f rev/s ahead, %.1f astern (as drawn)" % (min(s["prop_spin"] for s in ahead), max(s["prop_spin"] for s in astern))))
+    hs = state.get("helm_fast", {})
+    checks.append(("steps off the helm at full speed onto the deck (not into it, not left behind)",
+                   bool(hs.get("stood")) and hs.get("kn", 0) > 20.0, "at %.1f kn" % hs.get("kn", 0)))
+    mc = state.get("mic", {})
+    checks.append(("takes the radio mic off its clip, and walking out of the cord's reach pulls it back",
+                   bool(mc.get("took")) and bool(mc.get("pulled_back")), "%s" % mc))
     dw = state.get("deck_wet")
     if dw:
         for name in DECK_POINTS:
@@ -396,7 +496,8 @@ def verdict():
         sw = state.get("swim", {})
         checks.append(("swims when in the sea, head above the water", bool(sw.get("swimming")) and sw.get("head_out", 0) > 0.8 * max(1, sw.get("frames", 0)),
                        "head out %s of %s frames" % (sw.get("head_out"), sw.get("frames"))))
-        checks.append(("climbs the boarding ladder back aboard", bool(sw.get("at_ladder")) and bool(sw.get("climb")) and bool(sw.get("aboard")), ""))
+        checks.append(("swims into the ladder, climbs, hangs on when W is let go, and climbs back aboard",
+                       bool(sw.get("at_ladder")) and bool(sw.get("hung")) and bool(sw.get("aboard")), ""))
         fe = state.get("fuel", {})
         checks.append(("fetches the fuel drum and pours it in at the filler", bool(fe.get("can")) and fe.get("poured", 0.0) > 19.0,
                        "%.1f L" % fe.get("poured", 0.0)))
@@ -510,6 +611,8 @@ def _tick(_dt):
         if state["walker"]:
             walk(world, boat, state["walker"], t)
             helm_swap(world, boat, state["walker"], t)
+            mic_check(world, boat, state["walker"], t)
+            helm_at_speed(world, boat, state["walker"], t)
             storage_check(world, boat, state["walker"], t)
             swim_check(world, boat, state["walker"], t)
             fuel_and_engine_check(world, boat, state["walker"], t)
