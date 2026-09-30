@@ -19,9 +19,11 @@
 #include "UObject/StructOnScope.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/App.h"
-#include "NiagaraFunctionLibrary.h"
-#include "NiagaraSystem.h"
+#include "Components/WidgetComponent.h"
 #include "RiptideCharacter.h"
+#include "RiptideGauge.h"
+#include "RiptideSprayComponent.h"
+#include "RiptideStorageComponent.h"
 #include "RiptideWakeFoamComponent.h"
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
@@ -49,14 +51,36 @@ namespace
 
 	// The outboards' steering pivots on the transom (twin motors 76 cm apart), and the prop relative to a pivot
 	// (see build_outboard in Content/Python/riptide_boat_mesh.py).
-	const FVector OutboardPivot(-HullExtent.X, -38.f, 15.f);
-	const FVector OutboardPivotStarboard(-HullExtent.X, 38.f, 15.f);
-	const FVector PropInOutboard(-50.f, 0.f, -75.f);
+	// Each tilts on the tube at the top of its clamp bracket, which hooks over the transom's motor notch.
+	const FVector OutboardPivot(-HullExtent.X - 5.f, -38.f, 40.f);
+	const FVector OutboardPivotStarboard(-HullExtent.X - 5.f, 38.f, 40.f);
+	const FVector PropInOutboard(-45.f, 0.f, -100.f);
 	const float WaterlineZ = -HullExtent.Z + 20.f;
 
 	// The deck, where the crew stands (see riptide_boat_mesh.py): flat at this height from the transom to the
 	// foredeck. Spots: the helm, behind the console; the aft deck; its two corners; the foredeck.
 	constexpr float DeckZ = 20.f;
+	// The throttle binnacle on the console's back, right of the wheel: where the twin levers pivot (riptide_boat_mesh.py).
+	const FVector ThrottlePivotPort(-49.f, 28.f, DeckZ + 92.f);
+	const FVector ThrottlePivotStarboard(-49.f, 36.f, DeckZ + 92.f);
+	constexpr float LeverSwingDeg = 35.f;
+
+	// The radar antenna's hub, on its pedestal on the T-top (riptide_boat_mesh.py's RADAR).
+	const FVector RadarHub(-70.f, 0.f, DeckZ + 258.f);
+
+	// The dash (riptide_boat_mesh.py's _dash_and_wheel): a slope from (-45, DeckZ + 95) up to (-20, DeckZ + 112),
+	// facing the helm. Returns a point Fraction of the way up it, Y across, Out off its face.
+	FVector OnDash(float Fraction, float Y, float Out)
+	{
+		const FVector2D Lo(-45.f, DeckZ + 95.f), Hi(-20.f, DeckZ + 112.f);
+		const FVector2D Up = (Hi - Lo).GetSafeNormal();
+		const FVector2D Normal(-Up.Y, Up.X);
+		const FVector2D P = Lo + (Hi - Lo) * Fraction + Normal * Out;
+		return FVector(P.X, Y, P.Y);
+	}
+	// Facing out of the dash (widgets face along their +X), with their tops up the slope.
+	const FRotator DashFacing(FMath::RadiansToDegrees(FMath::Atan2(25.f, 17.f)), 180.f, 0.f);
+
 	const FVector DeckSpots[] = {
 		FVector(-110.f, 0.f, DeckZ),
 		FVector(-270.f, 0.f, DeckZ),
@@ -129,10 +153,52 @@ ARiptideBoat::ARiptideBoat()
 		}
 	}
 
+	MotorBracket = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorBracket"));
+	MotorBracket->SetupAttachment(HullBody);
+	MotorBracket->SetRelativeLocation(OutboardPivot);
+	MotorBracketStarboard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorBracketStarboard"));
+	MotorBracketStarboard->SetupAttachment(HullBody);
+	MotorBracketStarboard->SetRelativeLocation(OutboardPivotStarboard);
+	ThrottleLeverPort = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThrottleLeverPort"));
+	ThrottleLeverPort->SetupAttachment(HullBody);
+	ThrottleLeverPort->SetRelativeLocation(ThrottlePivotPort);
+	ThrottleLeverStarboard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThrottleLeverStarboard"));
+	ThrottleLeverStarboard->SetupAttachment(HullBody);
+	ThrottleLeverStarboard->SetRelativeLocation(ThrottlePivotStarboard);
+	RadarArray = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RadarArray"));
+	RadarArray->SetupAttachment(HullBody);
+	RadarArray->SetRelativeLocation(RadarHub);
+	for (UStaticMeshComponent* Part : { MotorBracket.Get(), MotorBracketStarboard.Get(), ThrottleLeverPort.Get(), ThrottleLeverStarboard.Get(), RadarArray.Get() })
+	{
+		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+
+	// Dash instruments. Each is a live drawing (SRiptideGauge) on a widget component set into the dash, sized in cm
+	// (a widget pixel is a centimetre at scale 1).
+	auto MakeGauge = [this](const TCHAR* Name, const FVector& Where, FIntPoint Pixels, float WidthCm)
+	{
+		UWidgetComponent* Gauge = CreateDefaultSubobject<UWidgetComponent>(Name);
+		Gauge->SetupAttachment(HullBody);
+		Gauge->SetRelativeLocationAndRotation(Where, DashFacing);
+		Gauge->SetRelativeScale3D(FVector(WidthCm / Pixels.X));
+		Gauge->SetDrawSize(Pixels);
+		Gauge->SetWidgetSpace(EWidgetSpace::World);
+		Gauge->SetBlendMode(EWidgetBlendMode::Masked);
+		Gauge->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Gauge->SetCastShadow(false);
+		return Gauge;
+	};
+	GaugeTach = MakeGauge(TEXT("GaugeTach"), OnDash(0.5f, -28.5f, 1.3f), FIntPoint(256, 256), 13.6f);
+	GaugeSpeed = MakeGauge(TEXT("GaugeSpeed"), OnDash(0.5f, 28.5f, 1.3f), FIntPoint(256, 256), 13.6f);
+	GaugeDisplay = MakeGauge(TEXT("GaugeDisplay"), OnDash(0.51f, 0.f, 1.1f), FIntPoint(480, 320), 33.f);
+
 	// The boat model, generated by Content/Python/riptide_boat_mesh.py and imported when the editor opens. The
 	// box and cylinder above stand in until it exists (on the very first launch).
 	HullModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_PatrolSkiff.SM_PatrolSkiff")));
 	OutboardModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_Outboard.SM_Outboard")));
+	BracketModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_OutboardBracket.SM_OutboardBracket")));
+	LeverModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_ThrottleLever.SM_ThrottleLever")));
+	RadarModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_RadarArray.SM_RadarArray")));
 
 	// Propellers: at each outboard's prop, well below the waterline when the boat is level.
 	Propeller = CreateDefaultSubobject<USceneComponent>(TEXT("Propeller"));
@@ -158,8 +224,11 @@ ARiptideBoat::ARiptideBoat()
 	WakeFoam->SetupAttachment(HullBody);
 	WakeFoamMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Riptide/Materials/M_WakeFoam.M_WakeFoam")));
 	WakeForceMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Riptide/Materials/MI_WakeForce.MI_WakeForce")));
-	// No bow spray effect yet: the engine's Niagara templates make sparks, not spray. SprayAtBow does nothing
-	// until BowSpraySystem is set to a proper spray effect.
+	Lockers = CreateDefaultSubobject<URiptideStorageComponent>(TEXT("Lockers"));
+
+	Spray = CreateDefaultSubobject<URiptideSprayComponent>(TEXT("Spray"));
+	Spray->SetupAttachment(HullBody);
+	SprayMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Riptide/Materials/M_Spray.M_Spray")));
 
 	// The engine sounds from the motor; the wash from the hull at the waterline.
 	EngineAudio = CreateDefaultSubobject<UAudioComponent>(TEXT("EngineAudio"));
@@ -245,6 +314,20 @@ void ARiptideBoat::ApplyModels()
 		MotorMeshStarboard->SetRelativeLocation(OutboardPivotStarboard);
 		MotorMeshStarboard->SetRelativeScale3D(FVector::OneVector);
 	}
+	if (UStaticMesh* Bracket = BracketModel.LoadSynchronous())
+	{
+		MotorBracket->SetStaticMesh(Bracket);
+		MotorBracketStarboard->SetStaticMesh(Bracket);
+	}
+	if (UStaticMesh* Radar = RadarModel.LoadSynchronous())
+	{
+		RadarArray->SetStaticMesh(Radar);
+	}
+	if (UStaticMesh* Lever = LeverModel.LoadSynchronous())
+	{
+		ThrottleLeverPort->SetStaticMesh(Lever);
+		ThrottleLeverStarboard->SetStaticMesh(Lever);
+	}
 }
 
 void ARiptideBoat::BeginPlay()
@@ -271,9 +354,19 @@ void ARiptideBoat::BeginPlay()
 	if (HasAuthority())
 	{
 		FuelLiters = FuelCapacityLiters;
+		SetUpLockers();
 	}
 
-	// The wake foam and sounds are cosmetic, so every machine runs its own for each boat.
+	// The wake foam, sounds and instruments are cosmetic, so every machine runs its own for each boat.
+	if (FApp::CanEverRender())
+	{
+		const TPair<UWidgetComponent*, ERiptideGaugeKind> Gauges[] = {
+			{ GaugeTach, ERiptideGaugeKind::Tachometer }, { GaugeSpeed, ERiptideGaugeKind::Speedometer }, { GaugeDisplay, ERiptideGaugeKind::Display } };
+		for (const auto& Gauge : Gauges)
+		{
+			Gauge.Key->SetSlateWidget(SNew(SRiptideGauge).Boat(this).Kind(Gauge.Value));
+		}
+	}
 	RegisterWithWakeSimulation();
 	StartSounds();
 	StartWakeFoam();
@@ -304,7 +397,7 @@ void ARiptideBoat::StartWakeFoam()
 	Churn.Patchiness = 0.35f;
 	SternFoamTrail = WakeFoam->AddTrail(Churn);
 
-	BowSpraySystem.LoadSynchronous();
+	Spray->SetMaterial(0, SprayMaterial.LoadSynchronous());
 }
 
 void ARiptideBoat::UpdateWakeFoam(float DeltaSeconds)
@@ -330,19 +423,143 @@ void ARiptideBoat::UpdateWakeFoam(float DeltaSeconds)
 	WakeFoam->RebuildMesh();
 }
 
+void ARiptideBoat::SetUpLockers()
+{
+	if (Lockers->Num() > 0)
+	{
+		return;
+	}
+	// Each opens from its lid (riptide_boat_mesh.py's _fittings and _stern_box). Stocked the way a crew running this
+	// boat keeps it: whoever takes the boat takes what's aboard.
+	const int32 Forward = Lockers->AddStorage(NSLOCTEXT("Riptide", "ForwardLocker", "Forward locker"), 8, 5, FVector(102.f, 0.f, DeckZ));
+	const int32 Bow = Lockers->AddStorage(NSLOCTEXT("Riptide", "BowLocker", "Bow locker"), 6, 4, FVector(205.f, 0.f, DeckZ + 4.f));
+	const int32 SternPort = Lockers->AddStorage(NSLOCTEXT("Riptide", "SternPort", "Stern locker (port)"), 5, 3, FVector(-367.f, -97.f, DeckZ + 55.f));
+	const int32 SternStarboard = Lockers->AddStorage(NSLOCTEXT("Riptide", "SternStarboard", "Stern locker (starboard)"), 5, 3, FVector(-367.f, 97.f, DeckZ + 55.f));
+	const int32 Anchor = Lockers->AddStorage(NSLOCTEXT("Riptide", "AnchorLocker", "Anchor locker"), 3, 3, FVector(372.f, 0.f, DeckZ + 95.f));
+	auto Stock = [this](int32 Locker, const TCHAR* Id, int32 Count) { Lockers->GetStorage(Locker)->Grid.Add(FName(Id), Count); };
+	Stock(Forward, TEXT("first_aid_kit"), 1);
+	Stock(Forward, TEXT("flare_gun"), 1);
+	Stock(Forward, TEXT("flare"), 6);
+	Stock(Forward, TEXT("binoculars"), 1);
+	Stock(Forward, TEXT("sea_chart"), 1);
+	Stock(Forward, TEXT("bandage"), 8);
+	Stock(Forward, TEXT("handheld_radio"), 1);
+	Stock(Bow, TEXT("ammo_556"), 120);
+	Stock(Bow, TEXT("ration_pack"), 4);
+	Stock(Bow, TEXT("canteen_clean"), 2);
+	Stock(Bow, TEXT("m1911"), 1);
+	Stock(Bow, TEXT("ammo_9mm"), 30);
+	Stock(SternPort, TEXT("fuel_drum"), 1);
+	Stock(SternPort, TEXT("rope"), 10);
+	Stock(SternStarboard, TEXT("tool_kit"), 1);
+	Stock(SternStarboard, TEXT("cleaning_kit"), 1);
+	Stock(Anchor, TEXT("rope"), 20);
+}
+
+float ARiptideBoat::WaterlineHalfBeam(float X)
+{
+	// The hull's planform (riptide_boat_mesh.py's station): full beam aft, narrowing to the stem; the waterline runs
+	// a little inside the sheer.
+	const float T = FMath::Clamp((X + HullExtent.X) / (2.f * HullExtent.X), 0.f, 1.f);
+	const float SheerHalf = T < 0.35f ? HullExtent.Y : HullExtent.Y * FMath::Pow(FMath::Max(0.f, FMath::Cos((T - 0.35f) / 0.65f * UE_HALF_PI)), 0.75f);
+	return SheerHalf * 0.82f;
+}
+
 void ARiptideBoat::SprayAtBow(float Strength)
 {
-	UNiagaraSystem* Spray = BowSpraySystem.Get();
 	if (!Spray || !FApp::CanEverRender())
 	{
 		return;
 	}
-	// Thrown forward and up off the bow, bigger for a harder hit.
+	// The bow slamming into a wave: water bursts out of both sides of the forward hull, crashing outward and up in
+	// a sheet that breaks into droplets, with a cloud of mist hanging behind it. Bigger and higher for a harder hit
+	// (and faster boat); carried forward with the boat.
 	const FTransform& Xf = HullBody->GetComponentTransform();
-	// Starts just ahead of the stem at the waterline, so it bursts out of the water rather than the deck.
-	const FVector Bow = Xf.TransformPosition(FVector(HullExtent.X + 30.f, 0.f, WaterlineZ));
-	const FRotator Up = FRotator(55.f, GetActorRotation().Yaw, 0.f);
-	UNiagaraFunctionLibrary::SpawnSystemAtLocation(this, Spray, Bow, Up, FVector(FMath::Lerp(2.f, 3.5f, Strength)));
+	const FVector HullVelocity = HullBody->GetPhysicsLinearVelocity();
+	const float Speed01 = FMath::Clamp(GetSpeedKnots() / SprayFullKnots, 0.f, 1.2f);
+	const float Power = FMath::Clamp(Strength * (0.4f + 0.8f * Speed01), 0.f, 1.2f);
+	const FVector Right = Xf.GetUnitAxis(EAxis::Y);
+	for (const float Side : { -1.f, 1.f })
+	{
+		for (int32 Point = 0; Point < 8; ++Point)
+		{
+			const float X = FMath::Lerp(100.f, 270.f, Point / 7.f);
+			const FVector Origin = Xf.TransformPosition(FVector(X, Side * WaterlineHalfBeam(X), WaterlineZ + 8.f));
+			const float SeaZ = GetSeaSurfaceZ(Origin);
+			// Further forward, the water is thrown higher and flatter out.
+			const float Fwd = Point / 7.f;
+			const FVector Throw = HullVelocity * 0.8f + Right * Side * FMath::Lerp(500.f, 1300.f, Power)
+				+ FVector::UpVector * FMath::Lerp(500.f, 1400.f, Power) * FMath::Lerp(0.7f, 1.1f, Fwd);
+			Spray->ThrowSpray(Origin, Throw, FMath::Lerp(250.f, 500.f, Power), FMath::RoundToInt(FMath::Lerp(30.f, 90.f, Power)),
+				10.f, FMath::Lerp(28.f, 45.f, Power), FMath::Lerp(1.2f, 2.0f, Power), SeaZ, 1.f, 0.05f);
+			if (Point % 2 == 0)
+			{
+				Spray->ThrowSpray(Origin, HullVelocity * 0.55f + Right * Side * 350.f + FVector::UpVector * FMath::Lerp(300.f, 700.f, Power),
+					200.f, FMath::RoundToInt(FMath::Lerp(1.f, 3.f, Power)), 100.f, FMath::Lerp(220.f, 380.f, Power), 2.0f, SeaZ, 0.15f, 0.f);
+			}
+		}
+	}
+}
+
+void ARiptideBoat::UpdateSpray(float DeltaSeconds)
+{
+	if (!Spray || !FApp::CanEverRender() || !Buoyancy || !Buoyancy->IsInWaterBody())
+	{
+		return;
+	}
+	const FTransform& Xf = HullBody->GetComponentTransform();
+	const FVector HullVelocity = HullBody->GetPhysicsLinearVelocity();
+	const float ForwardKnots = FVector::DotProduct(HullVelocity, Xf.GetUnitAxis(EAxis::X)) * CmPerSecToKnots;
+	const float Speed01 = FMath::Clamp((ForwardKnots - SprayStartKnots) / (SprayFullKnots - SprayStartKnots), 0.f, 1.2f);
+	if (Speed01 <= 0.f)
+	{
+		BowSprayOwed = 0.f;
+		SternSprayOwed = 0.f;
+		return;
+	}
+	const FVector Right = Xf.GetUnitAxis(EAxis::Y);
+
+	// Bow: the bow wave peels off the forward hull in a sheet, thrown out sideways and up by the strakes and chines.
+	// Heavier with speed, and heaviest while the bow is driving down into the water.
+	const float Driving = FMath::Clamp(-HullVelocity.Z / 150.f, 0.f, 1.f);
+	BowSprayOwed += BowSprayRate * FMath::Pow(Speed01, 1.5f) * (1.f + 2.f * Driving) * DeltaSeconds;
+	int32 Bow = FMath::FloorToInt(BowSprayOwed);
+	BowSprayOwed -= Bow;
+	for (; Bow > 0; Bow -= 4)
+	{
+		for (const float Side : { -1.f, 1.f })
+		{
+			const float X = FMath::FRandRange(90.f, 230.f);
+			const FVector Origin = Xf.TransformPosition(FVector(X, Side * WaterlineHalfBeam(X), WaterlineZ + 8.f));
+			// A flat fan thrown out wide and a metre or so up, arcing back down into the sea.
+			const FVector Throw = HullVelocity * 0.88f + Right * Side * FMath::Lerp(500.f, 900.f, Speed01)
+				+ FVector::UpVector * FMath::Lerp(280.f, 560.f, Speed01) * (1.f + 0.8f * Driving);
+			Spray->ThrowSpray(Origin, Throw, 220.f, FMath::Min(Bow, 4), 9.f, FMath::Lerp(22.f, 32.f, Speed01), 1.0f,
+				GetSeaSurfaceZ(Origin), 1.f, 0.05f);
+			if (FMath::FRand() < 0.04f)
+			{
+				Spray->ThrowSpray(Origin, HullVelocity * 0.6f + Right * Side * 300.f + FVector::UpVector * 200.f, 150.f, 1,
+					60.f, 170.f, 1.4f, GetSeaSurfaceZ(Origin), 0.12f, 0.f);
+			}
+		}
+	}
+
+	// Stern: the props churn the water behind the transom into tumbling whitewater and mist, left behind the boat.
+	SternSprayOwed += SternSprayRate * Speed01 * GetDriveFraction() * DeltaSeconds;
+	int32 Stern = FMath::FloorToInt(SternSprayOwed);
+	SternSprayOwed -= Stern;
+	for (; Stern > 0; --Stern)
+	{
+		const float Y = FMath::FRandRange(-100.f, 100.f);
+		const FVector Origin = Xf.TransformPosition(FVector(-HullExtent.X - FMath::FRandRange(40.f, 120.f), Y, WaterlineZ + 5.f));
+		const FVector Throw = HullVelocity * 0.35f + Right * Y * 2.f + FVector::UpVector * FMath::FRandRange(150.f, 380.f);
+		Spray->ThrowSpray(Origin, Throw, 140.f, 1, 12.f, 40.f, 0.8f, GetSeaSurfaceZ(Origin), 0.9f, 0.03f);
+		if (FMath::FRand() < 0.05f)
+		{
+			Spray->ThrowSpray(Origin, HullVelocity * 0.3f + FVector::UpVector * 150.f, 100.f, 1, 80.f, 220.f, 1.5f,
+				GetSeaSurfaceZ(Origin), 0.12f, 0.f);
+		}
+	}
 }
 
 AActor* ARiptideBoat::SpawnWakeSimulation(UClass* SimClass)
@@ -450,7 +667,7 @@ void ARiptideBoat::UpdateSounds(float DeltaSeconds)
 			}
 		}
 	}
-	const float Output = FMath::Abs(EngineOutput);
+	const float Output = GetDriveFraction();
 	const float TargetRevs = FMath::Min(1.f, Output * (IsPropellerSubmerged() ? 1.f : 1.f + PropOutOverRev));
 	EngineRevs = FMath::FInterpTo(EngineRevs, TargetRevs, DeltaSeconds, 6.f);
 
@@ -660,6 +877,11 @@ void ARiptideBoat::BuildInput()
 	HelmMapping->MapKey(TrimAction, EKeys::Gamepad_DPad_Up);
 	HelmMapping->MapKey(TrimAction, EKeys::Gamepad_DPad_Down).Modifiers.Add(NewObject<UInputModifierNegate>(HelmMapping));
 
+	// H shows the tuning readout (the dash instruments are the real display).
+	DebugHudAction = NewObject<UInputAction>(this, TEXT("IA_DebugHud"));
+	DebugHudAction->ValueType = EInputActionValueType::Boolean;
+	HelmMapping->MapKey(DebugHudAction, EKeys::H);
+
 	// Gamepad: right trigger / left trigger for throttle, left stick to steer, right stick to look.
 	HelmMapping->MapKey(ThrottleAction, EKeys::Gamepad_RightTriggerAxis);
 	FEnhancedActionKeyMapping& PadReverse = HelmMapping->MapKey(ThrottleAction, EKeys::Gamepad_LeftTriggerAxis);
@@ -680,6 +902,7 @@ void ARiptideBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindAction(LeaveHelmAction, ETriggerEvent::Started, this, &ARiptideBoat::OnLeaveHelm);
 		Input->BindAction(TrimAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnTrim);
 		Input->BindAction(TrimAction, ETriggerEvent::Completed, this, &ARiptideBoat::OnTrimReleased);
+		Input->BindActionValueLambda(DebugHudAction, ETriggerEvent::Started, [this](const FInputActionValue&) { bShowDebugHud = !bShowDebugHud; });
 		Input->BindAction(ThrottleAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnThrottle);
 		Input->BindAction(ThrottleAction, ETriggerEvent::Completed, this, &ARiptideBoat::OnThrottleReleased);
 		Input->BindAction(SteerAction, ETriggerEvent::Triggered, this, &ARiptideBoat::OnSteer);
@@ -873,9 +1096,18 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 	}
 
 	PoseOutboards();
+	// The radar sweeps while the engines are running.
+	if (GetEngineRpm() > 0.f)
+	{
+		RadarArray->AddLocalRotation(FRotator(0.f, RadarRpm * 6.f * DeltaSeconds, 0.f));
+	}
+	// Throttle levers: forward for ahead, back for astern.
+	ThrottleLeverPort->SetRelativeRotation(FRotator(-ThrottleLever * LeverSwingDeg, 0.f, 0.f));
+	ThrottleLeverStarboard->SetRelativeRotation(FRotator(-ThrottleLever * LeverSwingDeg, 0.f, 0.f));
 
 	UpdateSounds(DeltaSeconds);
 	UpdateWakeFoam(DeltaSeconds);
+	UpdateSpray(DeltaSeconds);
 
 	// Carry the wake simulation's patch of water along with the boat, at sea level.
 	if (AActor* Sim = WakeSimulation.Get())
@@ -926,9 +1158,37 @@ void ARiptideBoat::PoseOutboards()
 	PropellerStarboard->SetRelativeLocation(OutboardPivotStarboard + Pose.RotateVector(PropInOutboard));
 }
 
+ERiptideGear ARiptideBoat::GetGear() const
+{
+	return ThrottleLever > NeutralDetent ? ERiptideGear::Forward : ThrottleLever < -NeutralDetent ? ERiptideGear::Reverse : ERiptideGear::Neutral;
+}
+
+float ARiptideBoat::GetThrottleOpening() const
+{
+	return FMath::Clamp((FMath::Abs(ThrottleLever) - NeutralDetent) / (1.f - NeutralDetent), 0.f, 1.f);
+}
+
+float ARiptideBoat::GetDriveFraction() const
+{
+	return FMath::Clamp((FMath::Abs(EngineOutput) - IdleThrustInGear) / (1.f - IdleThrustInGear), 0.f, 1.f);
+}
+
+float ARiptideBoat::GetEngineRpm() const
+{
+	if (FuelLiters <= 0.f || EngineHealth <= 0.f)
+	{
+		return 0.f;
+	}
+	return FMath::Lerp(IdleRpm, MaxRpm, EngineRevs);
+}
+
 void ARiptideBoat::UpdateEngine(float DeltaSeconds)
 {
-	float Target = ThrottleLever;
+	// The lever sets the gear and throttle together, like a real binnacle control: in gear at idle the props turn
+	// slowly and the boat creeps along; the throttle opens from there. In neutral the props don't drive at all.
+	const ERiptideGear Gear = GetGear();
+	const float GearSign = Gear == ERiptideGear::Forward ? 1.f : Gear == ERiptideGear::Reverse ? -1.f : 0.f;
+	float Target = GearSign * FMath::Lerp(IdleThrustInGear, 1.f, GetThrottleOpening());
 
 	if (FuelLiters <= 0.f || EngineHealth <= 0.f)
 	{
@@ -969,9 +1229,17 @@ void ARiptideBoat::UpdatePropImmersion()
 	{
 		// The sea right at the prop, waves included (the stern's buoyancy reading is taken on the centreline, a
 		// metre forward, and is only refreshed while the hull overlaps the ocean).
+		// It has to stay clear of the surface for a moment before it counts as out: a prop skimming through wave tops
+		// at speed would otherwise flick in and out, and the engine note with it.
 		const FVector At = Props[i]->GetComponentLocation();
 		const float Depth = GetSeaSurfaceZ(At) - At.Z;
-		bPropWet[i] = bPropWet[i] ? Depth > -PropDryMargin : Depth > 0.f;
+		const bool bChanging = bPropWet[i] ? Depth < -PropDryMargin : Depth > 0.f;
+		PropStateTime[i] = bChanging ? PropStateTime[i] + GetWorld()->GetDeltaSeconds() : 0.f;
+		if (PropStateTime[i] >= 0.12f)
+		{
+			bPropWet[i] = !bPropWet[i];
+			PropStateTime[i] = 0.f;
+		}
 	}
 }
 
@@ -1007,10 +1275,10 @@ void ARiptideBoat::ApplyThrust()
 	if (MomentNm > 0.f)
 	{
 		// Lifting the bow needs the hull's bottom planing on the water to push against. A planing hull runs a few
-		// degrees bow-up at most, so the lift fades out between 4 and 9 degrees; without that, a bow trimmed high
-		// enough would keep climbing and stand the boat on its transom.
+		// degrees bow-up at most, so the lift fades out between 3 and 7 degrees; without that, a bow trimmed high
+		// enough would keep climbing and blow the boat over backwards off a crest.
 		const float BowUpDeg = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(HullBody->GetForwardVector().Z, -1.f, 1.f)));
-		MomentNm *= 1.f - FMath::SmoothStep(4.f, 9.f, BowUpDeg);
+		MomentNm *= 1.f - FMath::SmoothStep(3.f, 7.f, BowUpDeg);
 	}
 	// Bow up is a torque about the hull's left (-Y) axis. N*m to Unreal's kg*cm^2/s^2 is 100 * 100.
 	HullBody->AddTorqueInRadians(-HullBody->GetRightVector() * MomentNm * NewtonsToUnreal * 100.f);
@@ -1020,6 +1288,9 @@ void ARiptideBoat::ApplyHydrodynamics()
 {
 	if (!Buoyancy || !Buoyancy->IsInWaterBody())
 	{
+		// Airborne off a crest: the air slows the hull's tumbling a little (far less than water does), so it lands
+		// roughly as it left instead of cartwheeling.
+		HullBody->AddTorqueInRadians(-HullBody->GetPhysicsAngularVelocityInRadians() * AirRockDamping, NAME_None, true);
 		return;
 	}
 
@@ -1040,7 +1311,11 @@ void ARiptideBoat::ApplyHydrodynamics()
 	// with its resting draft, so a bow lifting clear (or leaving a crest) loses the lift and settles back.
 	if (LocalVelMs.X > 0.f)
 	{
-		const FVector LiftPoint = Xf.TransformPosition(FVector(HullExtent.X * 0.3f, 0.f, -HullExtent.Z));
+		// Where the lift acts moves aft as the boat speeds up and rises onto the plane: well forward coming up onto
+		// the plane (lifting the bow over its own bow wave), close over the centre of gravity at full speed, so the
+		// hull settles to running a few degrees bow-up instead of standing on its tail.
+		const float Planing01 = FMath::Clamp((LocalVelMs.X * 1.94384f - 8.f) / 20.f, 0.f, 1.f);
+		const FVector LiftPoint = Xf.TransformPosition(FVector(HullExtent.X * FMath::Lerp(0.3f, -0.04f, Planing01), 0.f, -HullExtent.Z));
 
 		float WaterHeightSum = 0.f;
 		int32 NumForward = 0;
@@ -1060,6 +1335,22 @@ void ARiptideBoat::ApplyHydrodynamics()
 		const float WeightN = HullMassKg * FMath::Abs(GetWorld()->GetGravityZ()) / 100.f;
 		const float LiftN = Wetness * FMath::Min(PlaningLift * LocalVelMs.X * LocalVelMs.X, WeightN * MaxPlaningLiftFraction);
 		HullBody->AddForceAtLocation(Xf.GetUnitAxis(EAxis::Z) * LiftN * NewtonsToUnreal, LiftPoint);
+	}
+
+	// A planing hull's pitch stability: as its bow rises past its natural running angle, the pressure on its bottom
+	// moves aft and pushes the bow back down, harder the faster it goes. This is what stops an overtrimmed boat
+	// standing on its tail.
+	if (LocalVelMs.X > 0.f)
+	{
+		const float BowUpDeg = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(Xf.GetUnitAxis(EAxis::X).Z, -1.f, 1.f)));
+		const float Excess = BowUpDeg - PlaningRunningTrimDeg;
+		if (Excess > 0.f)
+		{
+			const float Speed01 = FMath::Min(FMath::Square(LocalVelMs.X * 1.94384f / TrimFullEffectKnots), 1.3f);
+			const float RestoreNm = PlaningPitchStiffness * Excess * Speed01;
+			// Bow down is a torque about the hull's right (+Y) axis.
+			HullBody->AddTorqueInRadians(Xf.GetUnitAxis(EAxis::Y) * RestoreNm * NewtonsToUnreal * 100.f);
+		}
 	}
 
 	// Resist spinning in place, and resist rocking so the hull settles after a wave instead of building up a roll.
@@ -1131,9 +1422,15 @@ void ARiptideBoat::DrawDebugHud() const
 	{
 		return;
 	}
-
-	// Temporary readout for tuning the handling; replaced by real gauges later.
 	const uint64 KeyBase = 0x52495054ull;
+	if (Helmsman)
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, TEXT("E  Leave the helm      H  Tuning readout"));
+	}
+	if (!bShowDebugHud)
+	{
+		return;
+	}
 	GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
 		FString::Printf(TEXT("Speed %.1f kn   Throttle %+.0f%%   Engine %+.0f%%"),
 			GetSpeedKnots(), ThrottleLever * 100.f, EngineOutput * 100.f));
@@ -1144,9 +1441,5 @@ void ARiptideBoat::DrawDebugHud() const
 	const bool bStarboard = IsPropSubmerged(PropellerStarboard);
 	GEngine->AddOnScreenDebugMessage(KeyBase + 2, 0.f, bPort && bStarboard ? FColor::Green : bPort || bStarboard ? FColor::Yellow : FColor::Red,
 		bPort && bStarboard ? TEXT("Props in water") : bPort || bStarboard ? TEXT("One prop out of water") : TEXT("Props out of water"));
-	if (Helmsman)
-	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, TEXT("E  Leave the helm"));
-	}
 }
 

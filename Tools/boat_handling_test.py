@@ -32,7 +32,7 @@ SCRIPT = [
 ]
 END_TIME = 106.0
 # Points on the deck (cm, boat frame) checked against the sea surface every frame.
-DECK_POINTS = {"aft deck": (-300, 0, 20), "aft corner": (-360, 100, 20), "side deck": (0, 100, 20),
+DECK_POINTS = {"aft deck": (-300, 0, 20), "aft corner": (-320, 100, 20), "side deck": (0, 100, 20),
                "helm": (-110, 0, 20), "foredeck": (150, 0, 20), "bow": (300, 0, 29)}
 TRIM_SWITCH = {"trim out": (1.0, 4.0), "trim in": (-1.0, 5.5)}   # phase -> (switch, seconds held from the phase's start)
 TRIM_WINDOW = 10.0                                                 # bow pitch is averaged over each phase's last 10 s (the swell rocks it)
@@ -50,8 +50,8 @@ AUDIO_LOG = bool(os.environ.get("RIPTIDE_TEST_AUDIO"))
 
 # Laps of the deck, as points on the boat (cm, X forward, Y starboard): from the helm down the port side past the
 # console, up to the bow, back down the starboard side, round the aft deck, and back to the helm.
-WALK_ROUTE = [(-110, 0), (-110, -85), (60, -85), (150, -40), (300, 0), (150, 40), (60, 85), (-85, 85), (-200, 85),
-              (-330, 70), (-330, -70), (-200, -85), (-110, -85), (-110, 0)]
+WALK_ROUTE = [(-110, 0), (-110, -90), (60, -85), (150, -40), (300, 0), (150, 40), (60, 85), (-85, 90), (-200, 90),
+              (-305, 70), (-305, -70), (-200, -90), (-110, -90), (-110, 0)]
 WALK_START, WALK_END = 6.0, 52.0          # walks laps from settling in until the turns end, finishing the last lap at the helm
 WALK_REACHED_CM = 35.0
 WALK_STUCK_S = 8.0                          # longest a single leg of the route may take
@@ -128,6 +128,8 @@ def walk(world, boat, walker, t):
     else:
         w["off_deck"] += 1
         w["prev_z"] = None
+        spot = (int(round(local.x / 25.0) * 25), int(round(local.y / 25.0) * 25))
+        w.setdefault("off_spots", {})[spot] = w.setdefault("off_spots", {}).get(spot, 0) + 1
     if t < WALK_START or (t >= WALK_END and w["leg"] == 1):
         return
 
@@ -175,6 +177,23 @@ def helm_swap(world, boat, walker, t):
     if "left" in h and "stood" not in h and t >= HELM_LEAVE_T + 1.5:
         h["stood"] = walker.is_standing_on_boat()
         log("t=%5.1f standing on the deck after leaving the helm: %s" % (t, h["stood"]))
+
+
+def storage_check(world, boat, walker, t):
+    """Stands by the forward locker, checks it's in reach and stocked, and takes what's in it."""
+    st = state.setdefault("storage", {})
+    if t < 64.0 or "took" in st:
+        return
+    spot = boat.get_actor_transform().transform_location(unreal.Vector(100.0, 60.0, 20.0 + 92.0))
+    if "placed" not in st:
+        walker.set_actor_location(spot, False, True)
+        st["placed"] = t
+        return
+    if t < st["placed"] + 0.5:
+        return
+    st["reach"] = walker.get_locker_in_reach()
+    st["took"] = walker.take_from_locker(st["reach"]) if st["reach"] >= 0 else 0
+    log("t=%5.1f by the forward locker: locker in reach %d, took %d stacks" % (t, st["reach"], st["took"]))
 
 
 def in_phase(name):
@@ -250,7 +269,7 @@ def verdict():
 
     f = state.get("flips")
     if f:
-        checks.append(("prop reading is steady (never flips back within 10 frames)", f["short"] == 0,
+        checks.append(("prop reading is steady (never flips back within 0.1 s)", f["short"] == 0,
                        "%d flips in %d frames, %d of them quick"
                        % (f["prop"], f["frames"], f["short"])))
         checks.append(("hull never reads as out of the water while it's in it", f["water"] == 0, "%d glitches" % f["water"]))
@@ -285,9 +304,15 @@ def verdict():
         checks.append(("keeps its footing (standing on the deck 95% of the time)", frac > 0.95,
                        "%.0f%%, feet %.0f..%.0f cm on the boat (deck is 20, foredeck up to 34), highest at x, y, t = %s"
                        % (frac * 100, w["lowest_on_deck"], w["highest_on_deck"], w.get("highest_at"))))
+        spots = sorted(w.get("off_spots", {}).items(), key=lambda kv: -kv[1])[:6]
+        if spots:
+            log("feet left the deck most at (x, y on the boat): %s" % ", ".join("%s x%d" % kv for kv in spots))
         hops = w.get("hops", [])
         checks.append(("feet glide with the deck (never hop over 10 cm in a frame)", not hops,
                        "%d hops, first at x, y, dz, t = %s" % (len(hops), hops[:3]) if hops else ""))
+        stc = state.get("storage", {})
+        checks.append(("opens the forward locker from beside it and takes its gear", stc.get("reach") == 0 and stc.get("took", 0) >= 5,
+                       "locker %s, %s stacks" % (stc.get("reach"), stc.get("took"))))
         checks.append(("takes the helm and drives", bool(h.get("at_helm")) and bool(h.get("took")), ""))
         checks.append(("leaves the helm and stands on the deck again", bool(h.get("left")) and bool(h.get("stood")), ""))
     else:
@@ -383,11 +408,12 @@ def _tick(_dt):
         if state["walker"]:
             walk(world, boat, state["walker"], t)
             helm_swap(world, boat, state["walker"], t)
+            storage_check(world, boat, state["walker"], t)
 
         # How often the prop and in-water readings flip, every frame: real ventilation comes and goes over a swell,
         # but a reading that flips back and forth every few frames is a glitch (the HUD and engine sound stutter).
         # Counted once the boat has settled: at spawn it can drop off the crest it was launched on.
-        flips = state.setdefault("flips", {"prop": 0, "water": 0, "frames": 0, "last": None, "short": 0, "since": 0})
+        flips = state.setdefault("flips", {"prop": 0, "water": 0, "frames": 0, "last": None, "short": 0, "since": 0.0})
         if t < 5.0:
             flips["last"] = None
         reading = (boat.is_propeller_submerged(), boat.get_component_by_class(unreal.BuoyancyComponent).is_in_water_body())
@@ -395,9 +421,9 @@ def _tick(_dt):
             # Only while the hull is in the water: in the air (off a crest) the props rightly read dry.
             if reading[0] != flips["last"][0] and reading[1] and flips["last"][1]:
                 flips["prop"] += 1
-                if flips["since"] < 10:
+                if t - flips["since"] < 0.1:
                     flips["short"] += 1
-                flips["since"] = 0
+                flips["since"] = t
             if reading[1] != flips["last"][1]:
                 # Leaving the water for real (catching air off a crest) is fine; reading "out" with the sea still
                 # above the keel is the glitch.
@@ -409,7 +435,6 @@ def _tick(_dt):
                 log("t=%5.2f hull reads %s the water (sea %s cm, keel %.0f cm)%s" % (
                     t, "in" if reading[1] else "OUT OF", "%.0f" % surface, keel.z,
                     "" if genuine else "  GLITCH"))
-        flips["since"] += 1
         flips["last"] = reading
         flips["frames"] += 1
 

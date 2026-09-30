@@ -13,6 +13,10 @@
 #include "InputModifiers.h"
 #include "Net/UnrealNetwork.h"
 #include "RiptideBoat.h"
+#include "RiptideInventoryWidget.h"
+#include "RiptideStorageComponent.h"
+#include "Engine/GameViewportClient.h"
+#include "Widgets/SWeakWidget.h"
 
 ARiptideCharacter::ARiptideCharacter()
 {
@@ -29,6 +33,8 @@ ARiptideCharacter::ARiptideCharacter()
 	FirstPersonCamera->SetupAttachment(GetCapsuleComponent());
 	FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, 70.f));  // eyes about 1.6 m above the deck
 	FirstPersonCamera->bUsePawnControlRotation = true;
+
+	Inventory = CreateDefaultSubobject<URiptideStorageComponent>(TEXT("Inventory"));
 	BaseEyeHeight = 70.f;
 
 	bUseControllerRotationYaw = true;
@@ -62,6 +68,17 @@ void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ARiptideCharacter, HomeBoat);
 	DOREPLIFETIME(ARiptideCharacter, bManningHelm);
 	DOREPLIFETIME(ARiptideCharacter, OverboardCount);
+}
+
+void ARiptideCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+	if (HasAuthority() && Inventory->Num() == 0)
+	{
+		// Grids sized like the old build's: pockets, and a small pack until there's gear to wear.
+		Inventory->AddStorage(NSLOCTEXT("Riptide", "Pockets", "Pockets"), 5, 2);
+		Inventory->AddStorage(NSLOCTEXT("Riptide", "Backpack", "Backpack"), 6, 4);
+	}
 }
 
 // --- Input ---
@@ -107,6 +124,11 @@ void ARiptideCharacter::BuildInput()
 	WalkMapping->MapKey(JumpAction, EKeys::Gamepad_FaceButton_Bottom);
 	WalkMapping->MapKey(InteractAction, EKeys::E);
 	WalkMapping->MapKey(InteractAction, EKeys::Gamepad_FaceButton_Left);
+
+	InventoryAction = NewObject<UInputAction>(this, TEXT("IA_Inventory"));
+	InventoryAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(InventoryAction, EKeys::Tab);
+	WalkMapping->MapKey(InventoryAction, EKeys::Gamepad_Special_Right);
 }
 
 void ARiptideCharacter::NotifyControllerChanged()
@@ -140,6 +162,7 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 		Input->BindAction(LookAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnLook);
 		Input->BindAction(JumpAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnJump);
 		Input->BindAction(InteractAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInteract);
+		Input->BindAction(InventoryAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInventoryKey);
 	}
 }
 
@@ -172,7 +195,135 @@ void ARiptideCharacter::OnJump(const FInputActionValue& Value)
 
 void ARiptideCharacter::OnInteract(const FInputActionValue& Value)
 {
-	TryTakeHelm();
+	if (IsAtHelm())
+	{
+		TryTakeHelm();
+	}
+	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
+	{
+		OpenInventory(Locker);
+	}
+}
+
+void ARiptideCharacter::OnInventoryKey(const FInputActionValue& Value)
+{
+	OpenInventory(GetLockerInReach());
+}
+
+// --- Storage ---
+
+int32 ARiptideCharacter::GetLockerInReach() const
+{
+	if (!HomeBoat || bManningHelm || !HomeBoat->GetLockers())
+	{
+		return INDEX_NONE;
+	}
+	const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+	return HomeBoat->GetLockers()->FindNearest(Feet + FVector(0.f, 0.f, 40.f), LockerReach);
+}
+
+void ARiptideCharacter::OpenInventory(int32 Locker)
+{
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !PC->IsLocalController() || IsInventoryOpen() || !GEngine || !GEngine->GameViewport)
+	{
+		return;
+	}
+	TWeakObjectPtr<ARiptideCharacter> WeakThis(this);
+	InventoryWidget = SNew(SRiptideInventory)
+		.Carrying(Inventory)
+		.Container(Locker != INDEX_NONE && HomeBoat ? HomeBoat->GetLockers() : nullptr)
+		.ContainerIndex(Locker)
+		.OnMove(SRiptideInventory::FOnMove::CreateLambda([WeakThis](URiptideStorageComponent* From, int32 FromIndex, int32 Uid,
+			URiptideStorageComponent* To, int32 ToIndex, int32 X, int32 Y, bool bRotated, int32 Count)
+		{
+			if (ARiptideCharacter* Self = WeakThis.Get())
+			{
+				Self->ServerMoveItem(From, FromIndex, Uid, To, ToIndex, X, Y, bRotated, Count);
+			}
+		}))
+		.OnClose(FSimpleDelegate::CreateLambda([WeakThis]()
+		{
+			if (ARiptideCharacter* Self = WeakThis.Get())
+			{
+				Self->CloseInventory();
+			}
+		}));
+	InventoryWidgetContainer = SNew(SWeakWidget).PossiblyNullContent(InventoryWidget);
+	GEngine->GameViewport->AddViewportWidgetContent(InventoryWidgetContainer.ToSharedRef(), 10);
+	FInputModeUIOnly Mode;
+	Mode.SetWidgetToFocus(InventoryWidget);
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::LockAlways);
+	PC->SetInputMode(Mode);
+	PC->SetShowMouseCursor(true);
+	GetCharacterMovement()->StopMovementImmediately();
+}
+
+void ARiptideCharacter::CloseInventory()
+{
+	if (GEngine && GEngine->GameViewport && InventoryWidgetContainer.IsValid())
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(InventoryWidgetContainer.ToSharedRef());
+	}
+	InventoryWidget.Reset();
+	InventoryWidgetContainer.Reset();
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		PC->SetInputMode(FInputModeGameOnly());
+		PC->SetShowMouseCursor(false);
+	}
+}
+
+int32 ARiptideCharacter::TakeFromLocker(int32 Locker)
+{
+	URiptideStorageComponent* Lockers = HomeBoat ? HomeBoat->GetLockers() : nullptr;
+	const FRiptideStorage* Storage = Lockers ? Lockers->GetStorage(Locker) : nullptr;
+	if (!HasAuthority() || !Storage || !CanReach(Lockers, Locker))
+	{
+		return 0;
+	}
+	TArray<int32> Uids;
+	for (const FRiptideItem& Item : Storage->Grid.Items)
+	{
+		Uids.Add(Item.Uid);
+	}
+	int32 Moved = 0;
+	for (const int32 Uid : Uids)
+	{
+		for (int32 i = 0; i < Inventory->Num(); ++i)
+		{
+			if (URiptideStorageComponent::MoveItem(Lockers, Locker, Uid, Inventory, i, -1, -1, false))
+			{
+				++Moved;
+				break;
+			}
+		}
+	}
+	return Moved;
+}
+
+bool ARiptideCharacter::CanReach(const URiptideStorageComponent* Storage, int32 Index) const
+{
+	if (Storage == Inventory)
+	{
+		return true;
+	}
+	// A locker on the home boat, within reach (with some slack for the boat moving under a lagging client).
+	if (HomeBoat && Storage == HomeBoat->GetLockers() && Storage->GetStorage(Index))
+	{
+		const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+		return FVector::Dist(Storage->GetWorldPoint(Index), Feet + FVector(0.f, 0.f, 40.f)) <= LockerReach * 1.6f;
+	}
+	return false;
+}
+
+void ARiptideCharacter::ServerMoveItem_Implementation(URiptideStorageComponent* From, int32 FromIndex, int32 Uid,
+	URiptideStorageComponent* To, int32 ToIndex, int32 X, int32 Y, bool bRotated, int32 Count)
+{
+	if (CanReach(From, FromIndex) && CanReach(To, ToIndex))
+	{
+		URiptideStorageComponent::MoveItem(From, FromIndex, Uid, To, ToIndex, X, Y, bRotated, Count);
+	}
 }
 
 // --- Helm ---
@@ -308,7 +459,7 @@ void ARiptideCharacter::CheckOverboard()
 	GetCharacterMovement()->SetMovementMode(MOVE_Falling);
 	++OverboardCount;
 	OverboardMessageTimeLeft = 4.f;
-	UE_LOG(LogTemp, Log, TEXT("Riptide: %s went overboard and was put back on deck"), *GetName());
+	UE_LOG(LogTemp, Log, TEXT("Riptide: %s went overboard at t=%.1f and was put back on deck"), *GetName(), GetWorld()->GetTimeSeconds());
 }
 
 void ARiptideCharacter::DrawHud() const
@@ -319,9 +470,18 @@ void ARiptideCharacter::DrawHud() const
 	}
 	// Temporary prompts until the real HUD exists (same keys as the boat's readout, which is off while walking).
 	const uint64 KeyBase = 0x52495054ull;
+	if (IsInventoryOpen())
+	{
+		return;
+	}
 	if (IsAtHelm())
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Take the helm"));
+	}
+	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+			FString::Printf(TEXT("E  Open the %s"), *HomeBoat->GetLockers()->GetStorage(Locker)->Title.ToString().ToLower()));
 	}
 	if (OverboardMessageTimeLeft > 0.f)
 	{

@@ -294,9 +294,91 @@ def make_materials():
     unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
 
 
+SPRAY_VERSION = "3"
+
+
+def make_spray_material():
+    """M_Spray: a puff of thrown spray (URiptideSprayComponent draws each droplet cloud as a camera-facing quad). Soft and
+    round, broken up by the foam texture (each puff samples a different patch, from its vertex colour's red and green),
+    faded by its vertex alpha as it ages, and softened where it meets the water or the hull."""
+    path = f"{MATERIALS_PATH}/M_Spray"
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        existing = unreal.load_asset(path)
+        if unreal.EditorAssetLibrary.get_metadata_tag(existing, "RiptideVersion") == SPRAY_VERSION:
+            return
+        unreal.EditorAssetLibrary.delete_asset(path)
+    unreal.log("Riptide: creating spray material")
+    mel = unreal.MaterialEditingLibrary
+    mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        "M_Spray", MATERIALS_PATH, unreal.Material, unreal.MaterialFactoryNew())
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    mat.set_editor_property("two_sided", True)
+    mat.set_editor_property("translucency_lighting_mode", unreal.TranslucencyLightingMode.TLM_VOLUMETRIC_DIRECTIONAL)
+
+    uv = mel.create_material_expression(mat, unreal.MaterialExpressionTextureCoordinate, -1000, 0)
+    centre = mel.create_material_expression(mat, unreal.MaterialExpressionConstant2Vector, -1000, 120)
+    centre.set_editor_property("r", 0.5)
+    centre.set_editor_property("g", 0.5)
+    dist = mel.create_material_expression(mat, unreal.MaterialExpressionDistance, -850, 50)
+    dist2 = mel.create_material_expression(mat, unreal.MaterialExpressionMultiply, -700, 50)
+    dist2.set_editor_property("const_b", 2.0)
+    inv = mel.create_material_expression(mat, unreal.MaterialExpressionOneMinus, -580, 50)
+    sat = mel.create_material_expression(mat, unreal.MaterialExpressionSaturate, -460, 50)
+    soft = mel.create_material_expression(mat, unreal.MaterialExpressionPower, -340, 50)
+    soft.set_editor_property("const_exponent", 2.2)   # a denser core, so droplets read as water, not smoke
+
+    vc = mel.create_material_expression(mat, unreal.MaterialExpressionVertexColor, -1000, 300)
+    rg = mel.create_material_expression(mat, unreal.MaterialExpressionComponentMask, -850, 300)
+    rg.set_editor_property("r", True)
+    rg.set_editor_property("g", True)
+    scale_uv = mel.create_material_expression(mat, unreal.MaterialExpressionMultiply, -850, 180)
+    scale_uv.set_editor_property("const_b", 0.9)
+    noise_uv = mel.create_material_expression(mat, unreal.MaterialExpressionAdd, -700, 220)
+    texture = unreal.load_asset(FOAM_TEXTURE)
+    noise = mel.create_material_expression(mat, unreal.MaterialExpressionTextureSample, -560, 220)
+    noise.set_editor_property("texture", texture)
+    noise.set_editor_property("sampler_type", _sampler_type_for(texture))
+    breakup = mel.create_material_expression(mat, unreal.MaterialExpressionLinearInterpolate, -400, 220)
+    breakup.set_editor_property("const_a", 0.35)
+    breakup.set_editor_property("const_b", 1.0)
+
+    shape = mel.create_material_expression(mat, unreal.MaterialExpressionMultiply, -220, 120)
+    faded = mel.create_material_expression(mat, unreal.MaterialExpressionMultiply, -100, 200)
+    depth = mel.create_material_expression(mat, unreal.MaterialExpressionDepthFade, 40, 200)
+    depth.set_editor_property("fade_distance_default", 10.0)   # just enough to hide the seam where it meets the water
+    white = mel.create_material_expression(mat, unreal.MaterialExpressionConstant3Vector, 40, -120)
+    white.set_editor_property("constant", unreal.LinearColor(0.9, 0.94, 0.97, 1.0))
+    glow = mel.create_material_expression(mat, unreal.MaterialExpressionConstant3Vector, 40, -20)
+    glow.set_editor_property("constant", unreal.LinearColor(0.22, 0.24, 0.26, 1.0))   # sunlit white even on its shaded side
+
+    mel.connect_material_expressions(uv, "", dist, "A")
+    mel.connect_material_expressions(centre, "", dist, "B")
+    mel.connect_material_expressions(dist, "", dist2, "A")
+    mel.connect_material_expressions(dist2, "", inv, "")
+    mel.connect_material_expressions(inv, "", sat, "")
+    mel.connect_material_expressions(sat, "", soft, "Base")
+    mel.connect_material_expressions(uv, "", scale_uv, "A")
+    mel.connect_material_expressions(vc, "", rg, "")
+    mel.connect_material_expressions(scale_uv, "", noise_uv, "A")
+    mel.connect_material_expressions(rg, "", noise_uv, "B")
+    mel.connect_material_expressions(noise_uv, "", noise, "UVs")
+    mel.connect_material_expressions(noise, "R", breakup, "Alpha")
+    mel.connect_material_expressions(soft, "", shape, "A")
+    mel.connect_material_expressions(breakup, "", shape, "B")
+    mel.connect_material_expressions(shape, "", faded, "A")
+    mel.connect_material_expressions(vc, "A", faded, "B")
+    mel.connect_material_expressions(faded, "", depth, "")  # its first input is the opacity to fade
+    mel.connect_material_property(depth, "", unreal.MaterialProperty.MP_OPACITY)
+    mel.connect_material_property(white, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    mel.connect_material_property(glow, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    mel.recompile_material(mat)
+    unreal.EditorAssetLibrary.set_metadata_tag(mat, "RiptideVersion", SPRAY_VERSION)
+    unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+
+
 # The boat model is generated by riptide_boat_mesh.py (our own geometry, no third-party model) and imported here.
 BOATS_PATH = "/Game/Riptide/Boats"
-BOAT_MODEL_VERSION = "12"
+BOAT_MODEL_VERSION = "17"
 # Material slot -> (base colour, metallic, roughness). "Glass" gets its own see-through material.
 BOAT_FINISHES = {
     "Aluminium": ((0.55, 0.57, 0.6), 1.0, 0.38),
@@ -310,6 +392,16 @@ BOAT_FINISHES = {
     "Trim": ((0.03, 0.03, 0.03), 0.3, 0.45),
     "Cowling": ((0.02, 0.02, 0.022), 0.0, 0.22),
     "Prop": ((0.5, 0.5, 0.5), 1.0, 0.3),
+    "Safety": ((0.9, 0.18, 0.015), 0.0, 0.6),      # life ring orange
+    "Red": ((0.55, 0.015, 0.012), 0.0, 0.3),       # fire extinguisher
+    "White": ((0.75, 0.76, 0.74), 0.0, 0.35),      # fibreglass whips, radomes, radar
+    "Lamp": ((0.85, 0.87, 0.9), 0.0, 0.05),        # lamp and display glass
+}
+# Lights: slot -> (colour, glow). The navigation lights are lit.
+BOAT_LIGHTS = {
+    "NavRed": ((1.0, 0.04, 0.02), 8.0),
+    "NavGreen": ((0.04, 1.0, 0.15), 8.0),
+    "NavWhite": ((1.0, 0.97, 0.9), 8.0),
 }
 
 
@@ -334,6 +426,47 @@ def _boat_surface_material():
     mel.recompile_material(mat)
     unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
     return mat
+
+
+def _boat_light_material():
+    """M_BoatLight: a glossy lens that glows, with Colour and Glow parameters."""
+    path = f"{MATERIALS_PATH}/M_BoatLight"
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        return unreal.load_asset(path)
+    mel = unreal.MaterialEditingLibrary
+    mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        "M_BoatLight", MATERIALS_PATH, unreal.Material, unreal.MaterialFactoryNew())
+    colour = mel.create_material_expression(mat, unreal.MaterialExpressionVectorParameter, -500, 0)
+    colour.set_editor_property("parameter_name", "Colour")
+    glow = mel.create_material_expression(mat, unreal.MaterialExpressionScalarParameter, -500, 200)
+    glow.set_editor_property("parameter_name", "Glow")
+    lit = mel.create_material_expression(mat, unreal.MaterialExpressionMultiply, -250, 150)
+    mel.connect_material_expressions(colour, "", lit, "A")
+    mel.connect_material_expressions(glow, "", lit, "B")
+    rough = mel.create_material_expression(mat, unreal.MaterialExpressionConstant, -250, 300)
+    rough.set_editor_property("r", 0.15)
+    mel.connect_material_property(colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    mel.connect_material_property(lit, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    mel.connect_material_property(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    mel.recompile_material(mat)
+    unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+    return mat
+
+
+def _boat_light(slot, light):
+    """MI_Boat_<slot>: an instance of M_BoatLight with that light's colour and glow."""
+    path = f"{MATERIALS_PATH}/MI_Boat_{slot}"
+    if not unreal.EditorAssetLibrary.does_asset_exist(path):
+        unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            f"MI_Boat_{slot}", MATERIALS_PATH, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+    mi = unreal.load_asset(path)
+    mel = unreal.MaterialEditingLibrary
+    mel.set_material_instance_parent(mi, light)
+    (r, g, b), glow = BOAT_LIGHTS[slot]
+    mel.set_material_instance_vector_parameter_value(mi, "Colour", unreal.LinearColor(r, g, b, 1.0))
+    mel.set_material_instance_scalar_parameter_value(mi, "Glow", glow)
+    unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+    return mi
 
 
 BOAT_GLASS_VERSION = "3"
@@ -396,14 +529,23 @@ def _boat_finish(slot, surface):
 
 
 def make_boat_assets():
-    """SM_PatrolSkiff and SM_Outboard, generated and imported when missing or when the model's version changes."""
+    """The boat's models (hull, outboard, its clamp bracket, a throttle lever), generated and imported when missing or
+    when the model's version changes."""
     import importlib
     import riptide_boat_mesh
     importlib.reload(riptide_boat_mesh)
 
     assets = unreal.EditorAssetLibrary
-    skiff_path, outboard_path = f"{BOATS_PATH}/SM_PatrolSkiff", f"{BOATS_PATH}/SM_Outboard"
-    if assets.does_asset_exist(skiff_path) and assets.does_asset_exist(outboard_path) and \
+    skiff_path = f"{BOATS_PATH}/SM_PatrolSkiff"
+    models = {
+        "SM_PatrolSkiff": riptide_boat_mesh.build_skiff,
+        "SM_Outboard": riptide_boat_mesh.build_outboard,
+        "SM_OutboardBracket": riptide_boat_mesh.build_outboard_bracket,
+        "SM_ThrottleLever": riptide_boat_mesh.build_throttle_lever,
+        "SM_RadarArray": riptide_boat_mesh.build_radar_array,
+    }
+    paths = [f"{BOATS_PATH}/{name}" for name in models]
+    if all(assets.does_asset_exist(path) for path in paths) and \
             assets.get_metadata_tag(unreal.load_asset(skiff_path), "RiptideVersion") == BOAT_MODEL_VERSION:
         return
     unreal.log("Riptide: building the boat model")
@@ -413,9 +555,9 @@ def make_boat_assets():
     out_dir = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()), "Generated", "Boat")
     os.makedirs(out_dir, exist_ok=True)
     tasks = []
-    for name, mesh in (("SM_PatrolSkiff", riptide_boat_mesh.build_skiff()), ("SM_Outboard", riptide_boat_mesh.build_outboard())):
+    for name, build in models.items():
         obj = os.path.join(out_dir, name + ".obj")
-        mesh.write_obj(obj)
+        build().write_obj(obj)
         task = unreal.AssetImportTask()
         task.filename = obj
         task.destination_path = BOATS_PATH
@@ -430,7 +572,8 @@ def make_boat_assets():
 
     surface = _boat_surface_material()
     glass = _boat_glass_material()
-    for path in (skiff_path, outboard_path):
+    light = _boat_light_material()
+    for path in paths:
         mesh = unreal.load_asset(path)
         if not mesh:
             unreal.log_error(f"Riptide: boat model {path} failed to import")
@@ -438,7 +581,8 @@ def make_boat_assets():
         materials = mesh.get_editor_property("static_materials")
         for i, slot in enumerate(materials):
             name = str(slot.get_editor_property("material_slot_name"))
-            finish = glass if name == "Glass" else _boat_finish(name, surface) if name in BOAT_FINISHES else None
+            finish = (glass if name == "Glass" else _boat_light(name, light) if name in BOAT_LIGHTS
+                      else _boat_finish(name, surface) if name in BOAT_FINISHES else None)
             if finish:
                 slot.set_editor_property("material_interface", finish)
                 materials[i] = slot
@@ -465,7 +609,7 @@ def make_boat_assets():
         unreal.log(f"Riptide: {path.split('/')[-1]} bounds {box.min} .. {box.max}, slots {[str(s.material_slot_name) for s in materials]}")
     # The importer makes placeholder materials for each slot; ours replace them.
     for leftover in assets.list_assets(BOATS_PATH, recursive=True):
-        if not leftover.split(".")[0].endswith(("SM_PatrolSkiff", "SM_Outboard")):
+        if not leftover.split(".")[0].endswith(tuple(models)):
             assets.delete_asset(leftover.split(".")[0])
 
 
@@ -531,6 +675,7 @@ except Exception as err:  # noqa: BLE001 - never block the editor from opening
 try:
     make_materials()
     make_wake_force_material()
+    make_spray_material()
 except Exception as err:  # noqa: BLE001 - never block the editor from opening
     unreal.log_error(f"Riptide: could not create materials: {err}")
 

@@ -5,10 +5,12 @@
 #include "RiptideBoat.generated.h"
 
 class ARiptideCharacter;
+class UWidgetComponent;
 class UAudioComponent;
 class UStaticMesh;
 class UMaterialInterface;
-class UNiagaraSystem;
+class URiptideSprayComponent;
+class URiptideStorageComponent;
 class URiptideWakeFoamComponent;
 class UBoxComponent;
 class UStaticMeshComponent;
@@ -19,6 +21,15 @@ class USoundBase;
 class UInputAction;
 class UInputMappingContext;
 struct FInputActionValue;
+
+/** The gearbox, set by the throttle lever: centred is neutral, pushed forward engages forward, pulled back reverse. */
+UENUM(BlueprintType)
+enum class ERiptideGear : uint8
+{
+	Reverse,
+	Neutral,
+	Forward
+};
 
 /**
  * Motorboat driven from the helm in first person.
@@ -65,6 +76,27 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	float GetThrottleLever() const { return ThrottleLever; }
 
+	/** Which gear the lever is in. */
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	ERiptideGear GetGear() const;
+
+	/** How far the throttle is open past the gear detent, 0 (idle) to 1 (full). */
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetThrottleOpening() const;
+
+	/** Engine speed for the tachometer; 0 when the engine isn't running. */
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetEngineRpm() const;
+
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetFuelFraction() const { return FuelCapacityLiters > 0.f ? FuelLiters / FuelCapacityLiters : 0.f; }
+
+	UFUNCTION(BlueprintPure, Category = "Boat")
+	float GetEngineHealth() const { return EngineHealth; }
+
+	float GetMinTrimDeg() const { return MinTrimDeg; }
+	float GetMaxTrimDeg() const { return MaxTrimDeg; }
+
 	/** Motor trim in degrees: positive is trimmed out (bow up), negative trimmed in (bow down). */
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	float GetTrimDeg() const { return TrimDeg; }
@@ -92,6 +124,10 @@ public:
 	/** A spot on the deck to put a crew member (0 = the helm, then the aft deck and the foredeck), in the world. */
 	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
 	FTransform GetDeckSpotTransform(int32 Index) const;
+
+	/** The boat's lockers: the two floor lockers in front of the console, the stern box's hatches and the anchor locker. */
+	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
+	URiptideStorageComponent* GetLockers() const { return Lockers; }
 
 	/** Whoever is driving, or null. */
 	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
@@ -122,6 +158,41 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UStaticMeshComponent> MotorMeshStarboard;
 
+	/** The outboards' clamp brackets, fixed to the transom; the motors tilt and steer on them. */
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> MotorBracket;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> MotorBracketStarboard;
+
+	/** The twin throttle levers on the console, which move with the throttle and gear. */
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> ThrottleLeverPort;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> ThrottleLeverStarboard;
+
+	/** Dash instruments: tachometer, speedometer, and the screen (gear, trim, fuel, heading, warnings). */
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<URiptideStorageComponent> Lockers;
+
+	/** The open-array radar antenna on the T-top, turning while the engines run. */
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> RadarArray;
+
+	/** Radar antenna speed, in revolutions per minute. */
+	UPROPERTY(EditAnywhere, Category = "Boat")
+	float RadarRpm = 24.f;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UWidgetComponent> GaugeTach;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UWidgetComponent> GaugeSpeed;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UWidgetComponent> GaugeDisplay;
+
 	/**
 	 * What the crew walks on: the hull model's own triangles (deck, bulwarks, console, T-top legs, rails), invisible.
 	 * It's separate from the physics body so it can be the exact concave shape of the deck, and only the crew
@@ -136,6 +207,15 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Boat")
 	TSoftObjectPtr<UStaticMesh> OutboardModel;
+
+	UPROPERTY(EditAnywhere, Category = "Boat")
+	TSoftObjectPtr<UStaticMesh> BracketModel;
+
+	UPROPERTY(EditAnywhere, Category = "Boat")
+	TSoftObjectPtr<UStaticMesh> LeverModel;
+
+	UPROPERTY(EditAnywhere, Category = "Boat")
+	TSoftObjectPtr<UStaticMesh> RadarModel;
 
 	/** The two props, where each motor's thrust pushes. */
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
@@ -189,11 +269,30 @@ protected:
 
 	/** Speed at which the foam is at its thickest. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
-	float FoamFullSpeedKnots = 12.f;
+	float FoamFullSpeedKnots = 24.f;
 
-	/** Spray thrown up when the bow slaps into a wave. */
+	/** Water thrown into the air off the hull: sheets peeling off the bow wave at speed, and bursts crashing out
+	 * when the bow slams into a wave. */
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Wake")
+	TObjectPtr<URiptideSprayComponent> Spray;
+
 	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
-	TSoftObjectPtr<UNiagaraSystem> BowSpraySystem;
+	TSoftObjectPtr<UMaterialInterface> SprayMaterial;
+
+	/** Speed where the bow starts throwing spray, and where it's throwing its most. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float SprayStartKnots = 9.f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float SprayFullKnots = 28.f;
+
+	/** Spray clouds per second off each side of the bow at full speed. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float BowSprayRate = 450.f;
+
+	/** Whitewater clouds per second boiling up behind the props at full speed and throttle. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Wake")
+	float SternSprayRate = 160.f;
 
 	// --- Sound ---
 	// Levels are set on the sound assets themselves (see Content/Python/init_unreal.py), so volume 1 here is
@@ -260,7 +359,7 @@ protected:
 
 	/** Speed at which the hull wash reaches full volume. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
-	float WashFullSpeedKnots = 16.f;
+	float WashFullSpeedKnots = 28.f;
 
 	/** How fast the bow must meet the water for a slap (cm/s), and the speed of the loudest slap. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
@@ -283,7 +382,7 @@ protected:
 
 	/** Water resistance moving forward (N per (m/s)^2). Sets top speed. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
-	float ForwardDrag = 122.f;
+	float ForwardDrag = 59.f;
 
 	/** Water resistance moving sideways (N per (m/s)^2). The keel: higher = less sliding in turns. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
@@ -296,6 +395,18 @@ protected:
 	/** How quickly the hull stops spinning, in 1/s. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
 	float YawDamping = 1.2f;
+
+	/** Bow-up angle a planing hull runs at on its own, in degrees; past it the bottom pushes the bow back down. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float PlaningRunningTrimDeg = 3.f;
+
+	/** How hard the bottom pushes the bow back down per degree past the running angle, at planing speed (N*m). */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float PlaningPitchStiffness = 12000.f;
+
+	/** How quickly the hull's spin dies out while it's in the air, in 1/s. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float AirRockDamping = 1.5f;
 
 	/** How quickly roll and pitch rocking dies out in the water, in 1/s. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
@@ -314,14 +425,29 @@ protected:
 
 	// --- Engine ---
 
-	/** Thrust of both motors together at full throttle, in Newtons. Each motor gives half, and only while its prop is
-	 * in the water. Mass, drag and thrust are scaled together from the tuned 6 m skiff, so the handling feels the same. */
+	/** Thrust of both motors together at full throttle, in Newtons (twin 250 hp outboards). Each motor gives half, and
+	 * only while its prop is in the water. With ForwardDrag this sets a top speed of about 30 knots. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
-	float MaxThrust = 7800.f;
+	float MaxThrust = 14000.f;
 
 	/** Fraction of forward thrust available in reverse. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "1"))
 	float ReverseThrustScale = 0.4f;
+
+	/** The lever's neutral band either side of centre: past it the gear engages (forward or reverse), and the throttle
+	 * opens from idle over the rest of the lever's travel. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "0.5"))
+	float NeutralDetent = 0.12f;
+
+	/** Thrust with the gear engaged and the throttle at idle, as a fraction of full (the boat creeps along in gear). */
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "0.3"))
+	float IdleThrustInGear = 0.06f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
+	float IdleRpm = 650.f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
+	float MaxRpm = 6000.f;
 
 	/** How fast the throttle lever moves while the key is held, in full-range per second. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
@@ -368,7 +494,7 @@ protected:
 	float TrimInMomentPerDeg = 5500.f;
 
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
-	float TrimFullEffectKnots = 15.f;
+	float TrimFullEffectKnots = 22.f;
 
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
 	float FuelCapacityLiters = 40.f;
@@ -436,6 +562,14 @@ private:
 	void UpdateSounds(float DeltaSeconds);
 	void StartWakeFoam();
 	void UpdateWakeFoam(float DeltaSeconds);
+	void UpdateSpray(float DeltaSeconds);
+	void SetUpLockers();
+
+	/** Half the hull's width at its waterline, at X along it (cm). */
+	static float WaterlineHalfBeam(float X);
+
+	float BowSprayOwed = 0.f;
+	float SternSprayOwed = 0.f;
 
 	void OnThrottle(const FInputActionValue& Value);
 	void OnThrottleReleased(const FInputActionValue& Value);
@@ -474,6 +608,15 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> TrimAction;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> DebugHudAction;
+
+	/** The tuning readout on screen (off by default; H at the helm). */
+	bool bShowDebugHud = false;
+
+	/** How hard the engines are driving the props, 0 (idle or neutral) to 1 (full), from the engine output. */
+	float GetDriveFraction() const;
+
 	UPROPERTY(Replicated, Transient)
 	TObjectPtr<ARiptideCharacter> Helmsman;
 
@@ -491,6 +634,9 @@ private:
 
 	/** Whether each prop (port, starboard) is in the water, from UpdatePropImmersion. */
 	bool bPropWet[2] = { true, true };
+
+	/** How long each prop has looked like changing state (seconds), before it does. */
+	float PropStateTime[2] = { 0.f, 0.f };
 
 	/** How far above the surface (cm) a prop has to rise before it counts as out of the water. */
 	float PropDryMargin = 4.f;
