@@ -151,6 +151,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Boat|Lights")
 	void AimSearchlight(float YawDeg, float PitchDeg);
 
+	/** True if a crew member at World can grab something solid: the gunwale, the console's grab rails, a T-top leg,
+	 * the bow rail or the leaning post's rail. */
+	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
+	bool IsHandholdNear(FVector World, float Reach) const;
+
+	/** How fast a point on the deck is moving (world cm/s): the hull's velocity plus its spin at that point. */
+	FVector GetDeckPointVelocity(const FVector& World) const;
+
 	/** The foot of the boarding ladder on the transom (port side), at the waterline, and its top on the stern box. */
 	UFUNCTION(BlueprintPure, Category = "Boat|Crew")
 	FTransform GetLadderFootTransform() const;

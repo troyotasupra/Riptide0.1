@@ -70,6 +70,8 @@ void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ARiptideCharacter, HomeBoat);
 	DOREPLIFETIME(ARiptideCharacter, bManningHelm);
 	DOREPLIFETIME(ARiptideCharacter, OverboardCount);
+	DOREPLIFETIME(ARiptideCharacter, bBracing);
+	DOREPLIFETIME(ARiptideCharacter, KnockdownTimeLeft);
 }
 
 void ARiptideCharacter::BeginPlay()
@@ -130,6 +132,11 @@ void ARiptideCharacter::BuildInput()
 	WalkMapping->MapKey(DiveAction, EKeys::C);
 	WalkMapping->MapKey(DiveAction, EKeys::LeftControl);
 	WalkMapping->MapKey(DiveAction, EKeys::Gamepad_FaceButton_Right);
+	// Hold on: Shift (or the left bumper) near a rail, the gunwale or a T-top leg.
+	BraceAction = NewObject<UInputAction>(this, TEXT("IA_Brace"));
+	BraceAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(BraceAction, EKeys::LeftShift);
+	WalkMapping->MapKey(BraceAction, EKeys::Gamepad_LeftShoulder);
 	WalkMapping->MapKey(InteractAction, EKeys::E);
 	WalkMapping->MapKey(InteractAction, EKeys::Gamepad_FaceButton_Left);
 
@@ -171,6 +178,8 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 		Input->BindAction(JumpAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnJump);
 		Input->BindAction(JumpAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnSwimUp);
 		Input->BindAction(DiveAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnDive);
+		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Started, [this](const FInputActionValue&) { SetBracing(true); });
+		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetBracing(false); });
 		Input->BindAction(InteractAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInteract);
 		Input->BindAction(InventoryAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInventoryKey);
 	}
@@ -178,6 +187,10 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 
 void ARiptideCharacter::OnMove(const FInputActionValue& Value)
 {
+	if (IsKnockedDown())
+	{
+		return;
+	}
 	const FVector2D Axis = Value.Get<FVector2D>();
 	// Swimming goes where you look (down to dive, up to surface); walking stays level.
 	const FRotator Facing = IsInSea() ? GetControlRotation() : FRotator(0.f, GetControlRotation().Yaw, 0.f);
@@ -543,9 +556,95 @@ bool ARiptideCharacter::IsStandingOnBoat() const
 	return HomeBoat && Base && Base->GetOwner() == HomeBoat && GetCharacterMovement()->IsMovingOnGround();
 }
 
+// --- Riding the boat ---
+
+void ARiptideCharacter::SetBracing(bool bHold)
+{
+	bBracing = bHold;
+	if (!HasAuthority())
+	{
+		ServerSetBracing(bHold);
+	}
+}
+
+void ARiptideCharacter::ServerSetBracing_Implementation(bool bHold)
+{
+	bBracing = bHold;
+}
+
+bool ARiptideCharacter::IsBraced() const
+{
+	if (bManningHelm)
+	{
+		return true;    // hands on the wheel
+	}
+	return bBracing && HomeBoat && HomeBoat->IsHandholdNear(GetActorLocation(), HandholdReach);
+}
+
+void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
+{
+	UCharacterMovementComponent* Move = GetCharacterMovement();
+	KnockdownTimeLeft = FMath::Max(0.f, KnockdownTimeLeft - DeltaSeconds);
+	StaggerCooldown -= DeltaSeconds;
+	// Holding on slows you to a shuffle; down on the deck you can't move at all.
+	Move->MaxWalkSpeed = IsKnockedDown() ? 0.f : IsBraced() ? BracedWalkSpeed : 350.f;
+
+	// Feel the deck: how hard the point under the feet is accelerating (beyond gravity). The body lags behind it:
+	// thrown aft when the boat surges, outward in a hard turn, and down onto the knees when the bow slams.
+	if (!HomeBoat || !IsStandingOnBoat() || DeltaSeconds <= 0.f)
+	{
+		bHavePrevDeckVelocity = false;
+		return;
+	}
+	const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+	const FVector DeckVelocity = HomeBoat->GetDeckPointVelocity(Feet);
+	// Smoothed over a few frames: the physics step's own jitter isn't a jolt anyone would feel.
+	const FVector RawAccel = bHavePrevDeckVelocity ? (DeckVelocity - PrevDeckVelocity) / DeltaSeconds : FVector::ZeroVector;
+	SmoothedDeckAccel = bHavePrevDeckVelocity ? FMath::Lerp(SmoothedDeckAccel, RawAccel, FMath::Min(1.f, DeltaSeconds * 20.f)) : FVector::ZeroVector;
+	const FVector DeckAccel = SmoothedDeckAccel;
+	PrevDeckVelocity = DeckVelocity;
+	bHavePrevDeckVelocity = true;
+	if (!HasAuthority() || IsBraced() || StaggerCooldown > 0.f)
+	{
+		return;
+	}
+	const float G = 980.f;
+	const FVector Sideways(DeckAccel.X, DeckAccel.Y, 0.f);
+	const float SidewaysG = Sideways.Size() / G;
+	const float SlamG = FMath::Max(0.f, DeckAccel.Z) / G;     // the deck driving up into the feet
+	const float Worst = FMath::Max(SidewaysG, SlamG * 0.7f);
+	if (Worst < StaggerG)
+	{
+		return;
+	}
+	// A stumble against the deck's acceleration (a metre or two a second, like a real one): enough to throw you
+	// into the bulwark or the console, not over the side. The worst slams take your legs out from under you.
+	const bool bKnockedDown = Worst >= KnockdownG;
+	const FVector Throw = -Sideways.GetSafeNormal() * FMath::Clamp((SidewaysG - StaggerG) * 150.f + 80.f, 0.f, 250.f);
+	LaunchCharacter(FVector(Throw.X, Throw.Y, bKnockedDown ? 40.f : 0.f), false, false);
+	++StaggerCount;
+	StaggerCooldown = 0.6f;
+	if (bKnockedDown)
+	{
+		KnockdownTimeLeft = 1.4f;
+		++KnockdownCount;
+	}
+	UE_LOG(LogTemp, Verbose, TEXT("Riptide: %s thrown by a %.1f g jolt"), *GetName(), Worst);
+}
+
 void ARiptideCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	if (!bManningHelm && !bClimbing && !IsInSea())
+	{
+		UpdateBalance(DeltaSeconds);
+	}
+	// Knocked down: the view drops to the deck and comes back up as you get to your feet.
+	const float EyeZ = IsKnockedDown() ? 5.f : 70.f;
+	FVector Cam = FirstPersonCamera->GetRelativeLocation();
+	Cam.Z = FMath::FInterpTo(Cam.Z, EyeZ, DeltaSeconds, IsKnockedDown() ? 9.f : 3.f);
+	FirstPersonCamera->SetRelativeLocation(Cam);
 
 	if (HasAuthority() || IsLocallyControlled())
 	{
@@ -573,6 +672,10 @@ void ARiptideCharacter::DrawHud() const
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Climb aboard"));
 	}
+	else if (IsKnockedDown())
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::Orange, TEXT("Knocked off your feet!  Hold Shift near a rail at speed"));
+	}
 	else if (IsInSea() && HomeBoat)
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Swimming: the boarding ladder is on the stern, port side.  Space up, C dive"));
@@ -580,6 +683,12 @@ void ARiptideCharacter::DrawHud() const
 	else if (IsAtHelm())
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Take the helm"));
+	}
+	else if (HomeBoat && IsStandingOnBoat() && HomeBoat->GetSpeedKnots() > 12.f)
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, IsBraced() ? FColor::Green : FColor::White,
+			IsBraced() ? TEXT("Holding on") : HomeBoat->IsHandholdNear(GetActorLocation(), HandholdReach)
+				? TEXT("Shift  Hold on") : TEXT("Get to a rail: the boat's moving fast"));
 	}
 	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
 	{

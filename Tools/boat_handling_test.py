@@ -114,6 +114,12 @@ def local_point(boat, world_loc):
 def walk(world, boat, walker, t):
     """Steers the character round WALK_ROUTE, as a player holding the stick would, and records how it went."""
     w = state["walk"]
+    thrown = walker.get_stagger_count()
+    if thrown != w.get("thrown_seen", 0):
+        phase = phase_at(t)[3]
+        w.setdefault("thrown", {})[phase] = w.setdefault("thrown", {}).get(phase, 0) + thrown - w.get("thrown_seen", 0)
+        w["thrown_seen"] = thrown
+        w["thrown_at"] = t
     half = walker.get_editor_property("capsule_component").get_scaled_capsule_half_height()
     feet = walker.get_actor_location() - unreal.Vector(0, 0, half)
     local = local_point(boat, feet)
@@ -123,7 +129,8 @@ def walk(world, boat, walker, t):
         w["on_deck"] += 1
         # Standing on the deck, the feet should glide with it. A jump of more than 10 cm in one frame is the
         # character being shoved (it overlapped something), and shows as the view popping.
-        if w.get("prev_z") is not None and abs(local.z - w["prev_z"]) > 10.0:
+        recently_thrown = t - w.get("thrown_at", -99.0) < 0.8     # a slam's stumble, not a collision pop
+        if w.get("prev_z") is not None and abs(local.z - w["prev_z"]) > 10.0 and not recently_thrown:
             w.setdefault("hops", []).append((round(local.x), round(local.y), round(local.z - w["prev_z"]), round(t, 1)))
         w["prev_z"] = local.z
         w["lowest_on_deck"] = min(w["lowest_on_deck"], local.z)
@@ -135,6 +142,8 @@ def walk(world, boat, walker, t):
         w["prev_z"] = None
         spot = (int(round(local.x / 25.0) * 25), int(round(local.y / 25.0) * 25))
         w.setdefault("off_spots", {})[spot] = w.setdefault("off_spots", {}).get(spot, 0) + 1
+    # Walking laps at speed, the crew member holds on (Shift at the rails), as anyone sensible would.
+    walker.set_bracing(WALK_START <= t < WALK_END)
     if t < WALK_START or (t >= WALK_END and w["leg"] == 1):
         return
 
@@ -347,6 +356,7 @@ def verdict():
         checks.append(("keeps its footing (standing on the deck 95% of the time)", frac > 0.95,
                        "%.0f%%, feet %.0f..%.0f cm on the boat (deck is 20, foredeck up to 34), highest at x, y, t = %s"
                        % (frac * 100, w["lowest_on_deck"], w["highest_on_deck"], w.get("highest_at"))))
+        log("thrown off balance, by phase: %s; knocked down %d times" % (w.get("thrown", {}), walker.get_knockdown_count()))
         spots = sorted(w.get("off_spots", {}).items(), key=lambda kv: -kv[1])[:6]
         if spots:
             log("feet left the deck most at (x, y on the boat): %s" % ", ".join("%s x%d" % kv for kv in spots))

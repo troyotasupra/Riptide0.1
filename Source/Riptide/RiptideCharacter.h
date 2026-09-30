@@ -69,6 +69,24 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsClimbing() const { return bClimbing; }
 
+	/** Holding on to something solid (Shift near a handhold), or at the helm: slams and turns don't throw you. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsBraced() const;
+
+	/** Holds (or lets go) as if the brace key were held. For AI crews and automated tests. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetBracing(bool bHold);
+
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsKnockedDown() const { return KnockdownTimeLeft > 0.f; }
+
+	/** How many times the boat's motion has thrown this crew member off balance, and knocked them down. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	int32 GetStaggerCount() const { return StaggerCount; }
+
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	int32 GetKnockdownCount() const { return KnockdownCount; }
+
 	/** What this crew member carries: pockets and a backpack. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	URiptideStorageComponent* GetInventory() const { return Inventory; }
@@ -113,6 +131,24 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Crew")
 	float HelmReach = 110.f;
 
+	// Riding the boat: the deck's jolts (from slams, hard turns and big throttle changes) throw an unbraced crew member.
+	// Past StaggerG they stumble the way they're thrown; past KnockdownG they go down for a moment.
+
+	/** Deck acceleration (in g, beyond gravity) that throws you off balance, and that knocks you down. */
+	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
+	float StaggerG = 0.9f;
+
+	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
+	float KnockdownG = 2.2f;
+
+	/** How far a handhold can be to hold on to it (cm). */
+	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
+	float HandholdReach = 85.f;
+
+	/** Walking speed while holding on (shuffling along a rail). */
+	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
+	float BracedWalkSpeed = 150.f;
+
 	/** How close (cm) to the foot of the boarding ladder a swimmer has to be to climb it. */
 	UPROPERTY(EditAnywhere, Category = "Crew")
 	float LadderReach = 160.f;
@@ -131,6 +167,10 @@ private:
 	void OnJump(const FInputActionValue& Value);
 	void OnInteract(const FInputActionValue& Value);
 	void OnSwimUp(const FInputActionValue& Value);
+	void UpdateBalance(float DeltaSeconds);
+
+	UFUNCTION(Server, Reliable)
+	void ServerSetBracing(bool bHold);
 	void OnDive(const FInputActionValue& Value);
 	void StartClimb();
 	void UpdateClimb(float DeltaSeconds);
@@ -179,6 +219,26 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> DiveAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> BraceAction;
+
+	UPROPERTY(Replicated)
+	bool bBracing = false;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Knockdown)
+	float KnockdownTimeLeft = 0.f;
+
+	UFUNCTION()
+	void OnRep_Knockdown() {}
+
+	/** The deck point under the feet's velocity last frame (to feel its acceleration), and whether it's valid. */
+	FVector PrevDeckVelocity = FVector::ZeroVector;
+	bool bHavePrevDeckVelocity = false;
+	float StaggerCooldown = 0.f;
+	int32 StaggerCount = 0;
+	int32 KnockdownCount = 0;
+	FVector SmoothedDeckAccel = FVector::ZeroVector;
 
 	/** Climbing the ladder: time into the climb, and where it started on the boat. */
 	bool bClimbing = false;

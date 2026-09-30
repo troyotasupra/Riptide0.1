@@ -1242,6 +1242,67 @@ void ARiptideBoat::UpdateSearchlight(float DeltaSeconds)
 	SearchlightHead->SetRelativeRotation(FRotator(SearchlightPitchNow, SearchlightYawNow, 0.f));
 }
 
+// --- Handholds ---
+
+namespace
+{
+	/** The hull's sheer (gunwale) at X: half-width and height (riptide_boat_mesh.py's station). */
+	void SheerAt(float X, float& OutHalf, float& OutZ)
+	{
+		const float T = FMath::Clamp((X + HullExtent.X) / (2.f * HullExtent.X), 0.f, 1.f);
+		OutHalf = T < 0.35f ? HullExtent.Y : HullExtent.Y * FMath::Pow(FMath::Max(0.f, FMath::Cos((T - 0.35f) / 0.65f * UE_HALF_PI)), 0.75f);
+		OutZ = DeckZ + 55.f + 45.f * FMath::Pow(T, 2.2f);
+	}
+
+	float DistToSegment(const FVector& P, const FVector& A, const FVector& B)
+	{
+		return FMath::PointDistToSegment(P, A, B);
+	}
+}
+
+bool ARiptideBoat::IsHandholdNear(FVector World, float Reach) const
+{
+	const FVector P = HullBody->GetComponentTransform().InverseTransformPosition(World);
+	// The gunwale all round (and the bow rail above it forward): within reach of the side, at hand height.
+	float Half, SheerZ;
+	SheerAt(P.X, Half, SheerZ);
+	if (P.X > -HullExtent.X - 20.f && P.X < HullExtent.X && Half - FMath::Abs(P.Y) < Reach && FMath::Abs(P.Z - SheerZ) < 120.f)
+	{
+		return true;
+	}
+	// The stern: the transom and stern box top.
+	if (P.X < -HullExtent.X + 60.f + Reach && FMath::Abs(P.Z - (DeckZ + 55.f)) < 120.f)
+	{
+		return true;
+	}
+	struct FRail { FVector A, B; };
+	static const FRail Rails[] = {
+		{ FVector(-38.f, -49.f, DeckZ + 70.f), FVector(22.f, -49.f, DeckZ + 70.f) },    // console grab rails
+		{ FVector(-38.f, 49.f, DeckZ + 70.f), FVector(22.f, 49.f, DeckZ + 70.f) },
+		{ FVector(-150.f, -48.f, DeckZ), FVector(-158.f, -60.f, DeckZ + 220.f) },       // T-top legs
+		{ FVector(-150.f, 48.f, DeckZ), FVector(-158.f, 60.f, DeckZ + 220.f) },
+		{ FVector(20.f, -48.f, DeckZ), FVector(28.f, -60.f, DeckZ + 220.f) },
+		{ FVector(20.f, 48.f, DeckZ), FVector(28.f, 60.f, DeckZ + 220.f) },
+		{ FVector(-182.f, -36.f, DeckZ + 124.f), FVector(-182.f, 36.f, DeckZ + 124.f) }, // leaning post rail
+		{ FVector(-45.f, -30.f, DeckZ + 95.f), FVector(-45.f, 30.f, DeckZ + 95.f) },    // the dash and wheel
+		{ FVector(345.f, 0.f, DeckZ + 14.f), FVector(345.f, 0.f, DeckZ + 46.f) },       // tow post
+	};
+	for (const FRail& Rail : Rails)
+	{
+		if (DistToSegment(P, Rail.A, Rail.B) < Reach)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+FVector ARiptideBoat::GetDeckPointVelocity(const FVector& World) const
+{
+	return HullBody->GetPhysicsLinearVelocity()
+		+ FVector::CrossProduct(HullBody->GetPhysicsAngularVelocityInRadians(), World - HullBody->GetCenterOfMass());
+}
+
 FTransform ARiptideBoat::GetLadderFootTransform() const
 {
 	// The ladder hangs off the transom's port side (riptide_boat_mesh.py's _fittings), its foot in the water.
