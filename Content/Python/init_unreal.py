@@ -1,10 +1,12 @@
-"""Runs automatically when the editor opens. Imports the game's sounds and builds the ocean test map the first time."""
+"""Runs automatically when the editor opens. Imports the game's sounds and builds the ocean test map and the main menu
+map the first time."""
 
 import os
 
 import unreal
 
 MAP_PATH = "/Game/Riptide/Maps/Ocean_Test"
+MENU_MAP_PATH = "/Game/Riptide/Maps/MainMenu"
 AUDIO_PATH = "/Game/Riptide/Audio"
 
 # Sounds, imported from SourceAssets/Audio (credited in Docs/CREDITS.md). Each is levelled so that at volume 1
@@ -24,6 +26,11 @@ SOUNDS = {
     "S_Hull_Slap_15": ("hull_slap_15.ogg", False, -17.8, -1.3, -22.0),
 }
 PEAK_CEILING_DBFS = -8.0
+
+# Each sound's class, for the settings screen's volumes (URiptideSettingsSave): the sea's ambience on its own, everything
+# else (the boat, the water) under effects.
+SOUND_CLASSES = ("SC_Effects", "SC_Ambient")
+AMBIENT_SOUNDS = ("S_Ocean_Ambience",)
 
 
 def _sound_volume(measured_lufs, measured_peak, target_lufs):
@@ -48,7 +55,15 @@ def import_sounds():
         unreal.log(f"Riptide: importing {len(tasks)} sounds")
         unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
 
-    # Levels are applied every launch, so retuning a target above takes effect without a reimport.
+    classes = {}
+    for name in SOUND_CLASSES:
+        path = f"{AUDIO_PATH}/{name}"
+        if not unreal.EditorAssetLibrary.does_asset_exist(path):
+            unreal.AssetToolsHelpers.get_asset_tools().create_asset(name, AUDIO_PATH, unreal.SoundClass, unreal.SoundClassFactory())
+            unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+        classes[name] = unreal.load_asset(path)
+
+    # Levels (and classes) are applied every launch, so retuning a target above takes effect without a reimport.
     for name, (_filename, loops, lufs, peak, target) in SOUNDS.items():
         path = f"{AUDIO_PATH}/{name}"
         sound = unreal.load_asset(path)
@@ -56,9 +71,11 @@ def import_sounds():
             unreal.log_error(f"Riptide: sound {name} failed to import")
             continue
         volume = round(_sound_volume(lufs, peak, target), 4)
-        if sound.get_editor_property("looping") != loops or abs(sound.get_editor_property("volume") - volume) > 1e-4:
+        sound_class = classes.get("SC_Ambient" if name in AMBIENT_SOUNDS else "SC_Effects")
+        if sound.get_editor_property("looping") != loops or abs(sound.get_editor_property("volume") - volume) > 1e-4                 or sound.get_editor_property("sound_class_object") != sound_class:
             sound.set_editor_property("looping", loops)
             sound.set_editor_property("volume", volume)
+            sound.set_editor_property("sound_class_object", sound_class)
             unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
 
 
@@ -857,6 +874,77 @@ def build_ocean_test_map():
     unreal.log("Riptide: ocean test map ready")
 
 
+# Bump when the main menu map's recipe below changes, so every machine rebuilds it on its next launch.
+MENU_MAP_VERSION = "3"
+
+# The menu's night: a low moon ahead of the camera (which looks across the boat from its starboard side), laying a
+# path of light on the sea behind the boat, so the boat and its crew stand dark against it.
+# The menu camera (ARiptideMenuCamera) sets its own exposure and grade; the scene itself (boat, searchlight sweep,
+# crew member) is set up by ARiptideMenuGameMode when the map starts.
+MOON = {"yaw": 110.0, "pitch": -14.0, "intensity": 0.6, "colour": (0.62, 0.72, 1.0)}
+
+
+def _night_fog(fog):
+    """Thicker volumetric fog than Ocean_Test's, a sea haze at night, so the searchlight's beam stands out in the air."""
+    comp = fog.get_component_by_class(unreal.ExponentialHeightFogComponent)
+    comp.set_editor_property("fog_density", 0.025)
+    comp.set_editor_property("fog_height_falloff", 0.25)
+    comp.set_editor_property("fog_inscattering_luminance", unreal.LinearColor(0.004, 0.007, 0.014, 1.0))
+    comp.set_editor_property("enable_volumetric_fog", True)
+    comp.set_editor_property("volumetric_fog_extinction_scale", 0.35)
+    comp.set_editor_property("volumetric_fog_scattering_distribution", 0.75)
+    comp.set_editor_property("volumetric_fog_albedo", unreal.Color(r=230, g=235, b=245, a=255))
+
+
+def build_main_menu_map():
+    """MainMenu: the same open sea and swell as Ocean_Test, at night, run by ARiptideMenuGameMode."""
+    assets = unreal.EditorAssetLibrary
+    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    if assets.does_asset_exist(MENU_MAP_PATH):
+        if assets.get_metadata_tag(unreal.load_asset(MENU_MAP_PATH), "RiptideVersion") == MENU_MAP_VERSION:
+            return
+        assets.delete_asset(MENU_MAP_PATH)
+
+    unreal.log("Riptide: building the main menu map")
+    levels.new_level(MENU_MAP_PATH)
+
+    moon = _spawn(unreal.DirectionalLight, (0, 0, 5000), yaw=MOON["yaw"], pitch=MOON["pitch"])
+    moon_light = moon.get_component_by_class(unreal.DirectionalLightComponent)
+    moon_light.set_editor_property("atmosphere_sun_light", True)
+    moon_light.set_editor_property("intensity", MOON["intensity"])
+    moon_light.set_editor_property("light_color", unreal.Color(r=int(MOON["colour"][0] * 255), g=int(MOON["colour"][1] * 255),
+                                                                   b=int(MOON["colour"][2] * 255), a=255))
+    moon_light.set_editor_property("volumetric_scattering_intensity", 0.3)
+
+    _spawn(unreal.SkyAtmosphere)
+    sky_light = _spawn(unreal.SkyLight, (0, 0, 1000))
+    sky_light.get_component_by_class(unreal.SkyLightComponent).set_editor_property("real_time_capture", True)
+    _night_fog(_spawn(unreal.ExponentialHeightFog))
+
+    zone = _spawn(unreal.WaterZone)
+    ocean = _spawn_ocean()
+    _open_up_sea(zone, ocean)
+    _set_swell(ocean)
+    _cover_waves(ocean)
+
+    # The sea all around, quieter than in the game: under the menu.
+    ambience = _spawn(unreal.AmbientSound)
+    ambience_audio = ambience.get_component_by_class(unreal.AudioComponent)
+    ambience_audio.set_editor_property("sound", unreal.load_asset(f"{AUDIO_PATH}/S_Ocean_Ambience"))
+    ambience_audio.set_editor_property("allow_spatialization", False)
+    ambience_audio.set_editor_property("volume_multiplier", 0.6)
+
+    # The boat is launched here.
+    _spawn(unreal.PlayerStart, (0, 0, 150))
+
+    world = unreal.EditorLevelLibrary.get_editor_world()
+    world.get_world_settings().set_editor_property("default_game_mode", unreal.RiptideMenuGameMode)
+    levels.save_current_level()
+    assets.set_metadata_tag(unreal.load_asset(MENU_MAP_PATH), "RiptideVersion", MENU_MAP_VERSION)
+    assets.save_asset(MENU_MAP_PATH, only_if_is_dirty=False)
+    unreal.log("Riptide: main menu map ready")
+
+
 def _running_editor():
     """True when the full editor is open. The project also runs as a standalone game (-game) or server, where this
     script still starts but the editor's tools it uses don't exist (calling them crashes)."""
@@ -881,6 +969,12 @@ def _set_up_project():
         make_boat_assets()
     except Exception as err:  # noqa: BLE001 - never block the editor from opening
         unreal.log_error(f"Riptide: could not build the boat model: {err}")
+
+    # Before the ocean test map, which the editor is left on.
+    try:
+        build_main_menu_map()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build the main menu map: {err}")
 
     try:
         build_ocean_test_map()

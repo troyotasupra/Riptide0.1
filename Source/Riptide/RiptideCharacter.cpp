@@ -22,6 +22,7 @@
 #include "RiptideCharacterMovement.h"
 #include "RiptidePlayerState.h"
 #include "RiptideInventoryWidget.h"
+#include "RiptideSettings.h"
 #include "RiptideStorageComponent.h"
 #include "Engine/GameViewportClient.h"
 #include "Widgets/SWeakWidget.h"
@@ -199,7 +200,7 @@ void ARiptideCharacter::BuildInput()
 	InventoryAction = NewObject<UInputAction>(this, TEXT("IA_Inventory"));
 	InventoryAction->ValueType = EInputActionValueType::Boolean;
 	WalkMapping->MapKey(InventoryAction, EKeys::Tab);
-	WalkMapping->MapKey(InventoryAction, EKeys::Gamepad_Special_Right);
+	WalkMapping->MapKey(InventoryAction, EKeys::Gamepad_Special_Left);   // View; Start (Menu) opens the in-game menu
 }
 
 void ARiptideCharacter::SetHomeBoat(ARiptideBoat* Boat)
@@ -356,7 +357,7 @@ void ARiptideCharacter::OnLook(const FInputActionValue& Value)
 	// Same feel as the helm camera: degrees per unit of mouse or stick, pitch up for mouse up.
 	if (AController* C = GetController())
 	{
-		const FVector2D Delta = Value.Get<FVector2D>();
+		const FVector2D Delta = Value.Get<FVector2D>() * RiptideSettings::LookScale();     // the player's sensitivity and invert
 		FRotator View = C->GetControlRotation();
 		View.Yaw += Delta.X * LookSensitivity;
 		View.Pitch = FMath::Clamp(FRotator::NormalizeAxis(View.Pitch + Delta.Y * LookSensitivity), -85.f, 85.f);
