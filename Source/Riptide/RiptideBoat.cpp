@@ -25,6 +25,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "RiptideCharacter.h"
 #include "RiptideGauge.h"
+#include "RiptideSettings.h"
 #include "RiptideSprayComponent.h"
 #include "RiptideStorageComponent.h"
 #include "RiptideWakeFoamComponent.h"
@@ -1444,7 +1445,7 @@ void ARiptideBoat::OnCutThrottle(const FInputActionValue& Value)
 
 void ARiptideBoat::OnLook(const FInputActionValue& Value)
 {
-	const FVector2D Delta = Value.Get<FVector2D>();
+	const FVector2D Delta = Value.Get<FVector2D>() * RiptideSettings::LookScale();     // the player's sensitivity and invert
 	LookYaw = FMath::Clamp(LookYaw + Delta.X * LookSensitivity, -170.f, 170.f);
 	LookPitch = FMath::Clamp(LookPitch + Delta.Y * LookSensitivity, -70.f, 70.f);
 	HelmCamera->SetRelativeRotation(FRotator(LookPitch, LookYaw, 0.f));

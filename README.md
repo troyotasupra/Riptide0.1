@@ -4,7 +4,7 @@ Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLA
 
 ## Current state: milestone 1 (the boat), and walking its deck from milestone 2
 - A full-size 26 ft (7.9 m, 2.6 m beam) aluminium centre-console patrol boat (deep-V hull, fender collar, T-top, bow rail) with twin 300 hp outboards (about 30 knots flat out) that swing as they steer and tilt with the trim on brackets fixed to the transom, floating on the Water plugin ocean. Each motor pushes only while its own prop is in the water. Trimming out lifts the bow at speed, trimming in holds it down. It's the standard boat of the islands' mercenary crews, which players can take in a fight or steal: fitted out for patrol work, with open-array radar, satcom and GPS antennas, VHF and AIS whips, masthead and bow nav lights, a searchlight and FLIR camera, a loudhailer, an overhead radio box, cleats, a tow post, bow and stern eyes, trim tabs, a boarding ladder, weapon mount sockets, and a stern bulkhead and splashwell closing the cockpit off from the sea. The model is our own, generated in code by `Content/Python/riptide_boat_mesh.py` and imported when the editor opens; change the shape there and bump `BOAT_MODEL_VERSION` in `init_unreal.py` to rebuild it.
-- The ocean test map (2 km of open sea with a moderate 1-1.5 m swell) builds itself the first time the editor opens (`Content/Python/init_unreal.py`). To rebuild it after changing that script, delete `Content/Riptide/Maps/Ocean_Test.umap` with the editor closed.
+- The ocean test map (2 km of open sea with a moderate 1-1.5 m swell) builds itself the first time the editor opens (`Content/Python/init_unreal.py`), and so does the main menu map (`MainMenu`, the same sea at night). The game starts on MainMenu; the editor opens on Ocean_Test, so Play in the editor puts you straight on the deck. To rebuild it after changing that script, delete `Content/Riptide/Maps/Ocean_Test.umap` with the editor closed.
 - You start on foot on the deck, in first person, and can walk all of it: round the console on either side, up to the bow and across the aft deck, at rest or at full speed through turns. Step up to the wheel and press E to take the helm; E again lets go (the throttle stays where you left it). At speed the deck's jolts throw you: slams, hard turns and throttle changes stagger an unbraced crew member, and the worst slams knock you off your feet. Hold Shift at a handhold to ride it out (you can still shuffle along). At the helm you're holding the wheel. Go over the side and you swim (where you look; Space swims up, C or Ctrl dives). The boarding ladder on the stern's port side reaches into the water: swim into it and you take hold. W climbs, S climbs down, and letting go of both keeps you hanging there, so you can look over the transom before going aboard; W at the top takes you over onto the deck, and Space (or S at the bottom) lets go. One crew member on the ladder at a time. The VHF radio in the overhead box has a hand mic on a coiled cord: look at it and press E to take it (M at the helm), look at its clip and press E to hang it up; walk out of the cord's reach and it's pulled back onto its clip. The wheel turns with the motors, and the props spin with the engines.
 - At the helm: a twin-lever throttle (centred is neutral; forward engages ahead, then opens the throttle; back is astern), and live gauges on the dash: tachometer, speedometer, and a screen showing gear, throttle, trim, fuel, heading and warnings.
 - Fuel and engines: a 450 L tank (about 70% full when you find a boat), burned at twin-250 rates (about 190 L an hour flat out, a trickle at idle). Carry the fuel drum from the stern locker to the filler on the starboard gunwale and E pours its 20 L in. Each motor has its own health: a damaged one sputters, a dead one stops, and the boat limps on the other, pulling toward the dead side. The dash warns which motor, and when fuel runs low.
@@ -14,7 +14,25 @@ Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLA
 - Spray: at speed the bow wave peels off in fans of spray, slamming into a swell throws bursts out both sides, and the props churn whitewater behind the stern.
 - The boat leaves a real wake: its hull pushes the Water plugin's fluid simulation (Epic's boat force, scaled for a small hull), so waves and foam spread behind it in a V; white prop churn trails from the transom (`RiptideWakeFoamComponent`). Materials are built by `init_unreal.py`.
 - Sound: the twin engines rev with the throttle and races when the prop leaves the water; water wash rises with speed; the bow slaps into waves; ocean ambience all around. Sounds are imported from `SourceAssets/Audio` when the editor opens (credits in `Docs/CREDITS.md`).
+- The game opens on the main menu: a live shot of the patrol boat at night, drifting on the swell with its searchlight sweeping slowly across the water and a crew member in kit standing dark at the bow rail. From there you host or join a game with up to four crew, set your callsign and look, and change the settings (see "Playing together" below).
 - Builds and runs on Unreal Engine 5.7 (Windows, Visual Studio 2022).
+
+## Playing together
+Riptide is online co-op for up to four players, over Steam when it's running.
+
+- **Host:** Main menu, Host game, then Friends only (your Steam friends, and anyone you invite) or Public (listed in everyone's browser), then Host. You start on the boat. To bring friends, press Esc (P in the editor) in the game and choose Invite friends: it opens the Steam overlay's invite list. Friends can also join you from their Steam friends list ("Join game").
+- **Join:** Main menu, Join game. The browser lists public games and your Steam friends' games (host, crew, ping): pick one and press Join, or double-click it. Accepting a Steam invite joins straight away, even from the desktop.
+- **Without Steam** (it isn't running, or you start the game with `-nosteam`), the game uses the local network instead: hosted games show in the Join browser on the same network, and anyone can join by typing the host's IP address under Join by IP address (the host's address is shown on the Host screen and in the in-game menu). Players outside the host's network need UDP port 7777 forwarded to the host's PC.
+- **Steam setup:** Steam has to be running and logged in before the game starts. Until Riptide has its own Steam app, it uses Valve's public test app (480, "Spacewar"), so Steam shows you as playing Spacewar. Playing in the editor always uses the local network, not Steam.
+- **Your crew member:** Main menu, Crew: your callsign (letters, digits, `-`, `_` and `.`) and a row for each part of your look (build, skin, hair, beard, headgear, face, uniform, vest, gear colour, pack, gloves), with Randomise. The preview turns when you drag it (or Q / E, LB / RB). Save keeps it; every game you host or join, the others see you by that callsign and in that look.
+- **Leaving:** the in-game menu's Leave to main menu (as the host, that ends the game for everyone), or Quit to desktop. If the connection drops or a join fails, you're back at the main menu with a message saying why.
+- **Settings** (main menu, or the in-game menu): look sensitivity, invert look, field of view, master / effects / ambience volume, graphics quality, display mode, resolution, VSync and frame-rate limit. Changes take effect at once and are saved when you go back.
+
+Menus work with the mouse, the keyboard (arrows to move, Left / Right to change a setting, Enter to choose, Esc to go back) and a gamepad (stick or D-pad, A to choose, B to go back). The in-game menu doesn't pause anything: the boat and your crew carry on while it's open, but your crew member stands still.
+
+| In the game | Keyboard / mouse | Gamepad |
+|---|---|---|
+| In-game menu (Resume, Settings, Invite friends, Leave, Quit) | Esc (P in the editor, where Esc stops play) | Start (Menu) |
 
 ## Handling test
 `Tools/boat_handling_test.py` plays Ocean_Test hands-free and checks the boat floats, stays upright, drives, and steers the right way. It also checks:
@@ -35,6 +53,15 @@ UnrealEditor Riptide.uproject -nullrhi -unattended -nosplash -nosound -ExecCmds=
 
 The result is at the end of `Saved/Logs/Riptide.log` (search for `RiptideTest`). Swap `-nullrhi` for `-RenderOffscreen` to also save first-person screenshots to `Saved/Screenshots` and report the frame rate.
 
+## Two-player test
+`Tools/multiplayer_test.py` starts two copies of the game headless (on the local network, `-nosteam`): one hosts from the main menu as Alpha-1, the other finds the game in the Join browser and joins as Bravo-7 with its own look. It checks both sides see Bravo-7 by name, in its look, in its own crew member standing on the deck, that the in-game menu opens and closes, and that leaving brings the client back to the main menu while the host's game goes on. Run it with any Python 3, with the editor closed:
+
+```
+python Tools/multiplayer_test.py
+```
+
+It prints each check and PASS or FAIL (the two logs are `Saved/Logs/MultiplayerTest_host.log` and `..._client.log`). Add `--shots` to render the client and save screenshots of the browser and the in-game menu to `Saved/Screenshots`. Set `UE_EDITOR` to UnrealEditor's path if the engine isn't installed in the default place.
+
 ## Sound levels
 Each sound is levelled on import to a target loudness, with peaks held below -8 dBFS (the table in `Content/Python/init_unreal.py`). The full mix sits around -21.5 LUFS at full throttle (the loudest moment) and -26 LUFS at rest, with peaks no higher than -8.7 dBFS. Averaged over play, that fits the common -24 ±2 LUFS guideline for games. The engine is two real outboard recordings (low and high revs), crossfaded and pitched with the throttle. Each of the twin motors plays its own, slightly out of tune with the other, at half power, so together they're exactly as loud as the single engine the levels were set for. To check after changing sounds:
 - `Tools/measure_loudness.py` measures WAV files (peak, RMS, LUFS). To get WAVs, export the imported sounds from the editor.
@@ -50,7 +77,7 @@ Each sound is levelled on import to a target loudness, with peaks held below -8 
 | Dive (in the water) | C or Ctrl | B |
 | On the ladder: climb up / down (let go of both to hang on), let go | W / S, Space | Left stick, A |
 | Take the helm (at the wheel), take or hang up the radio mic (looking at it), refuel (at the filler with a fuel drum), or open a locker (beside it) | E | X |
-| Inventory (Tab, E or Esc closes it) | Tab | Menu (B or X closes it) |
+| Inventory (Tab, E or Esc closes it) | Tab | View (B, X or Start closes it) |
 
 ## Helm controls
 | Action | Keyboard / mouse | Gamepad |

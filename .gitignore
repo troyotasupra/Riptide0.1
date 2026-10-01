@@ -16,6 +16,7 @@ __pycache__/
 
 # Built by Content/Python/init_unreal.py on first editor launch
 Content/Riptide/Maps/Ocean_Test.umap
+Content/Riptide/Maps/MainMenu.umap
 # Imported by Content/Python/init_unreal.py from SourceAssets/Audio on editor launch
 Content/Riptide/Audio/
 # Created by Content/Python/init_unreal.py on editor launch

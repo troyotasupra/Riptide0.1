@@ -19,6 +19,11 @@
 		{ "Name": "ProceduralMeshComponent", "Enabled": true },
 		{ "Name": "PythonScriptPlugin", "Enabled": true },
 		{ "Name": "EditorScriptingUtilities", "Enabled": true },
+		{ "Name": "OnlineSubsystem", "Enabled": true },
+		{ "Name": "OnlineSubsystemUtils", "Enabled": true },
+		{ "Name": "OnlineSubsystemNull", "Enabled": true },
+		{ "Name": "OnlineSubsystemSteam", "Enabled": true },
+		{ "Name": "SteamSockets", "Enabled": true },
 		{ "Name": "AndroidFileServer", "Enabled": false }
 	]
 }

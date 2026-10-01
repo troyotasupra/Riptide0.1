@@ -6,6 +6,7 @@
 #include "WaterBodyOceanActor.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
+#include "RiptideHUD.h"
 #include "RiptidePlayerState.h"
 #include "RiptidePlayerController.h"
 
@@ -14,6 +15,7 @@ ARiptideGameMode::ARiptideGameMode()
 	DefaultPawnClass = ARiptideCharacter::StaticClass();
 	PlayerControllerClass = ARiptidePlayerController::StaticClass();
 	PlayerStateClass = ARiptidePlayerState::StaticClass();
+	HUDClass = ARiptideHUD::StaticClass();      // the in-game menu (Esc)
 	BoatClass = ARiptideBoat::StaticClass();
 }
 
