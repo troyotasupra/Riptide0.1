@@ -1,8 +1,11 @@
-"""Runs automatically when the editor opens. Builds the ocean test map the first time."""
+"""Runs automatically when the editor opens. Builds the test maps and the island ground material the first time."""
 
 import unreal
 
 MAP_PATH = "/Game/Riptide/Maps/Ocean_Test"
+ARCHIPELAGO_MAP_PATH = "/Game/Riptide/Maps/Archipelago_Test"
+TERRAIN_MATERIAL_DIR = "/Game/Riptide/Materials"
+TERRAIN_MATERIAL_NAME = "M_IslandTerrain"
 
 
 def _spawn(actor_class, location=(0.0, 0.0, 0.0), yaw=0.0, pitch=0.0):
@@ -16,6 +19,10 @@ def _spawn(actor_class, location=(0.0, 0.0, 0.0), yaw=0.0, pitch=0.0):
 
 # Open water the test map covers, in cm (2 km square). The boat does ~15 kn, so this is a few minutes of driving.
 SEA_SIZE = 200000.0
+
+# The archipelago map's sea: 24 km square, covering the home chain (4.5 km out) and the military cordon
+# (6.5-9.5 km out) around the start island at the centre.
+ARCHIPELAGO_SEA_SIZE = 2400000.0
 
 # The ocean treats the inside of its shoreline spline as dry land for an island. There's no island yet,
 # so the shoreline is shrunk to a 4 m loop parked in a far corner, leaving the spawn point in open water.
@@ -52,8 +59,8 @@ def _spawn_ocean():
     return _spawn(unreal.WaterBodyOcean)
 
 
-def _open_up_sea(zone, ocean):
-    zone.set_editor_property("zone_extent", unreal.Vector2D(SEA_SIZE, SEA_SIZE))
+def _open_up_sea(zone, ocean, sea_size=SEA_SIZE):
+    zone.set_editor_property("zone_extent", unreal.Vector2D(sea_size, sea_size))
 
     shore = ocean.get_component_by_class(unreal.WaterSplineComponent)
     cx, cy = SHORE_CENTRE
@@ -64,9 +71,9 @@ def _open_up_sea(zone, ocean):
     shore.update_spline()
 
     body = ocean.get_water_body_component()
-    body.set_editor_property("collision_extents", unreal.Vector(SEA_SIZE / 2.0, SEA_SIZE / 2.0, 10000.0))
+    body.set_editor_property("collision_extents", unreal.Vector(sea_size / 2.0, sea_size / 2.0, 10000.0))
     # Set last: changing the extents rebuilds the ocean mesh, picking up the new shoreline too.
-    body.set_editor_property("ocean_extents", unreal.Vector2D(SEA_SIZE, SEA_SIZE))
+    body.set_editor_property("ocean_extents", unreal.Vector2D(sea_size, sea_size))
 
 
 def _set_swell(ocean):
@@ -80,15 +87,7 @@ def _set_swell(ocean):
     unreal.log(f"Riptide: swell up to {ocean.get_water_body_component().get_max_wave_height():.0f} cm")
 
 
-def build_ocean_test_map():
-    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-
-    if unreal.EditorAssetLibrary.does_asset_exist(MAP_PATH):
-        return
-
-    unreal.log("Riptide: building ocean test map")
-    levels.new_level(MAP_PATH)
-
+def _spawn_sky():
     sun = _spawn(unreal.DirectionalLight, (0, 0, 5000), yaw=-40.0, pitch=-35.0)
     sun_light = sun.get_component_by_class(unreal.DirectionalLightComponent)
     sun_light.set_editor_property("atmosphere_sun_light", True)
@@ -100,6 +99,18 @@ def build_ocean_test_map():
     _spawn(unreal.ExponentialHeightFog)
     _spawn(unreal.VolumetricCloud)
 
+
+def build_ocean_test_map():
+    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+
+    if unreal.EditorAssetLibrary.does_asset_exist(MAP_PATH):
+        return False
+
+    unreal.log("Riptide: building ocean test map")
+    levels.new_level(MAP_PATH)
+
+    _spawn_sky()
+
     zone = _spawn(unreal.WaterZone)
     ocean = _spawn_ocean()
     _open_up_sea(zone, ocean)
@@ -109,11 +120,98 @@ def build_ocean_test_map():
     _spawn(unreal.PlayerStart, (0, 0, 150))
 
     levels.save_current_level()
-    levels.load_level(MAP_PATH)
     unreal.log("Riptide: ocean test map ready")
+    return True
 
 
-try:
-    build_ocean_test_map()
-except Exception as err:  # noqa: BLE001 - never block the editor from opening
-    unreal.log_error(f"Riptide: could not build ocean test map: {err}")
+def build_terrain_material():
+    """Island ground material: colour comes from the mesh's vertex colours, and wet sand (vertex alpha) is glossier.
+
+    A stand-in until CC0 ground textures are chosen; the islands' vertex colours already say where sand, soil and
+    rock are, so textures can be blended in by the same colours later.
+    """
+    path = f"{TERRAIN_MATERIAL_DIR}/{TERRAIN_MATERIAL_NAME}"
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        return
+
+    unreal.log("Riptide: building island ground material")
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    material = tools.create_asset(TERRAIN_MATERIAL_NAME, TERRAIN_MATERIAL_DIR, unreal.Material, unreal.MaterialFactoryNew())
+    edit = unreal.MaterialEditingLibrary
+
+    colour = edit.create_material_expression(material, unreal.MaterialExpressionVertexColor, -600, 0)
+    edit.connect_material_property(colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    # Dry ground is matte; wet sand at the waterline has a sheen.
+    roughness = edit.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -300, 200)
+    roughness.set_editor_property("const_a", 0.92)
+    roughness.set_editor_property("const_b", 0.35)
+    edit.connect_material_expressions(colour, "A", roughness, "Alpha")
+    edit.connect_material_property(roughness, "", unreal.MaterialProperty.MP_ROUGHNESS)
+
+    edit.recompile_material(material)
+    unreal.EditorAssetLibrary.save_loaded_asset(material)
+    unreal.log("Riptide: island ground material ready")
+
+
+def _try_local_water(zone):
+    # Lets the water mesh follow the camera instead of covering the whole 24 km zone at full detail. Only in
+    # newer engine versions; without it the zone still works, it just costs more.
+    try:
+        zone.set_editor_property("enable_local_only_tessellation", True)
+        unreal.log("Riptide: water tessellates locally around the camera")
+    except Exception as err:  # noqa: BLE001 - optional engine feature
+        unreal.log_warning(f"Riptide: local-only water tessellation not available ({err})")
+
+
+def build_archipelago_test_map():
+    """The island chain: a world director loads islands around the boat as it sails."""
+    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+
+    if unreal.EditorAssetLibrary.does_asset_exist(ARCHIPELAGO_MAP_PATH):
+        return False
+
+    unreal.log("Riptide: building archipelago test map")
+    levels.new_level(ARCHIPELAGO_MAP_PATH)
+
+    _spawn_sky()
+
+    zone = _spawn(unreal.WaterZone)
+    ocean = _spawn_ocean()
+    _open_up_sea(zone, ocean, ARCHIPELAGO_SEA_SIZE)
+    _set_swell(ocean)
+    _try_local_water(zone)
+
+    director = _spawn(unreal.RiptideWorldDirector)
+
+    # The game mode starts boats off the start island's beach; this player start is only a fallback.
+    try:
+        spawn = director.get_start_spawn_transform()
+        loc = spawn.translation
+        _spawn(unreal.PlayerStart, (loc.x, loc.y, loc.z), yaw=spawn.rotation.rotator().yaw)
+    except Exception as err:  # noqa: BLE001 - the fallback start is not essential
+        unreal.log_warning(f"Riptide: placing fallback player start at the origin ({err})")
+        _spawn(unreal.PlayerStart, (0, 0, 150))
+
+    levels.save_current_level()
+    unreal.log("Riptide: archipelago test map ready")
+    return True
+
+
+def build_all():
+    built = False
+    try:
+        build_terrain_material()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build island ground material: {err}")
+    for builder in (build_ocean_test_map, build_archipelago_test_map):
+        try:
+            built = builder() or built
+        except Exception as err:  # noqa: BLE001 - never block the editor from opening
+            unreal.log_error(f"Riptide: {builder.__name__} failed: {err}")
+    if built:
+        # Building leaves the last new map open; go back to the startup map.
+        unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(MAP_PATH)
+
+
+build_all()
