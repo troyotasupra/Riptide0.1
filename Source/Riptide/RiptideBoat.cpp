@@ -58,7 +58,7 @@ namespace
 	// Each tilts on the tube at the top of its clamp bracket, which hooks over the transom's motor notch.
 	const FVector OutboardPivot(-HullExtent.X - 5.f, -38.f, 40.f);
 	const FVector OutboardPivotStarboard(-HullExtent.X - 5.f, 38.f, 40.f);
-	const FVector PropInOutboard(-45.f, 0.f, -100.f);
+	const FVector PropInOutboard(-58.f, 0.f, -100.f);
 	const float WaterlineZ = -HullExtent.Z + 20.f;
 
 	// The deck, where the crew stands (see riptide_boat_mesh.py): flat at this height from the transom to the
@@ -73,14 +73,14 @@ namespace
 	// light at the stem, and floods under the canopy over the cockpit.
 	const FVector SearchlightPivot(26.f, 40.f, DeckZ + 244.f);
 	const FVector MastheadLightPoint(-162.f, 0.f, DeckZ + 317.f);
-	const FVector BowLightPoint(383.f, 0.f, DeckZ + 104.f);
+	const FVector BowLightPoint(381.f, 0.f, DeckZ + 102.f);
 
 	// The radar antenna's hub, on its pedestal on the T-top (riptide_boat_mesh.py's RADAR).
 	const FVector RadarHub(-70.f, 0.f, DeckZ + 258.f);
 
 	// The steering wheel's hub on the helm's shaft, its face tilted back toward the helmsman (WHEEL_CENTRE and
 	// WHEEL_TILT_DEG).
-	const FVector WheelCentre(-53.f, 0.f, DeckZ + 88.f);
+	const FVector WheelCentre(-56.f, 0.f, DeckZ + 88.f);
 	constexpr float WheelTiltDeg = 35.f;
 
 	// The radio's hand mic: its clip under the overhead box, the cord's jack on the radio, and where the cord leaves
@@ -187,6 +187,12 @@ ARiptideBoat::ARiptideBoat()
 	MotorBracketStarboard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorBracketStarboard"));
 	MotorBracketStarboard->SetupAttachment(HullBody);
 	MotorBracketStarboard->SetRelativeLocation(OutboardPivotStarboard);
+	MotorSwivel = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorSwivel"));
+	MotorSwivel->SetupAttachment(HullBody);
+	MotorSwivel->SetRelativeLocation(OutboardPivot);
+	MotorSwivelStarboard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorSwivelStarboard"));
+	MotorSwivelStarboard->SetupAttachment(HullBody);
+	MotorSwivelStarboard->SetRelativeLocation(OutboardPivotStarboard);
 	ThrottleLeverPort = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThrottleLeverPort"));
 	ThrottleLeverPort->SetupAttachment(HullBody);
 	ThrottleLeverPort->SetRelativeLocation(ThrottlePivotPort);
@@ -268,7 +274,8 @@ ARiptideBoat::ARiptideBoat()
 	RadarArray = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RadarArray"));
 	RadarArray->SetupAttachment(HullBody);
 	RadarArray->SetRelativeLocation(RadarHub);
-	for (UStaticMeshComponent* Part : { MotorBracket.Get(), MotorBracketStarboard.Get(), ThrottleLeverPort.Get(), ThrottleLeverStarboard.Get(), RadarArray.Get() })
+	for (UStaticMeshComponent* Part : { MotorBracket.Get(), MotorBracketStarboard.Get(), MotorSwivel.Get(), MotorSwivelStarboard.Get(),
+			ThrottleLeverPort.Get(), ThrottleLeverStarboard.Get(), RadarArray.Get() })
 	{
 		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
@@ -297,6 +304,7 @@ ARiptideBoat::ARiptideBoat()
 	HullModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_PatrolSkiff.SM_PatrolSkiff")));
 	OutboardModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_Outboard.SM_Outboard")));
 	BracketModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_OutboardBracket.SM_OutboardBracket")));
+	SwivelModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_OutboardSwivel.SM_OutboardSwivel")));
 	LeverModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_ThrottleLever.SM_ThrottleLever")));
 	RadarModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_RadarArray.SM_RadarArray")));
 
@@ -447,6 +455,11 @@ void ARiptideBoat::ApplyModels()
 	{
 		MotorBracket->SetStaticMesh(Bracket);
 		MotorBracketStarboard->SetStaticMesh(Bracket);
+	}
+	if (UStaticMesh* Swivel = SwivelModel.LoadSynchronous())
+	{
+		MotorSwivel->SetStaticMesh(Swivel);
+		MotorSwivelStarboard->SetStaticMesh(Swivel);
 	}
 	if (UStaticMesh* Head = SearchlightModel.LoadSynchronous())
 	{
@@ -642,11 +655,11 @@ namespace
 		FHullStation S;
 		S.SheerY = T < 0.35f ? HullExtent.Y : HullExtent.Y * FMath::Pow(FMath::Max(0.f, FMath::Cos((T - 0.35f) / 0.65f * UE_HALF_PI)), 0.75f);
 		S.SheerZ = DeckZ + 55.f + 45.f * FMath::Pow(T, 2.2f);
-		S.KeelZ = -42.f + 30.f * FMath::Pow(FMath::SmoothStep(0.62f, 1.f, T), 1.3f) + 50.f * FMath::SmoothStep(0.93f, 1.f, T);
+		S.KeelZ = -42.f + 50.f * FMath::Pow(FMath::SmoothStep(0.55f, 1.f, T), 1.7f);
 		S.ChineY = S.SheerY * (0.88f - 0.1f * FMath::SmoothStep(0.6f, 1.f, T));
 		S.ChineZ = FMath::Min(-24.f + 34.f * FMath::SmoothStep(0.55f, 1.f, T), S.SheerZ - 6.f);
-		// The keel runs up into the stem to meet the chines there, always below them.
-		S.KeelZ = FMath::Min(S.KeelZ, S.ChineZ - 18.f * (1.f - FMath::SmoothStep(0.9f, 1.f, T)) - 0.5f);
+		// The keel runs up into the stem to meet the chines there, always below them, the V sharpening to the tip.
+		S.KeelZ = FMath::Min(S.KeelZ, S.ChineZ - 3.f - 15.f * (1.f - FMath::SmoothStep(0.93f, 1.f, T)));
 		return S;
 	}
 
@@ -1819,6 +1832,10 @@ void ARiptideBoat::PoseOutboards()
 	const FQuat Pose = GetOutboardRotation();
 	MotorMesh->SetRelativeRotation(Pose);
 	MotorMeshStarboard->SetRelativeRotation(Pose);
+	// The swivel brackets tilt with the trim but don't steer: the motors turn in their steering tubes.
+	const FRotator Tilt(-TrimDeg, 0.f, 0.f);
+	MotorSwivel->SetRelativeRotation(Tilt);
+	MotorSwivelStarboard->SetRelativeRotation(Tilt);
 	Propeller->SetRelativeLocation(OutboardPivot + Pose.RotateVector(PropInOutboard));
 	PropellerStarboard->SetRelativeLocation(OutboardPivotStarboard + Pose.RotateVector(PropInOutboard));
 }
@@ -2123,7 +2140,7 @@ FTransform ARiptideBoat::GetFuelFillerTransform() const
 {
 	// On the starboard gunwale, aft (riptide_boat_mesh.py's _fittings: station 0.2).
 	const FTransform& Xf = HullBody->GetComponentTransform();
-	return FTransform(Xf.GetRotation(), Xf.TransformPosition(FVector(-237.f, 127.f, DeckZ + 56.f)));
+	return FTransform(Xf.GetRotation(), Xf.TransformPosition(FVector(-237.f, 121.5f, DeckZ + 56.f)));
 }
 
 void ARiptideBoat::SetTrimInput(float Trim)
