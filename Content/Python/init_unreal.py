@@ -1,10 +1,11 @@
-"""Runs automatically when the editor opens. Imports the game's sounds and builds the ocean test map the first time."""
+"""Runs automatically when the editor opens. Imports the game's sounds and builds the test maps the first time."""
 
 import os
 
 import unreal
 
 MAP_PATH = "/Game/Riptide/Maps/Ocean_Test"
+ARCHIPELAGO_MAP_PATH = "/Game/Riptide/Maps/Archipelago_Test"
 AUDIO_PATH = "/Game/Riptide/Audio"
 
 # Sounds, imported from SourceAssets/Audio (credited in Docs/CREDITS.md). Each is levelled so that at volume 1
@@ -74,6 +75,10 @@ def _spawn(actor_class, location=(0.0, 0.0, 0.0), yaw=0.0, pitch=0.0):
 # Open water the test map covers, in cm (2 km square). The boat does ~15 kn, so this is a few minutes of driving.
 SEA_SIZE = 200000.0
 
+# The archipelago map's sea: 24 km square, covering the home chain (4.5 km out) and the military cordon
+# (6.5-9.5 km out) around the start island at the centre.
+ARCHIPELAGO_SEA_SIZE = 2400000.0
+
 # The ocean treats the inside of its shoreline spline as dry land for an island. There's no island yet,
 # so the shoreline is shrunk to a 4 m loop parked in a far corner, leaving the spawn point in open water.
 SHORE_CENTRE = (-90000.0, -90000.0)
@@ -109,8 +114,8 @@ def _spawn_ocean():
     return _spawn(unreal.WaterBodyOcean)
 
 
-def _open_up_sea(zone, ocean):
-    zone.set_editor_property("zone_extent", unreal.Vector2D(SEA_SIZE, SEA_SIZE))
+def _open_up_sea(zone, ocean, sea_size=SEA_SIZE):
+    zone.set_editor_property("zone_extent", unreal.Vector2D(sea_size, sea_size))
 
     shore = ocean.get_component_by_class(unreal.WaterSplineComponent)
     cx, cy = SHORE_CENTRE
@@ -121,9 +126,9 @@ def _open_up_sea(zone, ocean):
     shore.update_spline()
 
     body = ocean.get_water_body_component()
-    body.set_editor_property("collision_extents", unreal.Vector(SEA_SIZE / 2.0, SEA_SIZE / 2.0, 10000.0))
+    body.set_editor_property("collision_extents", unreal.Vector(sea_size / 2.0, sea_size / 2.0, 10000.0))
     # Set last: changing the extents rebuilds the ocean mesh, picking up the new shoreline too.
-    body.set_editor_property("ocean_extents", unreal.Vector2D(SEA_SIZE, SEA_SIZE))
+    body.set_editor_property("ocean_extents", unreal.Vector2D(sea_size, sea_size))
 
 
 # How far the ocean's collision reaches above its tallest wave. The Water plugin only counts a boat as in the sea
@@ -856,6 +861,123 @@ def build_ocean_test_map():
     unreal.log("Riptide: ocean test map ready")
 
 
+TERRAIN_MATERIAL_NAME = "M_IslandTerrain"
+
+
+def make_terrain_material():
+    """Island ground material: colour comes from the mesh's vertex colours, and wet sand (vertex alpha) is glossier.
+
+    A stand-in until CC0 ground textures are chosen; the islands' vertex colours already say where sand, soil and
+    rock are, so textures can be blended in by the same colours later.
+    """
+    path = f"{MATERIALS_PATH}/{TERRAIN_MATERIAL_NAME}"
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        return
+
+    unreal.log("Riptide: building island ground material")
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    material = tools.create_asset(TERRAIN_MATERIAL_NAME, MATERIALS_PATH, unreal.Material, unreal.MaterialFactoryNew())
+    edit = unreal.MaterialEditingLibrary
+
+    colour = edit.create_material_expression(material, unreal.MaterialExpressionVertexColor, -600, 0)
+    edit.connect_material_property(colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    # Dry ground is matte; wet sand at the waterline has a sheen.
+    roughness = edit.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -300, 200)
+    roughness.set_editor_property("const_a", 0.92)
+    roughness.set_editor_property("const_b", 0.35)
+    edit.connect_material_expressions(colour, "A", roughness, "Alpha")
+    edit.connect_material_property(roughness, "", unreal.MaterialProperty.MP_ROUGHNESS)
+
+    edit.recompile_material(material)
+    unreal.EditorAssetLibrary.save_loaded_asset(material)
+    unreal.log("Riptide: island ground material ready")
+
+
+def _try_local_water(zone):
+    # Lets the water mesh follow the camera instead of covering the whole 24 km zone at full detail. Only in
+    # newer engine versions; without it the zone still works, it just costs more.
+    try:
+        zone.set_editor_property("enable_local_only_tessellation", True)
+        unreal.log("Riptide: water tessellates locally around the camera")
+    except Exception as err:  # noqa: BLE001 - optional engine feature
+        unreal.log_warning(f"Riptide: local-only water tessellation not available ({err})")
+
+
+def _add_world_director():
+    """The islands come from a world director in the map. Placed with a player start at the boat's start spot."""
+    director = _spawn(unreal.RiptideWorldDirector)
+    try:
+        spawn = director.get_start_spawn_transform()
+        loc = spawn.translation
+        _spawn(unreal.PlayerStart, (loc.x, loc.y, loc.z), yaw=spawn.rotation.rotator().yaw)
+    except Exception as err:  # noqa: BLE001 - the player start is only a fallback
+        unreal.log_warning(f"Riptide: placing fallback player start at the origin ({err})")
+        _spawn(unreal.PlayerStart, (0, 0, 150))
+
+
+def update_archipelago_test_map():
+    """Brings a map built by an older version of this script (or before the island code was compiled) up to date."""
+    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    levels.load_level(ARCHIPELAGO_MAP_PATH)
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
+    changed = False
+    if not any(isinstance(a, unreal.RiptideWorldDirector) for a in actors):
+        unreal.log("Riptide: archipelago map had no world director; adding one")
+        for actor in actors:
+            if isinstance(actor, unreal.PlayerStart):
+                unreal.get_editor_subsystem(unreal.EditorActorSubsystem).destroy_actor(actor)
+        _add_world_director()
+        changed = True
+    for actor in actors:
+        if isinstance(actor, unreal.WaterBodyOcean):
+            changed |= _cover_waves(actor)
+        elif isinstance(actor, unreal.ExponentialHeightFog):
+            changed |= _fog_for_light_beams(actor)
+    if changed:
+        levels.save_current_level()
+
+
+def build_archipelago_test_map():
+    """The island chain: a world director loads islands around the boat as it sails."""
+    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+
+    if unreal.EditorAssetLibrary.does_asset_exist(ARCHIPELAGO_MAP_PATH):
+        update_archipelago_test_map()
+        return
+
+    unreal.log("Riptide: building archipelago test map")
+    levels.new_level(ARCHIPELAGO_MAP_PATH)
+
+    sun = _spawn(unreal.DirectionalLight, (0, 0, 5000), yaw=-40.0, pitch=-35.0)
+    sun_light = sun.get_component_by_class(unreal.DirectionalLightComponent)
+    sun_light.set_editor_property("atmosphere_sun_light", True)
+    sun_light.set_editor_property("intensity", 10.0)
+
+    _spawn(unreal.SkyAtmosphere)
+    sky_light = _spawn(unreal.SkyLight, (0, 0, 1000))
+    sky_light.get_component_by_class(unreal.SkyLightComponent).set_editor_property("real_time_capture", True)
+    _fog_for_light_beams(_spawn(unreal.ExponentialHeightFog))
+    _spawn(unreal.VolumetricCloud)
+
+    zone = _spawn(unreal.WaterZone)
+    ocean = _spawn_ocean()
+    _open_up_sea(zone, ocean, ARCHIPELAGO_SEA_SIZE)
+    _set_swell(ocean)
+    _cover_waves(ocean)
+    _try_local_water(zone)
+
+    ambience = _spawn(unreal.AmbientSound)
+    ambience_audio = ambience.get_component_by_class(unreal.AudioComponent)
+    ambience_audio.set_editor_property("sound", unreal.load_asset(f"{AUDIO_PATH}/S_Ocean_Ambience"))
+    ambience_audio.set_editor_property("allow_spatialization", False)
+
+    _add_world_director()
+
+    levels.save_current_level()
+    unreal.log("Riptide: archipelago test map ready")
+
+
 def _running_editor():
     """True when the full editor is open. The project also runs as a standalone game (-game) or server, where this
     script still starts but the editor's tools it uses don't exist (calling them crashes)."""
@@ -873,6 +995,7 @@ def _set_up_project():
         make_materials()
         make_wake_force_material()
         make_spray_material()
+        make_terrain_material()
     except Exception as err:  # noqa: BLE001 - never block the editor from opening
         unreal.log_error(f"Riptide: could not create materials: {err}")
 
@@ -885,6 +1008,14 @@ def _set_up_project():
         build_ocean_test_map()
     except Exception as err:  # noqa: BLE001 - never block the editor from opening
         unreal.log_error(f"Riptide: could not build ocean test map: {err}")
+
+    try:
+        build_archipelago_test_map()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build archipelago test map: {err}")
+    finally:
+        # Building or updating leaves the archipelago map open; go back to the startup map.
+        unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(MAP_PATH)
 
 
 if _running_editor():
