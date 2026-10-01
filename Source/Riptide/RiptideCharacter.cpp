@@ -2,12 +2,8 @@
 
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
-#include "Components/StaticMeshComponent.h"
-#include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
-#include "Materials/MaterialInstanceDynamic.h"
-#include "UObject/ConstructorHelpers.h"
 #include "Engine/Engine.h"
 #include "Engine/LocalPlayer.h"
 #include "EnhancedInputComponent.h"
@@ -20,6 +16,7 @@
 #include "Net/UnrealNetwork.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacterMovement.h"
+#include "RiptideCrewBody.h"
 #include "RiptidePlayerState.h"
 #include "RiptideInventoryWidget.h"
 #include "RiptideStorageComponent.h"
@@ -27,7 +24,8 @@
 #include "Widgets/SWeakWidget.h"
 
 ARiptideCharacter::ARiptideCharacter(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer.SetDefaultSubobjectClass<URiptideCharacterMovement>(ACharacter::CharacterMovementComponentName))
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<URiptideCharacterMovement>(ACharacter::CharacterMovementComponentName)
+		.SetDefaultSubobjectClass<URiptideCrewBodyComponent>(ACharacter::MeshComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
 
@@ -73,37 +71,17 @@ ARiptideCharacter::ARiptideCharacter(const FObjectInitializer& ObjectInitializer
 	// stands on the deck and rides along with it.
 	Move->bRunPhysicsWithNoController = true;
 
-	MakeStandInBody();
+	// The body (built from the player's look in ApplyAppearance): feet on the bottom of the capsule, turned to face
+	// forward (the model faces its own +Y). Its own player never sees it (it would fill the first-person view),
+	// only its shadow; everyone else does.
+	URiptideCrewBodyComponent* Body = GetCrewBody();
+	Body->SetRelativeLocationAndRotation(FVector(0.f, 0.f, -88.f), FRotator(0.f, -90.f, 0.f));
+	Body->SetHiddenFromOwner(true);
 }
 
-void ARiptideCharacter::MakeStandInBody()
+URiptideCrewBodyComponent* ARiptideCharacter::GetCrewBody() const
 {
-	// Until there's a character model: a dark overall-clad body and a head, the size of a person, for the other
-	// players to see. Its own player never sees it (it would fill the view).
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-	StandInBody = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StandInBody"));
-	StandInBody->SetupAttachment(GetCapsuleComponent());
-	StandInBody->SetRelativeLocation(FVector(0.f, 0.f, -12.f));
-	StandInBody->SetRelativeScale3D(FVector(0.42f, 0.36f, 1.5f));        // the basic cylinder is 1 m across, 1 m tall
-	StandInHead = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StandInHead"));
-	StandInHead->SetupAttachment(GetCapsuleComponent());
-	StandInHead->SetRelativeLocation(FVector(0.f, 0.f, 72.f));
-	StandInHead->SetRelativeScale3D(FVector(0.24f));
-	for (UStaticMeshComponent* Part : { StandInBody.Get(), StandInHead.Get() })
-	{
-		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Part->SetOwnerNoSee(true);
-		Part->SetCastShadow(true);
-	}
-	if (Cylinder.Succeeded())
-	{
-		StandInBody->SetStaticMesh(Cylinder.Object);
-	}
-	if (Sphere.Succeeded())
-	{
-		StandInHead->SetStaticMesh(Sphere.Object);
-	}
+	return Cast<URiptideCrewBodyComponent>(GetMesh());
 }
 
 void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -123,16 +101,9 @@ void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 void ARiptideCharacter::BeginPlay()
 {
 	Super::BeginPlay();
-	// The stand-in's colour: dark navy overalls, a tan face.
-	auto Tint = [](UStaticMeshComponent* Part, const FLinearColor& Colour)
-	{
-		if (UMaterialInstanceDynamic* M = Part ? Part->CreateDynamicMaterialInstance(0) : nullptr)
-		{
-			M->SetVectorParameterValue(TEXT("Color"), Colour);
-		}
-	};
-	Tint(StandInBody, FLinearColor(0.02f, 0.03f, 0.05f));
-	Tint(StandInHead, FLinearColor(0.45f, 0.3f, 0.2f));
+	// A body straight away, in the default look until the player's own arrives (and for a crew member with no
+	// player).
+	ApplyAppearance();
 	if (HasAuthority() && Inventory->Num() == 0)
 	{
 		// Grids sized like the old build's: pockets, and a small pack until there's gear to wear.
@@ -263,8 +234,12 @@ void ARiptideCharacter::WatchAppearance()
 
 void ARiptideCharacter::ApplyAppearance()
 {
-	// The body is built here from the look (to come: the crew character); for now the stand-in shows it's arrived.
+	// Every machine builds the same body from the replicated look; only what changed is swapped.
 	const ARiptidePlayerState* State = WatchedState.Get();
+	if (URiptideCrewBodyComponent* Body = GetCrewBody())
+	{
+		Body->SetAppearance(State ? State->GetAppearance() : FRiptideAppearance());
+	}
 	UE_LOG(LogTemp, Verbose, TEXT("Riptide: %s's look is %s"), *GetName(), State ? *State->GetAppearance().ToString() : TEXT("(none)"));
 }
 
@@ -1147,7 +1122,7 @@ void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
 	StaggerCooldown = 0.6f;
 	if (bKnockedDown)
 	{
-		KnockdownEndTime = ServerNow() + 1.4;
+		KnockdownEndTime = ServerNow() + KnockdownSeconds;
 		++KnockdownCount;
 	}
 	UE_LOG(LogTemp, Verbose, TEXT("Riptide: %s thrown by a %.1f g jolt"), *GetName(), Worst);
@@ -1192,6 +1167,11 @@ double ARiptideCharacter::ServerNow() const
 bool ARiptideCharacter::IsKnockedDown() const
 {
 	return KnockdownEndTime > ServerNow();
+}
+
+float ARiptideCharacter::GetKnockdownElapsed() const
+{
+	return KnockdownEndTime < 0.0 ? 1000.f : float(ServerNow() - (KnockdownEndTime - KnockdownSeconds));
 }
 
 void ARiptideCharacter::CloseInventoryIfOutOfReach()

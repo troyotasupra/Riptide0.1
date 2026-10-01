@@ -333,6 +333,82 @@ def swim_check(world, boat, walker, t):
         log("t=%5.1f after the ladder: standing on the boat %s" % (t, sw["aboard"]))
 
 
+# A crew member in this look is put on the deck for a moment (as another player would see one): (Body, Skin, Hair,
+# HairColour, Beard, Headgear, Face, Camo, Vest, GearColour, Pack, Gloves). Female, long hair under a helmet, ballistic
+# glasses, woodland, plate carrier, ranger green, assault pack, gloves: what its body should wear.
+CREW_LOOK = [1, 1, 3, 3, 1, 1, 2, 1, 1, 1, 1, 1]
+CREW_PARTS = ["Body=SK_CrewFemale", "Uniform=SK_Uniform", "Boots=SK_Boots", "Gloves=SK_Gloves", "Hair=SK_Hair_Long_Hat",
+              "Headgear=SK_Helmet", "FaceCover=SK_BallisticGlasses", "Vest=SK_PlateCarrier", "Pack=SK_AssaultPack_OverPlate"]
+
+
+def crew_body_check(world, boat, walker, t):
+    """The player's crew member has a body built from their look, hidden from their own eyes; a crew member put on the
+    deck in a chosen look wears exactly its parts (and no beard: she's female) and stands in its idle animation."""
+    cb = state.setdefault("crew_body", {})
+    if t < 3.0 or "done" in cb:
+        return
+    if "other" not in cb:
+        cb["walker_parts"] = walker.get_crew_body().describe_parts()
+        cb["walker_has_body"] = walker.get_crew_body().has_body()
+        look = unreal.RiptideAppearance()
+        look.set_editor_property("choices", CREW_LOOK)
+        spot = boat.get_actor_transform().transform_location(unreal.Vector(-300.0, 60.0, 20.0 + 92.0))
+        cb["other"] = unreal.RiptideCrewLibrary.spawn_crew_member(world, boat, spot, boat.get_actor_rotation().yaw, look)
+        cb["spawned"] = t
+        return
+    if t < cb["spawned"] + 1.0:
+        return
+    other = cb["other"]
+    cb["other_parts"] = other.get_crew_body().describe_parts()
+    cb["other_state"] = str(other.get_crew_body().get_anim_state()).split(".")[-1].split(":")[0]
+    cb["parts_ok"] = all(part in cb["other_parts"].split(" ") for part in CREW_PARTS) and "Beard=" not in cb["other_parts"]
+    log("t=%5.1f crew bodies: the player's %s (has a body %s); a crew member in look %s wears %s, animation %s" % (
+        t, cb["walker_parts"], cb["walker_has_body"], CREW_LOOK, cb["other_parts"], cb["other_state"]))
+    other.k2_destroy_actor()
+    cb["done"] = True
+
+
+def crew_anim_check(walker, t):
+    """What the walker's animation shows, frame by frame, against what it's doing (read from its anim instance, the
+    same state every machine computes from the replicated movement)."""
+    ca = state.setdefault("crew_anim", {})
+    speed = boat_relative_speed(walker)
+    anim = str(walker.get_crew_body().get_anim_state()).split(".")[-1].split(":")[0]
+    if walker.is_on_ladder():
+        key = "ladder"
+        ok = anim == "LADDER"
+    elif walker.is_in_sea():
+        key = "swim"
+        ok = anim == "SWIMMING"
+    elif walker.is_manning_helm():
+        key = "helm"
+        ok = anim == "HELM"
+    elif WALK_START + 1.0 <= t < WALK_END and walker.is_standing_on_boat() and speed > 80.0:
+        key = "walk"
+        ok = anim in ("GROUND", "BRACED")
+    else:
+        return
+    frames, good = ca.get(key, (0, 0))
+    ca[key] = (frames + 1, good + (1 if ok else 0))
+    if not ok:
+        ca.setdefault("wrong", {}).setdefault(key, {})
+        ca["wrong"][key][anim] = ca["wrong"][key].get(anim, 0) + 1
+
+
+def boat_relative_speed(walker):
+    """The walker's speed over the deck (cm/s), from how far it moved in the boat's frame since last frame."""
+    boat = state["boat"]
+    ca = state.setdefault("crew_anim", {})
+    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
+    now = unreal.GameplayStatics.get_time_seconds(world)
+    here = local_point(boat, walker.get_actor_location())
+    last = ca.get("last")
+    ca["last"] = (here, now)
+    if not last or now <= last[1]:
+        return 0.0
+    return math.hypot(here.x - last[0].x, here.y - last[0].y) / (now - last[1])
+
+
 def fuel_and_engine_check(world, boat, walker, t):
     """Takes the fuel drum from the stern locker and pours it in at the filler; then kills the port motor."""
     fe = state.setdefault("fuel", {})
@@ -510,6 +586,15 @@ def verdict():
         stc = state.get("storage", {})
         checks.append(("opens the forward locker from beside it and takes its gear", stc.get("reach") == 0 and stc.get("took", 0) >= 5,
                        "locker %s, %s stacks" % (stc.get("reach"), stc.get("took"))))
+        cb = state.get("crew_body", {})
+        checks.append(("the crew member has a skeletal body built from the look, and another in a chosen look wears exactly its parts",
+                       bool(cb.get("walker_has_body")) and "Uniform=" in cb.get("walker_parts", "") and bool(cb.get("parts_ok"))
+                       and cb.get("other_state") == "GROUND", "%s" % cb.get("other_parts")))
+        ca = state.get("crew_anim", {})
+        for key, what in (("walk", "walking (standing or holding on)"), ("swim", "swimming"), ("ladder", "on the ladder"), ("helm", "at the helm")):
+            frames, good = ca.get(key, (0, 0))
+            checks.append(("the animation shows %s while %s (95%% of frames)" % (key, what), frames > 10 and good >= 0.95 * frames,
+                           "%d of %d frames%s" % (good, frames, (", otherwise %s" % ca.get("wrong", {}).get(key)) if good < frames else "")))
         checks.append(("takes the helm and drives", bool(h.get("at_helm")) and bool(h.get("took")), ""))
         checks.append(("leaves the helm and stands on the deck again", bool(h.get("left")) and bool(h.get("stood")), ""))
     else:
@@ -610,6 +695,8 @@ def _tick(_dt):
                 state.setdefault("trim_pitch", {}).setdefault(phase, []).append(boat.get_actor_rotation().pitch)
         if state["walker"]:
             walk(world, boat, state["walker"], t)
+            crew_body_check(world, boat, state["walker"], t)
+            crew_anim_check(state["walker"], t)
             helm_swap(world, boat, state["walker"], t)
             mic_check(world, boat, state["walker"], t)
             helm_at_speed(world, boat, state["walker"], t)

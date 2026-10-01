@@ -8,8 +8,8 @@ class ARiptideBoat;
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
+class URiptideCrewBodyComponent;
 class URiptideStorageComponent;
-class UStaticMeshComponent;
 class SRiptideInventory;
 struct FInputActionValue;
 
@@ -40,6 +40,10 @@ public:
 	/** Builds this crew member's body from their player's look (ARiptidePlayerState): build, skin, hair, uniform
 	 * and gear. Called on every machine whenever the look arrives or changes. */
 	void ApplyAppearance();
+
+	/** The crew member's body (the character's mesh): what it wears and how it's animated. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	URiptideCrewBodyComponent* GetCrewBody() const;
 
 	/** The boat this character belongs to: the one it stands on, returns to after going overboard, and drives. */
 	UFUNCTION(BlueprintCallable, Category = "Crew")
@@ -128,6 +132,15 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsKnockedDown() const;
+
+	/** Seconds since the last knockdown began (large if there's never been one), on every machine. */
+	float GetKnockdownElapsed() const;
+
+	/** Seconds into climbing over the top of the ladder onto the deck. */
+	float GetClimbOverTime() const { return ClimbOverTime; }
+
+	/** How long a knockdown keeps a crew member down (s). */
+	static constexpr double KnockdownSeconds = 1.4;
 
 	/** The dev mode's god mode: the deck's jolts never throw this crew member, braced or not (and it's back on its feet). */
 	void SetSteadyFeet(bool bSteady) { bSteadyFeet = bSteady; KnockdownEndTime = bSteady ? -1.0 : KnockdownEndTime; }
@@ -269,10 +282,6 @@ private:
 	/** Closes the inventory if what it was opened for is out of reach now. */
 	void CloseInventoryIfOutOfReach();
 
-	/** A stand-in body so other players can see this crew member until there's a character model (hidden from
-	 * its own player's eyes). */
-	void MakeStandInBody();
-
 	/** Listens for the player state's look changing. */
 	void WatchAppearance();
 	FDelegateHandle AppearanceWatch;
@@ -392,13 +401,6 @@ private:
 	float LadderRegrabBlock = 0.f;
 	float LadderGrace = 0.f;
 	float GrabRequestCooldown = 0.f;
-
-	/** The stand-in body others see. */
-	UPROPERTY(VisibleAnywhere, Category = "Crew")
-	TObjectPtr<UStaticMeshComponent> StandInBody;
-
-	UPROPERTY(VisibleAnywhere, Category = "Crew")
-	TObjectPtr<UStaticMeshComponent> StandInHead;
 
 	TSharedPtr<SRiptideInventory> InventoryWidget;
 	TSharedPtr<class SWidget> InventoryWidgetContainer;
