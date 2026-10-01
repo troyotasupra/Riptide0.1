@@ -6,7 +6,6 @@
 #include "WaterBodyOceanActor.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
-#include "RiptideWorldDirector.h"
 
 ARiptideGameMode::ARiptideGameMode()
 {
@@ -25,15 +24,6 @@ ARiptideBoat* ARiptideGameMode::FindOrLaunchBoat(AActor* StartSpot)
 	// It sits on the swell as it is right there: dropped into a crest's flank at flat sea level, the hull would be
 	// buried a metre deep and thrown clear of the water.
 	FVector Location = StartSpot ? StartSpot->GetActorLocation() : FVector::ZeroVector;
-	float Yaw = StartSpot ? StartSpot->GetActorRotation().Yaw : 0.f;
-	// On a map with islands, the boat starts just off the start island's beach, facing it.
-	TActorIterator<ARiptideWorldDirector> Director(GetWorld());
-	if (Director)
-	{
-		const FTransform Spawn = Director->GetStartSpawnTransform();
-		Location = Spawn.GetLocation();
-		Yaw = Spawn.Rotator().Yaw;
-	}
 	float SurfaceZ = 0.f;
 	if (const AWaterBodyOcean* Ocean = Cast<AWaterBodyOcean>(UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass())))
 	{
@@ -45,7 +35,7 @@ ARiptideBoat* ARiptideGameMode::FindOrLaunchBoat(AActor* StartSpot)
 		}
 	}
 	Location.Z = SurfaceZ + 15.f;
-	const FRotator Facing(0.f, Yaw, 0.f);
+	const FRotator Facing(0.f, StartSpot ? StartSpot->GetActorRotation().Yaw : 0.f, 0.f);
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	return GetWorld()->SpawnActor<ARiptideBoat>(BoatClass, Location, Facing, Params);
