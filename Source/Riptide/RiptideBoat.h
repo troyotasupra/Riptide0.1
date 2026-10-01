@@ -280,6 +280,13 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UStaticMeshComponent> MotorBracketStarboard;
 
+	/** The outboards' swivel brackets, hung on the clamp brackets' tilt tubes: they trim with the motors, but don't steer. */
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> MotorSwivel;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> MotorSwivelStarboard;
+
 	/** The twin throttle levers on the console, which move with the throttle and gear. */
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UStaticMeshComponent> ThrottleLeverPort;
@@ -379,6 +386,9 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Boat")
 	TSoftObjectPtr<UStaticMesh> BracketModel;
+
+	UPROPERTY(EditAnywhere, Category = "Boat")
+	TSoftObjectPtr<UStaticMesh> SwivelModel;
 
 	UPROPERTY(EditAnywhere, Category = "Boat")
 	TSoftObjectPtr<UStaticMesh> LeverModel;
