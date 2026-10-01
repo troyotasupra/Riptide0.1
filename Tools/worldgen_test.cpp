@@ -302,8 +302,9 @@ namespace
 		Check(Img.Save(Path), "wrote " + Path);
 	}
 
-	/** Shaded relief of one island's terrain grid, with foliage dots. */
-	void DrawTerrain(const FTerrain& T, const std::vector<FScatterPoint>* Scatter, int Pixels, const std::string& Path)
+	/** Shaded relief of one island's terrain grid, with foliage dots and place markers. */
+	void DrawTerrain(const FTerrain& T, const std::vector<FScatterPoint>* Scatter, int Pixels, const std::string& Path,
+		const std::vector<FPlace>* Places = nullptr)
 	{
 		FImage Img(Pixels, Pixels);
 		const double Scale = static_cast<double>(T.Size - 1) / Pixels;
@@ -342,6 +343,32 @@ namespace
 				case EScatter::Bush: Img.Set(Px, Py, 50, 110, 30); break;
 				case EScatter::Boulder: Img.Set(Px, Py, 90, 90, 90); break;
 				default: break;
+				}
+			}
+		}
+		if (Places)
+		{
+			for (const FPlace& P : *Places)
+			{
+				const int Px = static_cast<int>((P.X - T.OriginX) / T.Spacing / Scale);
+				const int Py = Pixels - 1 - static_cast<int>((P.Y - T.OriginY) / T.Spacing / Scale);
+				int R = 255, G = 255, B = 255;
+				switch (P.Kind)
+				{
+				case EPlace::Landing: R = 255; G = 255; B = 255; break;
+				case EPlace::Camp: R = 255; G = 150; B = 0; break;
+				case EPlace::Bunker: R = 230; G = 30; B = 30; break;
+				case EPlace::Lookout: R = 160; G = 60; B = 255; break;
+				case EPlace::Wreck: R = 20; G = 20; B = 20; break;
+				default: R = 255; G = 0; B = 255; break;
+				}
+				Img.Disc(Px, Py, 7, 0, 0, 0);
+				Img.Disc(Px, Py, 5, R, G, B);
+				// A tick showing which way the place faces.
+				const double A = P.YawDeg * 3.14159265 / 180.0;
+				for (int K = 6; K < 16; ++K)
+				{
+					Img.Set(Px + static_cast<int>(std::cos(A) * K), Py - static_cast<int>(std::sin(A) * K), R, G, B);
 				}
 			}
 		}
@@ -753,6 +780,68 @@ int main(int Argc, char** Argv)
 		const std::vector<FScatterPoint> Plants = ScatterFoliage(Fresh, Start);
 		Check(!Plants.empty(), std::to_string(Plants.size()) + " palms and plants on the start island");
 		DrawTerrain(Fresh, &Plants, 900, OutDir + "/start_island_foliage.png");
+		const std::vector<FPlace> Places = FindPlaces(Fresh, Start);
+		DrawTerrain(Fresh, nullptr, 900, OutDir + "/start_island_places.png", &Places);
+	}
+
+	// --- Places ---
+
+	{
+		int Islands = 0, NoLanding = 0, StartBad = 0, BigBad = 0, ReefBad = 0, OutpostBad = 0, RuleBad = 0;
+		std::string RuleWhy;
+		double SlowestMs = 0.0;
+		for (uint32_t S = 1; S <= 40; ++S)
+		{
+			const FWorld W(S);
+			for (const FIslandSite& Site : W.GetFixedSites())
+			{
+				if (Site.Role == EIslandRole::Wild && S > 10)
+				{
+					continue;
+				}
+				const FTerrain Ground = BuildIslandTerrain(Site);
+				Clock = std::chrono::steady_clock::now();
+				const std::vector<FPlace> Places = FindPlaces(Ground, Site);
+				SlowestMs = std::max(SlowestMs, Seconds(Clock) * 1000.0);
+				++Islands;
+				int Count[static_cast<int>(EPlace::Count)] = {};
+				for (const FPlace& P : Places)
+				{
+					++Count[static_cast<int>(P.Kind)];
+					bool bOk = true;
+					switch (P.Kind)
+					{
+					case EPlace::Landing: bOk = P.Z > 0.f && P.Z < 1.f; break;
+					case EPlace::Camp: bOk = P.Z >= 1.5f && P.Z < 10.f; break;
+					case EPlace::Bunker: bOk = P.Z >= 6.f; break;
+					case EPlace::Wreck: bOk = P.Z < -1.5f && P.Z > -4.5f; break;
+					default: break;
+					}
+					if (!bOk)
+					{
+						++RuleBad;
+						RuleWhy = std::string(PlaceName(P.Kind)) + " at height " + std::to_string(P.Z) + " on seed " + std::to_string(S);
+					}
+				}
+				const auto N = [&Count](EPlace K) { return Count[static_cast<int>(K)]; };
+				NoLanding += N(EPlace::Landing) == 0 ? 1 : 0;
+				switch (Site.Role)
+				{
+				case EIslandRole::Start: StartBad += (N(EPlace::Camp) < 1 || N(EPlace::Bunker) > 0 || N(EPlace::Wreck) > 0) ? 1 : 0; break;
+				case EIslandRole::BigIsland: BigBad += (N(EPlace::Landing) < 2 || N(EPlace::Camp) < 1 || N(EPlace::Bunker) < 1 || N(EPlace::Lookout) != 1) ? 1 : 0; break;
+				case EIslandRole::WreckReef: ReefBad += N(EPlace::Wreck) != 1 ? 1 : 0; break;
+				case EIslandRole::Outpost: OutpostBad += N(EPlace::Outpost) != 1 ? 1 : 0; break;
+				default: break;
+				}
+			}
+		}
+		std::printf("      places checked on %d islands; slowest took %.0f ms\n", Islands, SlowestMs);
+		Check(NoLanding == 0, "every island has somewhere to land a boat (" + std::to_string(NoLanding) + " without)");
+		Check(StartBad == 0, "start island always has a camp spot, and no bunker or wreck (" + std::to_string(StartBad) + " of 40 wrong)");
+		Check(BigBad == 0, "big island always has 2+ landings, a camp, a bunker and one lookout (" + std::to_string(BigBad) + " of 40 wrong)");
+		Check(ReefBad == 0, "wreck reef always has exactly one wreck (" + std::to_string(ReefBad) + " of 40 wrong)");
+		Check(OutpostBad == 0, "every cordon rock has an outpost spot (" + std::to_string(OutpostBad) + " wrong)");
+		Check(RuleBad == 0, "every place sits on suitable ground" + (RuleBad ? " (" + RuleWhy + ")" : std::string()));
 	}
 
 	// --- Bigger islands ---
@@ -771,7 +860,8 @@ int main(int Argc, char** Argv)
 		std::printf("      %s: %s, radius %.0f m, peak %.0f m, %d x %d grid at %.1f m, built in %.0f ms\n", RoleName(S.Role),
 			KindName(S.Kind), S.Radius, Peak, Big.Size, Big.Size, Big.Spacing, Ms);
 		const std::vector<FScatterPoint> Plants = ScatterFoliage(Big, S);
-		DrawTerrain(Big, &Plants, 1000, OutDir + "/" + (K == 1 ? "big_island.png" : "far_island.png"));
+		const std::vector<FPlace> Places = FindPlaces(Big, S);
+		DrawTerrain(Big, &Plants, 1000, OutDir + "/" + (K == 1 ? "big_island.png" : "far_island.png"), &Places);
 	}
 
 	// --- Maps ---

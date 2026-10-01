@@ -55,6 +55,18 @@ namespace RiptideGen
 		Count
 	};
 
+	/** Spots on an island where hand-built places go. */
+	enum class EPlace : uint8_t
+	{
+		Landing,	// a gentle beach where a boat can be run ashore; faces out to sea
+		Camp,		// flat, dry ground near a landing, for a camp, shack or base
+		Bunker,		// flat ground inland on bigger islands, for a bunker hatch
+		Lookout,	// the island's high point, for a watchtower or radio mast
+		Wreck,		// shallow sand flats offshore, for a wrecked boat; faces along the shore
+		Outpost,	// the flattest high ground on a cordon rock, for a military post
+		Count
+	};
+
 	/** Sizes of the map's rings, in metres from the start island. */
 	struct FWorldLayout
 	{
@@ -96,6 +108,15 @@ namespace RiptideGen
 		float YawDeg = 0.f;
 		float Scale = 1.f;
 		EScatter Kind = EScatter::Palm;
+	};
+
+	struct FPlace
+	{
+		double X = 0.0;
+		double Y = 0.0;
+		float Z = 0.f;
+		float YawDeg = 0.f;
+		EPlace Kind = EPlace::Landing;
 	};
 
 	/** Inclusive rectangle of grid vertices. */
@@ -217,6 +238,13 @@ namespace RiptideGen
 	/** Where trees, palms, bushes and boulders grow on an island. */
 	std::vector<FScatterPoint> ScatterFoliage(const FTerrain& Terrain, const FIslandSite& Site);
 
+	/**
+	 * Picks the spots for hand-built places on an island, from its untouched ground. Every island gets at least
+	 * one landing; which other places it gets depends on its size, shape and role (see Docs/WORLD.md).
+	 */
+	std::vector<FPlace> FindPlaces(const FTerrain& Terrain, const FIslandSite& Site);
+
+	const char* PlaceName(EPlace Place);
 	const char* ZoneName(EZone Zone);
 	const char* RoleName(EIslandRole Role);
 	const char* KindName(EIslandKind Kind);

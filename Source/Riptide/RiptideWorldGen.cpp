@@ -1036,7 +1036,273 @@ namespace RiptideGen
 		return Points;
 	}
 
+	// --- Places ---
+
+	namespace
+	{
+		/** Untouched ground height at a world point, or very low off the grid. */
+		float GroundAt(const FTerrain& T, double X, double Y)
+		{
+			const double Gx = (X - T.OriginX) / T.Spacing;
+			const double Gy = (Y - T.OriginY) / T.Spacing;
+			if (Gx < 0.0 || Gy < 0.0 || Gx > T.Size - 1 || Gy > T.Size - 1)
+			{
+				return -100000.f;
+			}
+			const int32_t X0 = std::min(T.Size - 2, static_cast<int32_t>(Gx));
+			const int32_t Y0 = std::min(T.Size - 2, static_cast<int32_t>(Gy));
+			const double Tx = Gx - X0;
+			const double Ty = Gy - Y0;
+			const std::vector<float>& H = T.OriginalHeight;
+			return static_cast<float>(Lerp(
+				Lerp(H[static_cast<size_t>(T.Index(X0, Y0))], H[static_cast<size_t>(T.Index(X0 + 1, Y0))], Tx),
+				Lerp(H[static_cast<size_t>(T.Index(X0, Y0 + 1))], H[static_cast<size_t>(T.Index(X0 + 1, Y0 + 1))], Tx), Ty));
+		}
+
+		ESurface SurfaceAt(const FTerrain& T, double X, double Y)
+		{
+			const int32_t Gx = std::clamp(static_cast<int32_t>(std::lround((X - T.OriginX) / T.Spacing)), 0, T.Size - 1);
+			const int32_t Gy = std::clamp(static_cast<int32_t>(std::lround((Y - T.OriginY) / T.Spacing)), 0, T.Size - 1);
+			return T.Surface[static_cast<size_t>(T.Index(Gx, Gy))];
+		}
+
+		/** Steepest rise or drop from a point to a ring around it, as rise over run: 0 is dead flat. */
+		float Roughness(const FTerrain& T, double X, double Y, double Radius)
+		{
+			const float Centre = GroundAt(T, X, Y);
+			float Worst = 0.f;
+			for (int32_t K = 0; K < 8; ++K)
+			{
+				const double A = TwoPi * K / 8.0;
+				const float H = GroundAt(T, X + std::cos(A) * Radius, Y + std::sin(A) * Radius);
+				Worst = std::max(Worst, static_cast<float>(std::fabs(H - Centre) / Radius));
+			}
+			return Worst;
+		}
+
+		/** The direction the ground falls away, in radians (toward the sea, near a shore). */
+		double DownhillAngle(const FTerrain& T, double X, double Y)
+		{
+			constexpr double D = 3.0;
+			const double Gx = GroundAt(T, X + D, Y) - GroundAt(T, X - D, Y);
+			const double Gy = GroundAt(T, X, Y + D) - GroundAt(T, X, Y - D);
+			return std::atan2(-Gy, -Gx);
+		}
+
+		float YawDeg(double Radians)
+		{
+			return static_cast<float>(Radians * 360.0 / TwoPi);
+		}
+
+		struct FCandidate
+		{
+			double X;
+			double Y;
+			double Score;	// lower is better
+			double Angle;
+		};
+
+		/** Takes the best-scoring candidates, keeping each at least MinGap from everything already placed. */
+		void TakeBest(std::vector<FCandidate>& Candidates, int32_t Count, double MinGap, EPlace Kind, const FTerrain& T,
+			std::vector<FPlace>& Places)
+		{
+			std::stable_sort(Candidates.begin(), Candidates.end(),
+				[](const FCandidate& A, const FCandidate& B) { return A.Score < B.Score; });
+			int32_t Taken = 0;
+			for (const FCandidate& C : Candidates)
+			{
+				if (Taken >= Count)
+				{
+					break;
+				}
+				bool bClear = true;
+				for (const FPlace& P : Places)
+				{
+					// Places of the same kind spread out; different kinds just keep out of each other's way.
+					const double Gap = P.Kind == Kind ? MinGap : 40.0;
+					if ((P.X - C.X) * (P.X - C.X) + (P.Y - C.Y) * (P.Y - C.Y) < Gap * Gap)
+					{
+						bClear = false;
+						break;
+					}
+				}
+				if (!bClear)
+				{
+					continue;
+				}
+				FPlace Place;
+				Place.X = C.X;
+				Place.Y = C.Y;
+				Place.Z = GroundAt(T, C.X, C.Y);
+				Place.YawDeg = YawDeg(C.Angle);
+				Place.Kind = Kind;
+				Places.push_back(Place);
+				++Taken;
+			}
+		}
+	}
+
+	std::vector<FPlace> FindPlaces(const FTerrain& T, const FIslandSite& Site)
+	{
+		std::vector<FPlace> Places;
+		FRng Rng(Mix64(static_cast<uint64_t>(Site.Seed) ^ 0x506c61636573ULL));
+		const double R = Site.Radius;
+		const double Step = std::max(3.0, static_cast<double>(T.Spacing));
+		const double Span = (T.Size - 1) * static_cast<double>(T.Spacing);
+
+		std::vector<FCandidate> Landings;
+		std::vector<FCandidate> Ledges;	// any reachable shore, if there's no beach
+		std::vector<FCandidate> Flats;
+		std::vector<FCandidate> Inland;
+		std::vector<FCandidate> Shallows;
+		std::vector<FCandidate> Heights;
+
+		for (double Y = Step; Y < Span - Step; Y += Step)
+		{
+			for (double X = Step; X < Span - Step; X += Step)
+			{
+				const double Wx = T.OriginX + X;
+				const double Wy = T.OriginY + Y;
+				const float H = GroundAt(T, Wx, Wy);
+
+				if (H > 0.1f && H < 0.9f)
+				{
+					// Waterline: a boat comes in from the sea side, people walk up the land side.
+					const double Down = DownhillAngle(T, Wx, Wy);
+					const float Sea = GroundAt(T, Wx + std::cos(Down) * 12.0, Wy + std::sin(Down) * 12.0);
+					const float Land = GroundAt(T, Wx - std::cos(Down) * 15.0, Wy - std::sin(Down) * 15.0);
+					if (Sea < -0.3f && Sea > -3.f)
+					{
+						const double Steepness = (Land - Sea) / 27.0;
+						if (Land < 4.f && Land > 0.6f && SurfaceAt(T, Wx, Wy) == ESurface::Sand)
+						{
+							Landings.push_back({ Wx, Wy, Steepness + 0.05 * Rng.Unit(), Down });
+						}
+						Ledges.push_back({ Wx, Wy, Steepness, Down });
+					}
+				}
+				else if (H >= 1.5f && H < 10.f)
+				{
+					const float Rough = Roughness(T, Wx, Wy, 5.0);
+					if (Rough < 0.12f && SurfaceAt(T, Wx, Wy) != ESurface::Rock)
+					{
+						Flats.push_back({ Wx, Wy, Rough, 0.0 });
+					}
+				}
+				else if (H < -1.5f && H > -4.5f && Rng.Unit() < 0.5)
+				{
+					if (Roughness(T, Wx, Wy, 6.0) < 0.15f)
+					{
+						// Wrecks are chosen at random among good spots, not always the "best" one.
+						Shallows.push_back({ Wx, Wy, Rng.Unit(), DownhillAngle(T, Wx, Wy) + TwoPi / 4.0 });
+					}
+				}
+
+				if (H >= 6.f && SurfaceAt(T, Wx, Wy) == ESurface::Soil)
+				{
+					const float Rough = Roughness(T, Wx, Wy, 6.0);
+					bool bInland = Rough < 0.2f;
+					for (int32_t K = 0; K < 8 && bInland; ++K)
+					{
+						const double A = TwoPi * K / 8.0;
+						bInland = GroundAt(T, Wx + std::cos(A) * 40.0, Wy + std::sin(A) * 40.0) > 0.f;
+					}
+					if (bInland)
+					{
+						Inland.push_back({ Wx, Wy, Rough + 0.1 * Rng.Unit(), Rng.Range(0.0, TwoPi) });
+					}
+				}
+
+				if (H > 3.f)
+				{
+					const float Rough = Roughness(T, Wx, Wy, 4.0);
+					if (Rough < 0.6f)
+					{
+						// Highest first; for outposts, flatness counts as much as height.
+						const double Score = Site.Role == EIslandRole::Outpost ? Rough * 20.0 - H : -H;
+						Heights.push_back({ Wx, Wy, Score, std::atan2(Wy - Site.Y, Wx - Site.X) });
+					}
+				}
+			}
+		}
+
+		// Landings: one, plus one more for every 150 m of radius (up to four), spread around the coast.
+		const int32_t LandingCount = std::min(4, 1 + static_cast<int32_t>(R / 150.0));
+		// Spread around the coast, so a big island can be approached from more than one side.
+		TakeBest(Landings, LandingCount, std::max(std::min(80.0, R), R * 0.8), EPlace::Landing, T, Places);
+		if (Places.empty())
+		{
+			// No beach anywhere: the gentlest bit of rocky shore will have to do.
+			TakeBest(Ledges, 1, R, EPlace::Landing, T, Places);
+		}
+		std::vector<FPlace> LandingPlaces = Places;
+
+		// Camps: flat ground near a landing, facing it.
+		if (Site.Role != EIslandRole::Outpost && Site.Role != EIslandRole::WreckReef && !LandingPlaces.empty())
+		{
+			std::vector<FCandidate> Camps;
+			for (FCandidate C : Flats)
+			{
+				double Nearest = 1e9;
+				for (const FPlace& L : LandingPlaces)
+				{
+					const double D = std::hypot(L.X - C.X, L.Y - C.Y);
+					if (D < Nearest)
+					{
+						Nearest = D;
+						C.Angle = std::atan2(L.Y - C.Y, L.X - C.X);
+					}
+				}
+				if (Nearest < 120.0 && Nearest > 15.0)
+				{
+					C.Score += Nearest / 600.0;
+					Camps.push_back(C);
+				}
+			}
+			TakeBest(Camps, R > 250.0 ? 2 : 1, 100.0, EPlace::Camp, T, Places);
+		}
+
+		// Bunkers: inland on islands big enough to hide one, and never on the start island.
+		if (R >= 150.0 && Site.Role != EIslandRole::Start && Site.Role != EIslandRole::Outpost)
+		{
+			TakeBest(Inland, R > 350.0 ? 2 : 1, std::max(150.0, R * 0.6), EPlace::Bunker, T, Places);
+		}
+
+		// The high point, if it's high enough to see from.
+		if (Site.Role == EIslandRole::Outpost)
+		{
+			TakeBest(Heights, 1, R, EPlace::Outpost, T, Places);
+		}
+		else if (Site.PeakHeight > 15.f)
+		{
+			TakeBest(Heights, 1, R, EPlace::Lookout, T, Places);
+		}
+
+		// A wreck on the sand flats: always on the wreck reef, sometimes elsewhere.
+		if (Site.Role == EIslandRole::WreckReef || (R >= 40.0 && Site.Role != EIslandRole::Start && Rng.Unit() < 0.35))
+		{
+			TakeBest(Shallows, 1, R, EPlace::Wreck, T, Places);
+		}
+
+		return Places;
+	}
+
 	// --- Names ---
+
+	const char* PlaceName(EPlace Place)
+	{
+		switch (Place)
+		{
+		case EPlace::Landing: return "landing";
+		case EPlace::Camp: return "camp";
+		case EPlace::Bunker: return "bunker";
+		case EPlace::Lookout: return "lookout";
+		case EPlace::Wreck: return "wreck";
+		case EPlace::Outpost: return "outpost";
+		case EPlace::Count: break;
+		}
+		return "?";
+	}
 
 	const char* ZoneName(EZone Zone)
 	{
