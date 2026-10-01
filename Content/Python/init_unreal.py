@@ -856,24 +856,38 @@ def build_ocean_test_map():
     unreal.log("Riptide: ocean test map ready")
 
 
-try:
-    import_sounds()
-except Exception as err:  # noqa: BLE001 - never block the editor from opening
-    unreal.log_error(f"Riptide: could not import sounds: {err}")
+def _running_editor():
+    """True when the full editor is open. The project also runs as a standalone game (-game) or server, where this
+    script still starts but the editor's tools it uses don't exist (calling them crashes)."""
+    args = unreal.SystemLibrary.get_command_line().lower().split()
+    return not any(a in ("-game", "-server", "-dedicatedserver") or a.startswith(("-game=", "-server=")) for a in args)
 
-try:
-    make_materials()
-    make_wake_force_material()
-    make_spray_material()
-except Exception as err:  # noqa: BLE001 - never block the editor from opening
-    unreal.log_error(f"Riptide: could not create materials: {err}")
 
-try:
-    make_boat_assets()
-except Exception as err:  # noqa: BLE001 - never block the editor from opening
-    unreal.log_error(f"Riptide: could not build the boat model: {err}")
+def _set_up_project():
+    try:
+        import_sounds()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not import sounds: {err}")
 
-try:
-    build_ocean_test_map()
-except Exception as err:  # noqa: BLE001 - never block the editor from opening
-    unreal.log_error(f"Riptide: could not build ocean test map: {err}")
+    try:
+        make_materials()
+        make_wake_force_material()
+        make_spray_material()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not create materials: {err}")
+
+    try:
+        make_boat_assets()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build the boat model: {err}")
+
+    try:
+        build_ocean_test_map()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build ocean test map: {err}")
+
+
+if _running_editor():
+    _set_up_project()
+else:
+    unreal.log("Riptide: running as a game: the editor-only project setup is skipped")
