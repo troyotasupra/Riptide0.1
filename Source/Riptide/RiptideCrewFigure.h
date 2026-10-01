@@ -17,8 +17,9 @@ class UTextureRenderTarget2D;
  * headgear, face cover, uniform colour, vest, gear colour, pack, gloves), so the crew screen's choices visibly change
  * something, and it reads as a soldier in silhouette in the main menu's shot.
  *
- * Nothing makes one directly: RiptideCrewFigure::Spawn and SetLook below are the menus' only way in, so swapping in
- * the mannequin is a change to those two functions.
+ * Nothing makes one directly: RiptideCrewFigure::Spawn and SetLook below are the menus' only way in. They now make the
+ * real crew mannequin (ARiptideCrewMannequin, rifle shouldered); this stands in only when the crew's generated models
+ * are missing.
  */
 UCLASS(NotPlaceable)
 class RIPTIDE_API ARiptideCrewFigurePlaceholder : public AActor
@@ -44,7 +45,8 @@ private:
 
 namespace RiptideCrewFigure
 {
-	/** Makes a crew member for the menus to show, standing at Where (its feet) and dressed in Look. */
+	/** Makes a crew member for the menus to show, standing at Where (its feet) and dressed in Look: the crew mannequin
+	 * with the rifle shouldered (or the placeholder if the crew's models haven't been built). */
 	RIPTIDE_API AActor* Spawn(UWorld* World, const FTransform& Where, const FRiptideAppearance& Look);
 
 	/** Dresses a figure Spawn made in a new look. */

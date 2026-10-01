@@ -359,13 +359,30 @@ def crew_body_check(world, boat, walker, t):
     if t < cb["spawned"] + 1.0:
         return
     other = cb["other"]
+    if "in_sea" in cb:
+        crew_swim_sample(cb, other, t)
+        return
     cb["other_parts"] = other.get_crew_body().describe_parts()
     cb["other_state"] = str(other.get_crew_body().get_anim_state()).split(".")[-1].split(":")[0]
     cb["parts_ok"] = all(part in cb["other_parts"].split(" ") for part in CREW_PARTS) and "Beard=" not in cb["other_parts"]
-    log("t=%5.1f crew bodies: the player's %s (has a body %s); a crew member in look %s wears %s, animation %s" % (
-        t, cb["walker_parts"], cb["walker_has_body"], CREW_LOOK, cb["other_parts"], cb["other_state"]))
-    other.k2_destroy_actor()
-    cb["done"] = True
+    if "in_sea" not in cb:
+        log("t=%5.1f crew bodies: the player's %s (has a body %s); a crew member in look %s wears %s, animation %s" % (
+            t, cb["walker_parts"], cb["walker_has_body"], CREW_LOOK, cb["other_parts"], cb["other_state"]))
+        # Then over the side, clear of the ladder, to swim for a while (as another player would see them swim).
+        other.set_actor_location(boat.get_actor_transform().transform_location(unreal.Vector(0.0, -320.0, -40.0)), False, True)
+        cb["in_sea"] = t
+
+
+def crew_swim_sample(cb, other, t):
+    """The crew member over the side: their animation should show them swimming."""
+    if t >= cb["in_sea"] + 0.8 and other.is_in_sea():
+        ca = state.setdefault("crew_anim", {})
+        frames, good = ca.get("swim", (0, 0))
+        anim = str(other.get_crew_body().get_anim_state()).split(".")[-1].split(":")[0]
+        ca["swim"] = (frames + 1, good + (1 if anim == "SWIMMING" else 0))
+    if t >= cb["in_sea"] + 3.0:
+        other.destroy_actor()
+        cb["done"] = True
 
 
 def crew_anim_check(walker, t):
@@ -377,9 +394,6 @@ def crew_anim_check(walker, t):
     if walker.is_on_ladder():
         key = "ladder"
         ok = anim == "LADDER"
-    elif walker.is_in_sea():
-        key = "swim"
-        ok = anim == "SWIMMING"
     elif walker.is_manning_helm():
         key = "helm"
         ok = anim == "HELM"

@@ -8,6 +8,8 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "RiptideCrewBody.h"
+#include "RiptideCrewMannequin.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -212,6 +214,18 @@ AActor* RiptideCrewFigure::Spawn(UWorld* World, const FTransform& Where, const F
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	Params.ObjectFlags |= RF_Transient;
+	// The real crew member (the game's own body and gear), standing with the rifle shouldered.
+	if (ARiptideCrewMannequin* Mannequin = World->SpawnActor<ARiptideCrewMannequin>(ARiptideCrewMannequin::StaticClass(), Where, Params))
+	{
+		Mannequin->SetPose(ERiptideCrewPose::RifleReady);
+		Mannequin->SetAppearance(Look);
+		if (Mannequin->GetBody()->HasBody())
+		{
+			return Mannequin;
+		}
+		// The crew's models are built when the editor opens: without them, the shapes below stand in.
+		Mannequin->Destroy();
+	}
 	ARiptideCrewFigurePlaceholder* Figure = World->SpawnActor<ARiptideCrewFigurePlaceholder>(ARiptideCrewFigurePlaceholder::StaticClass(), Where, Params);
 	if (Figure)
 	{
@@ -222,7 +236,11 @@ AActor* RiptideCrewFigure::Spawn(UWorld* World, const FTransform& Where, const F
 
 void RiptideCrewFigure::SetLook(AActor* Figure, const FRiptideAppearance& Look)
 {
-	if (ARiptideCrewFigurePlaceholder* Placeholder = Cast<ARiptideCrewFigurePlaceholder>(Figure))
+	if (ARiptideCrewMannequin* Mannequin = Cast<ARiptideCrewMannequin>(Figure))
+	{
+		Mannequin->SetAppearance(Look);
+	}
+	else if (ARiptideCrewFigurePlaceholder* Placeholder = Cast<ARiptideCrewFigurePlaceholder>(Figure))
 	{
 		Placeholder->SetAppearance(Look);
 	}
