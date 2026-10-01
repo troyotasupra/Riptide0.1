@@ -157,9 +157,6 @@ Military-style bunkers with the same feel as the caves and bunkers in Sons of th
 ## The lost thing (undecided)
 The military is searching the island facilities for something it lost. What that is hasn't been decided yet.
 
-## The world
-The islands sit in three rings around the start island: the **home chain** where the story opens, a **military cordon** around it that you can't approach without being hunted, and past it an **open sea of islands that never ends**, generated from the world seed like No Man's Sky. Breaking through the cordon is the turn into the late game: out there, any island can be claimed and fortified against the mercenary crews sent to bring you back for interrogation. Island sand can be dug down to bedrock (3 m at most) and slides like real sand. Details are in `Docs/WORLD.md`.
-
 ## Home base
 - **An island camp:** shelter, storage, crafting benches, a dock and a bed. It can be raided by mercs.
 - **A boat that becomes a mobile base:** bigger boats get bunks, storage and a workbench, so the crew can live at sea.
@@ -238,7 +235,6 @@ Crewmates can tattoo each other, and you can tattoo yourself.
 12. Playable slice: 3 islands, 3 facilities, first chapter of the story
 
 ## Open design decisions
-- The endgame. Current direction: break through the cordon, then hold out in the open sea against mercenaries sent to capture the crew for interrogation.
-- What the military and the crew are both hunting for.
 - When were the facilities built, and by whom?
 - What is the island chain called?
+- What did the military lose?
