@@ -86,7 +86,12 @@ FText RiptideItems::RarityName(int32 Rarity)
 
 int32 FRiptideItemGrid::NewUid()
 {
-	return (FMath::Rand() & 0x3fffffff) + 1;
+	// Counted up (grids only change on the server), so no two stacks ever share one, which random numbers can't
+	// promise (rand() is only 15 bits on Windows).
+	static int32 Next = 1;
+	const int32 Uid = Next;
+	Next = Next >= 0x3fffffff ? 1 : Next + 1;
+	return Uid;
 }
 
 FIntPoint FRiptideItemGrid::Footprint(FName Id, bool bRotated)
@@ -195,9 +200,9 @@ bool FRiptideItemGrid::Place(FRiptideItem Stack, int32 X, int32 Y, bool bRotated
 			return false;
 		}
 	}
-	else if (!Fits(Stack.Id, X, Y, bRotated, Stack.Uid))
+	else if (!Fits(Stack.Id, X, Y, bRotated, 0))
 	{
-		return false;
+		return false;     // a new stack in this grid: everything already here is in the way
 	}
 	Stack.X = X;
 	Stack.Y = Y;

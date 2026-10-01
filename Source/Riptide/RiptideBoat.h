@@ -71,6 +71,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Boat")
 	float AddFuel(float Liters);
 
+	/** True if the tank has room for this much more fuel. */
+	bool HasRoomForFuel(float Liters) const { return FuelCapacityLiters - FuelLiters >= Liters - 0.01f; }
+
+	/** Whoever is on the boarding ladder (one at a time), or null. */
+	ARiptideCharacter* GetLadderUser() const { return LadderUser; }
+
+	/** Takes or frees the ladder. Server only. */
+	void SetLadderUser(ARiptideCharacter* Crew) { LadderUser = Crew; }
+
+	/** Redraws the mic's cord between the radio and the mic (its holder calls this once they've moved for the
+	 * frame, so the cord stays on the hand). */
+	void UpdateMicCord();
+
 	/** Where the fuel filler is on the gunwale (starboard, aft), in the world. */
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	FTransform GetFuelFillerTransform() const;
@@ -427,8 +440,16 @@ protected:
 
 	/** Puts the mic mesh where MicHolder says: on its clip, or in the holder's hand. */
 	void ApplyMicHolder();
-	void UpdateMicCord();
 	bool bMicCordAtRest = false;
+	/** The cord's mesh data, kept between frames: its shape never changes, only where its vertices are. */
+	TArray<FVector> CordVerts;
+	TArray<FVector> CordNormals;
+	TArray<int32> CordTris;
+
+	UPROPERTY(Replicated)
+	TObjectPtr<ARiptideCharacter> LadderUser;
+
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	void UpdatePropsAndWheel(float DeltaSeconds);
 	float PropSpinRate[2] = { 0.f, 0.f };
@@ -824,6 +845,7 @@ private:
 
 	/** The ocean, found once (GetSeaSurfaceZ is asked many times a frame). */
 	mutable TWeakObjectPtr<class AWaterBodyOcean> CachedOcean;
+	mutable double NextOceanSearch = 0.0;
 
 	float BowSprayOwed[2] = { 0.f, 0.f };
 
@@ -867,8 +889,9 @@ private:
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> NavLenses;
 	void OnTrimReleased(const FInputActionValue& Value);
 
+	/** Leaves the helm, looking where the helmsman was looking (the helm camera only turns on their machine). */
 	UFUNCTION(Server, Reliable)
-	void ServerLeaveHelm();
+	void ServerLeaveHelm(float InLookYaw, float InLookPitch);
 
 	UFUNCTION(Server, Unreliable)
 	void ServerSetControls(float InThrottleInput, float InSteerInput, float InTrimInput, bool bInCutThrottle);

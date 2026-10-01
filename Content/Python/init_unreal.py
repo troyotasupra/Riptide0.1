@@ -299,7 +299,7 @@ def make_materials():
     unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
 
 
-SPRAY_VERSION = "3"
+SPRAY_VERSION = "5"
 
 
 def make_spray_material():

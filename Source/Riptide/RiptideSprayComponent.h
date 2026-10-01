@@ -28,9 +28,10 @@ public:
 	 * out of sight once they fall below SeaZ.
 	 */
 	void ThrowSpray(const FVector& Origin, const FVector& Velocity, float Scatter, int32 Count, float StartSizeCm,
-		float EndSizeCm, float LifeSeconds, float SeaZ, float Opacity = 1.f, float StreakSeconds = 0.05f);
+		float EndSizeCm, float LifeSeconds, float SeaZ, float Opacity = 1.f, float StreakSeconds = 0.05f,
+		const FVector& NeverToward = FVector::ZeroVector);
 
-	/** Most clouds in the air at once; the oldest make way. */
+	/** Most clouds in the air at once; past it, new spray isn't thrown until some has landed. */
 	UPROPERTY(EditAnywhere, Category = "Spray")
 	int32 MaxClouds = 8000;
 
@@ -38,6 +39,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Spray")
 	float Drag = 0.7f;
 
+	/** How many clouds of spray are in the air. */
+	UFUNCTION(BlueprintPure, Category = "Spray")
 	int32 GetCloudCount() const { return Clouds.Num(); }
 
 	/**
@@ -67,4 +70,12 @@ private:
 	void RebuildMesh();
 
 	TArray<FCloud> Clouds;
+
+	/** The drawn quads' data, kept between frames, and how many quads the mesh section has room for. */
+	TArray<FVector> Verts;
+	TArray<FVector> Normals;
+	TArray<FVector2D> UVs;
+	TArray<FColor> Colours;
+	TArray<int32> Tris;
+	int32 SectionQuads = 0;
 };

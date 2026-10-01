@@ -25,7 +25,9 @@ class RIPTIDE_API URiptideCharacterMovement : public UCharacterMovementComponent
 public:
 	URiptideCharacterMovement();
 
-	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+	virtual void UpdateCharacterStateBeforeMovement(float DeltaSeconds) override;
+	virtual bool ServerCheckClientError(float ClientTimeStamp, float DeltaTime, const FVector& Accel, const FVector& ClientWorldLocation,
+		const FVector& RelativeClientLocation, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode) override;
 	virtual bool IsInWater() const override;
 	virtual float ImmersionDepth() const override;
 	virtual float GetMaxSpeed() const override;
@@ -51,4 +53,6 @@ private:
 	void PhysSeaSwim(float DeltaTime, int32 Iterations);
 
 	mutable TWeakObjectPtr<UWaterBodyComponent> Ocean;
+	/** When to look for the ocean again if there wasn't one (a map without sea doesn't search every frame). */
+	mutable double NextOceanSearch = 0.0;
 };

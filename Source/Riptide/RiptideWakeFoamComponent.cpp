@@ -17,7 +17,8 @@ URiptideWakeFoamComponent::URiptideWakeFoamComponent(const FObjectInitializer& O
 	SetUsingAbsoluteScale(true);
 	SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	SetCastShadow(false);
-	bUseAsyncCooking = true;
+	// No collision to cook (cooking it asynchronously would make a new body setup every time the mesh changes).
+	bUseAsyncCooking = false;
 }
 
 int32 URiptideWakeFoamComponent::AddTrail(const FTrailStyle& Style)
@@ -156,7 +157,10 @@ void URiptideWakeFoamComponent::RebuildMesh()
 
 	if (Triangles.Num() == 0)
 	{
-		ClearAllMeshSections();
+		if (GetNumSections() > 0)
+		{
+			ClearAllMeshSections();
+		}
 		return;
 	}
 	CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs, Colors, Tangents, false);

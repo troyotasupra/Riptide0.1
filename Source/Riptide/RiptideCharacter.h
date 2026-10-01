@@ -9,6 +9,7 @@ class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
 class URiptideStorageComponent;
+class UStaticMeshComponent;
 class SRiptideInventory;
 struct FInputActionValue;
 
@@ -32,9 +33,11 @@ public:
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 	virtual void NotifyControllerChanged() override;
 
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 	/** The boat this character belongs to: the one it stands on, returns to after going overboard, and drives. */
 	UFUNCTION(BlueprintCallable, Category = "Crew")
-	void SetHomeBoat(ARiptideBoat* Boat) { HomeBoat = Boat; }
+	void SetHomeBoat(ARiptideBoat* Boat);
 
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	ARiptideBoat* GetHomeBoat() const { return HomeBoat; }
@@ -72,10 +75,13 @@ public:
 
 	/** On the ladder: holding on, climbing, or going over the top onto the boat. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
-	bool IsClimbing() const { return bOnLadder || bClimbingOver; }
+	bool IsClimbing() const;
 
 	UFUNCTION(BlueprintPure, Category = "Crew")
-	bool IsOnLadder() const { return bOnLadder; }
+	bool IsOnLadder() const;
+
+	/** On the ladder or just off it: the server leaves the climber's own movement uncorrected meanwhile. */
+	bool IsLadderLocked() const;
 
 	/** How high the feet are on the ladder, in the boat's frame (cm). */
 	UFUNCTION(BlueprintPure, Category = "Crew")
@@ -115,7 +121,7 @@ public:
 	void SetBracing(bool bHold);
 
 	UFUNCTION(BlueprintPure, Category = "Crew")
-	bool IsKnockedDown() const { return KnockdownTimeLeft > 0.f; }
+	bool IsKnockedDown() const;
 
 	/** How many times the boat's motion has thrown this crew member off balance, and knocked them down. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
@@ -199,6 +205,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Crew")
 	float LadderReach = 160.f;
 
+	/** Litres in a fuel drum (item table: fuel_drum), poured in whole. */
+	static constexpr float DrumLiters = 20.f;
+
 	/** Climbing speed on the ladder (cm/s). */
 	UPROPERTY(EditAnywhere, Category = "Crew")
 	float LadderClimbSpeed = 60.f;
@@ -227,16 +236,38 @@ private:
 	void ServerSetBracing(bool bHold);
 	void OnDive(const FInputActionValue& Value);
 	bool IsAtLadderGrab() const;
+	/** Nobody else is on the home boat's ladder. */
+	bool IsLadderFree() const;
 	void GrabLadder();
 	void UpdateLadder(float DeltaSeconds);
 	void StartClimbOver();
-	/** Back on the boat's deck or in the sea: movement and collision on, moving with the deck. */
+	/** Off the ladder (server): onto the deck or into the sea, moving with the boat plus ExtraVelocity. */
 	void LeaveLadder(const FVector& ExtraVelocity);
+	void SetLadderState(uint8 NewState);
+	/** Applies a change of ladder state on any machine: movement and collision off on it, back on off it. */
+	void ApplyLadderState(uint8 PreviousState);
+
+	UFUNCTION()
+	void OnRep_Ladder(uint8 PreviousState);
+
+	/** The server's clock, the same on every machine (for when a knockdown ends). */
+	double ServerNow() const;
+
+	/** The home boat was destroyed: back on our own feet (and our player back in this body) if we were driving it. */
+	UFUNCTION()
+	void OnHomeBoatDestroyed(AActor* Boat);
+
+	/** Closes the inventory if what it was opened for is out of reach now. */
+	void CloseInventoryIfOutOfReach();
+
+	/** A stand-in body so other players can see this crew member until there's a character model (hidden from
+	 * its own player's eyes). */
+	void MakeStandInBody();
 
 	UFUNCTION(Server, Reliable)
 	void ServerClimbAboard();
 
-	UFUNCTION(Server, Unreliable)
+	UFUNCTION(Server, Reliable)
 	void ServerSetLadderInput(float Axis);
 
 	UFUNCTION(Server, Reliable)
@@ -302,11 +333,9 @@ private:
 	UPROPERTY(Replicated)
 	bool bBracing = false;
 
-	UPROPERTY(ReplicatedUsing = OnRep_Knockdown)
-	float KnockdownTimeLeft = 0.f;
-
-	UFUNCTION()
-	void OnRep_Knockdown() {}
+	/** When the current knockdown ends, on the server's clock (in the past when not knocked down). */
+	UPROPERTY(Replicated)
+	double KnockdownEndTime = -1.0;
 
 	/** The deck point under the feet's velocity last frame (to feel its acceleration), and whether it's valid. */
 	FVector PrevDeckVelocity = FVector::ZeroVector;
@@ -314,18 +343,46 @@ private:
 	float StaggerCooldown = 0.f;
 	int32 StaggerCount = 0;
 	int32 KnockdownCount = 0;
+	FVector SmoothedDeckVelocity = FVector::ZeroVector;
 	FVector SmoothedDeckAccel = FVector::ZeroVector;
+	/** When this crew member was last in the sea (so bobbing out of a trough isn't counted as going overboard). */
+	double LastInSeaTime = -100.0;
+	/** The controller that was driving this body before it took the helm (to give it back if the boat is lost). */
+	TWeakObjectPtr<AController> HelmDriver;
+	/** The locker the inventory was opened at, or INDEX_NONE. */
+	int32 OpenLocker = INDEX_NONE;
 
-	/** On the ladder: the feet's height on it (boat frame), the climb input, and going over the top (time into it,
-	 * where it started on the boat). After letting go it can't be grabbed again for a moment. */
-	bool bOnLadder = false;
+	/** The ladder (the server's, replicated): off it, hanging on it, or climbing over the top onto the boat; the
+	 * feet's height on it in the boat's frame; where the climb over started; and the push when letting go. */
+	UPROPERTY(ReplicatedUsing = OnRep_Ladder)
+	uint8 LadderState = 0;
+
+	UPROPERTY(Replicated)
 	float LadderFeetZ = 0.f;
+
+	UPROPERTY(Replicated)
+	FVector_NetQuantize10 ClimbOverStart;
+
+	UPROPERTY(Replicated)
+	FVector_NetQuantize10 LadderLeavePush;
+
+	/** The height drawn (following LadderFeetZ smoothly on clients), the climb input (W/S), the last input sent to
+	 * the server, time into the climb over, the pause before the ladder can be taken again after letting go, the
+	 * grace after it before movement corrections resume, and the pause between a client's requests to take hold. */
+	float DisplayFeetZ = 0.f;
 	float LadderInput = 0.f;
 	float SentLadderInput = 0.f;
-	bool bClimbingOver = false;
 	float ClimbOverTime = 0.f;
-	FVector ClimbOverStart = FVector::ZeroVector;
 	float LadderRegrabBlock = 0.f;
+	float LadderGrace = 0.f;
+	float GrabRequestCooldown = 0.f;
+
+	/** The stand-in body others see. */
+	UPROPERTY(VisibleAnywhere, Category = "Crew")
+	TObjectPtr<UStaticMeshComponent> StandInBody;
+
+	UPROPERTY(VisibleAnywhere, Category = "Crew")
+	TObjectPtr<UStaticMeshComponent> StandInHead;
 
 	TSharedPtr<SRiptideInventory> InventoryWidget;
 	TSharedPtr<class SWidget> InventoryWidgetContainer;
