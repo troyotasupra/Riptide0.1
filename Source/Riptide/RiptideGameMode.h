@@ -11,4 +11,10 @@ class RIPTIDE_API ARiptideGameMode : public AGameModeBase
 
 public:
 	ARiptideGameMode();
+
+	/** On a map with a world director, boats start off the start island instead of at a player start. */
+	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
+
+private:
+	int32 BoatsSpawned = 0;
 };

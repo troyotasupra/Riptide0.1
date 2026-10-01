@@ -16,3 +16,9 @@ __pycache__/
 
 # Built by Content/Python/init_unreal.py on first editor launch
 Content/Riptide/Maps/Ocean_Test.umap
+Content/Riptide/Maps/Archipelago_Test.umap
+Content/Riptide/Materials/M_IslandTerrain.uasset
+
+# Built by Tools/worldgen_test.cpp
+worldgen_test
+worldgen_test.exe
