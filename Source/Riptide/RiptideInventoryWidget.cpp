@@ -198,7 +198,9 @@ SRiptideInventory::FTarget SRiptideInventory::FindTarget(const TArray<FPanel>& P
 	Target.Cell = Under - Drag.Grab;
 	const FRiptideItemGrid& Grid = Target.Panel->Storage->GetStorage(Target.Panel->Index)->Grid;
 	const bool bSame = Target.Panel->Storage == Drag.Storage && Target.Panel->Index == Drag.Index;
-	const int32 Ignore = bSame ? Drag.Uid : 0;
+	// Its own cells are free to drop back on only when the whole stack is moving (Count 0); half a stack leaves the
+	// rest behind in them.
+	const int32 Ignore = bSame && Drag.Count == 0 ? Drag.Uid : 0;
 	if (Grid.Fits(Drag.Id, Target.Cell.X, Target.Cell.Y, Drag.bRotated, Ignore))
 	{
 		Target.State = FTarget::Ok;
@@ -453,7 +455,12 @@ FReply SRiptideInventory::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent
 		Drag.Grab = FIntPoint(Drag.Grab.Y, Drag.Grab.X);
 		return FReply::Handled();
 	}
-	if (Key == EKeys::Tab || Key == EKeys::E || Key == EKeys::Escape)
+	if (InKeyEvent.IsRepeat())
+	{
+		return FReply::Handled();       // holding E after opening a locker mustn't close it again
+	}
+	if (Key == EKeys::Tab || Key == EKeys::E || Key == EKeys::Escape || Key == EKeys::Gamepad_Special_Right
+		|| Key == EKeys::Gamepad_FaceButton_Right || Key == EKeys::Gamepad_FaceButton_Left)
 	{
 		OnClose.ExecuteIfBound();
 		return FReply::Handled();

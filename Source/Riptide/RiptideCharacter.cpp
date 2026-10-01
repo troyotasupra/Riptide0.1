@@ -2,6 +2,12 @@
 
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "EngineUtils.h"
+#include "GameFramework/GameStateBase.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Engine/Engine.h"
 #include "Engine/LocalPlayer.h"
 #include "EnhancedInputComponent.h"
@@ -14,6 +20,7 @@
 #include "Net/UnrealNetwork.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacterMovement.h"
+#include "RiptidePlayerState.h"
 #include "RiptideInventoryWidget.h"
 #include "RiptideStorageComponent.h"
 #include "Engine/GameViewportClient.h"
@@ -62,6 +69,41 @@ ARiptideCharacter::ARiptideCharacter(const FObjectInitializer& ObjectInitializer
 	Move->bImpartBaseAngularVelocity = true;
 	// The boat's turns turn the character (and its view) with it.
 	Move->bIgnoreBaseRotation = false;
+	// A body nobody is controlling (its player away driving the boat, or a crew member whose player has left) still
+	// stands on the deck and rides along with it.
+	Move->bRunPhysicsWithNoController = true;
+
+	MakeStandInBody();
+}
+
+void ARiptideCharacter::MakeStandInBody()
+{
+	// Until there's a character model: a dark overall-clad body and a head, the size of a person, for the other
+	// players to see. Its own player never sees it (it would fill the view).
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	StandInBody = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StandInBody"));
+	StandInBody->SetupAttachment(GetCapsuleComponent());
+	StandInBody->SetRelativeLocation(FVector(0.f, 0.f, -12.f));
+	StandInBody->SetRelativeScale3D(FVector(0.42f, 0.36f, 1.5f));        // the basic cylinder is 1 m across, 1 m tall
+	StandInHead = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StandInHead"));
+	StandInHead->SetupAttachment(GetCapsuleComponent());
+	StandInHead->SetRelativeLocation(FVector(0.f, 0.f, 72.f));
+	StandInHead->SetRelativeScale3D(FVector(0.24f));
+	for (UStaticMeshComponent* Part : { StandInBody.Get(), StandInHead.Get() })
+	{
+		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Part->SetOwnerNoSee(true);
+		Part->SetCastShadow(true);
+	}
+	if (Cylinder.Succeeded())
+	{
+		StandInBody->SetStaticMesh(Cylinder.Object);
+	}
+	if (Sphere.Succeeded())
+	{
+		StandInHead->SetStaticMesh(Sphere.Object);
+	}
 }
 
 void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -71,12 +113,26 @@ void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ARiptideCharacter, bManningHelm);
 	DOREPLIFETIME(ARiptideCharacter, OverboardCount);
 	DOREPLIFETIME(ARiptideCharacter, bBracing);
-	DOREPLIFETIME(ARiptideCharacter, KnockdownTimeLeft);
+	DOREPLIFETIME(ARiptideCharacter, KnockdownEndTime);
+	DOREPLIFETIME(ARiptideCharacter, LadderState);
+	DOREPLIFETIME(ARiptideCharacter, LadderFeetZ);
+	DOREPLIFETIME(ARiptideCharacter, ClimbOverStart);
+	DOREPLIFETIME(ARiptideCharacter, LadderLeavePush);
 }
 
 void ARiptideCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	// The stand-in's colour: dark navy overalls, a tan face.
+	auto Tint = [](UStaticMeshComponent* Part, const FLinearColor& Colour)
+	{
+		if (UMaterialInstanceDynamic* M = Part ? Part->CreateDynamicMaterialInstance(0) : nullptr)
+		{
+			M->SetVectorParameterValue(TEXT("Color"), Colour);
+		}
+	};
+	Tint(StandInBody, FLinearColor(0.02f, 0.03f, 0.05f));
+	Tint(StandInHead, FLinearColor(0.45f, 0.3f, 0.2f));
 	if (HasAuthority() && Inventory->Num() == 0)
 	{
 		// Grids sized like the old build's: pockets, and a small pack until there's gear to wear.
@@ -146,8 +202,97 @@ void ARiptideCharacter::BuildInput()
 	WalkMapping->MapKey(InventoryAction, EKeys::Gamepad_Special_Right);
 }
 
+void ARiptideCharacter::SetHomeBoat(ARiptideBoat* Boat)
+{
+	if (HomeBoat && HasAuthority())
+	{
+		HomeBoat->OnDestroyed.RemoveDynamic(this, &ARiptideCharacter::OnHomeBoatDestroyed);
+	}
+	HomeBoat = Boat;
+	if (HomeBoat && HasAuthority())
+	{
+		HomeBoat->OnDestroyed.AddUniqueDynamic(this, &ARiptideCharacter::OnHomeBoatDestroyed);
+	}
+}
+
+void ARiptideCharacter::OnHomeBoatDestroyed(AActor* Boat)
+{
+	if (bManningHelm)
+	{
+		bManningHelm = false;
+		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		ApplyManningHelm();
+		if (AController* Driver = HelmDriver.Get(); Driver && !Driver->GetPawn())
+		{
+			Driver->Possess(this);
+		}
+	}
+	if (IsClimbing())
+	{
+		LeaveLadder(FVector::ZeroVector);
+	}
+}
+
+void ARiptideCharacter::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+	WatchAppearance();
+}
+
+void ARiptideCharacter::OnRep_PlayerState()
+{
+	Super::OnRep_PlayerState();
+	WatchAppearance();
+}
+
+void ARiptideCharacter::WatchAppearance()
+{
+	ARiptidePlayerState* State = GetPlayerState<ARiptidePlayerState>();
+	if (!State || State == WatchedState.Get())
+	{
+		return;
+	}
+	if (ARiptidePlayerState* Old = WatchedState.Get())
+	{
+		Old->OnAppearanceChanged.Remove(AppearanceWatch);
+	}
+	WatchedState = State;
+	AppearanceWatch = State->OnAppearanceChanged.AddUObject(this, &ARiptideCharacter::ApplyAppearance);
+	ApplyAppearance();
+}
+
+void ARiptideCharacter::ApplyAppearance()
+{
+	// The body is built here from the look (to come: the crew character); for now the stand-in shows it's arrived.
+	const ARiptidePlayerState* State = WatchedState.Get();
+	UE_LOG(LogTemp, Verbose, TEXT("Riptide: %s's look is %s"), *GetName(), State ? *State->GetAppearance().ToString() : TEXT("(none)"));
+}
+
+void ARiptideCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (ARiptidePlayerState* Old = WatchedState.Get())
+	{
+		Old->OnAppearanceChanged.Remove(AppearanceWatch);
+	}
+	CloseInventory();
+	if (HasAuthority() && IsValid(HomeBoat) && HomeBoat->GetLadderUser() == this)
+	{
+		HomeBoat->SetLadderUser(nullptr);
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
 void ARiptideCharacter::NotifyControllerChanged()
 {
+	// A body its player has left (to drive the boat, or gone) isn't holding anything any more: keys held as the
+	// controls swapped never report being let go.
+	if (!Controller)
+	{
+		bBracing = false;
+		LadderInput = 0.f;
+		SentLadderInput = 0.f;
+		CloseInventory();
+	}
 	// Swap the walking controls in or out as a player takes or leaves this body (before Super, which forgets
 	// the previous controller).
 	BuildInput();
@@ -175,12 +320,14 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	{
 		Input->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnMove);
 		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetLadderInput(0.f); });
+		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetLadderInput(0.f); });
 		Input->BindAction(LookAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnLook);
 		Input->BindAction(JumpAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnJump);
 		Input->BindAction(JumpAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnSwimUp);
 		Input->BindAction(DiveAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnDive);
 		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Started, [this](const FInputActionValue&) { SetBracing(true); });
 		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetBracing(false); });
+		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetBracing(false); });
 		Input->BindAction(InteractAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInteract);
 		Input->BindAction(InventoryAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInventoryKey);
 	}
@@ -220,11 +367,11 @@ void ARiptideCharacter::OnLook(const FInputActionValue& Value)
 
 void ARiptideCharacter::OnJump(const FInputActionValue& Value)
 {
-	if (bOnLadder)
+	if (IsOnLadder())
 	{
 		LetGoOfLadder();
 	}
-	else if (!IsInSea() && !bClimbingOver)
+	else if (!IsInSea() && !IsClimbing() && !IsKnockedDown())
 	{
 		Jump();
 	}
@@ -254,9 +401,14 @@ bool ARiptideCharacter::IsInSea() const
 	return Move && Move->IsSeaSwimming();
 }
 
+bool ARiptideCharacter::IsLadderFree() const
+{
+	return IsValid(HomeBoat) && (!HomeBoat->GetLadderUser() || HomeBoat->GetLadderUser() == this);
+}
+
 bool ARiptideCharacter::IsAtLadder() const
 {
-	return HomeBoat && !IsClimbing() && IsInSea()
+	return IsValid(HomeBoat) && !IsClimbing() && IsInSea() && IsLadderFree()
 		&& FVector::Dist(GetActorLocation(), HomeBoat->GetLadderFootTransform().GetLocation()) <= LadderReach;
 }
 
@@ -270,12 +422,30 @@ namespace
 	constexpr float LadderHighestFeet = 40.f;    // above it
 	constexpr float LadderGrabRadius = 45.f;
 	constexpr float ClimbOverLeg = 0.45f;        // seconds for each of the two moves over the top
+	constexpr uint8 LadderNone = 0;
+	constexpr uint8 LadderHanging = 1;
+	constexpr uint8 LadderClimbingOver = 2;
+}
+
+bool ARiptideCharacter::IsOnLadder() const
+{
+	return LadderState == LadderHanging;
+}
+
+bool ARiptideCharacter::IsClimbing() const
+{
+	return LadderState != LadderNone;
+}
+
+bool ARiptideCharacter::IsLadderLocked() const
+{
+	return LadderState != LadderNone || LadderGrace > 0.f;
 }
 
 bool ARiptideCharacter::IsAtLadderGrab() const
 {
-	// Swum right into the ladder.
-	if (!HomeBoat || IsClimbing() || !IsInSea() || LadderRegrabBlock > 0.f)
+	// Swum right into the ladder (and not from deep below it).
+	if (!IsValid(HomeBoat) || IsClimbing() || !IsInSea() || LadderRegrabBlock > 0.f || !IsLadderFree())
 	{
 		return false;
 	}
@@ -283,7 +453,7 @@ bool ARiptideCharacter::IsAtLadderGrab() const
 	const FVector Foot = Boat.InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation());
 	const FVector Me = Boat.InverseTransformPosition(GetActorLocation());
 	return FVector2D::Distance(FVector2D(Me.X, Me.Y), FVector2D(Foot.X - LadderBodyAft, Foot.Y)) <= LadderGrabRadius
-		&& Me.Z > Foot.Z - 250.f && Me.Z < Foot.Z + 150.f;
+		&& Me.Z > Foot.Z - 150.f && Me.Z < Foot.Z + 150.f;
 }
 
 void ARiptideCharacter::TryClimbAboard()
@@ -292,8 +462,11 @@ void ARiptideCharacter::TryClimbAboard()
 	{
 		return;
 	}
-	GrabLadder();
-	if (!HasAuthority())
+	if (HasAuthority())
+	{
+		GrabLadder();
+	}
+	else
 	{
 		ServerClimbAboard();
 	}
@@ -307,25 +480,69 @@ void ARiptideCharacter::ServerClimbAboard_Implementation()
 	}
 }
 
+// The ladder is the server's: it alone takes hold, climbs, goes over the top and lets go, and every machine (the
+// climber's own included) places the climber from what it replicates, in the boat's frame. The climber's machine
+// sends its W/S; while on the ladder the server doesn't correct the climber's movement (see
+// URiptideCharacterMovement::ServerCheckClientError), since the character's own movement is switched off.
+
 void ARiptideCharacter::GrabLadder()
 {
 	const FTransform Boat = HomeBoat->GetActorTransform();
 	const FVector Foot = Boat.InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation());
 	const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-	bOnLadder = true;
-	bClimbingOver = false;
 	LadderInput = 0.f;
 	LadderFeetZ = FMath::Clamp(Boat.InverseTransformPosition(GetActorLocation()).Z - HalfHeight,
 		Foot.Z + LadderLowestFeet, Foot.Z + LadderHighestFeet);
-	GetCharacterMovement()->StopMovementImmediately();
-	GetCharacterMovement()->DisableMovement();
-	SetActorEnableCollision(false);
+	HomeBoat->SetLadderUser(this);
+	KnockdownEndTime = -1.f;
+	SetLadderState(LadderHanging);
+}
+
+void ARiptideCharacter::SetLadderState(uint8 NewState)
+{
+	const uint8 Previous = LadderState;
+	LadderState = NewState;
+	ApplyLadderState(Previous);
+}
+
+void ARiptideCharacter::OnRep_Ladder(uint8 PreviousState)
+{
+	ApplyLadderState(PreviousState);
+}
+
+void ARiptideCharacter::ApplyLadderState(uint8 PreviousState)
+{
+	UCharacterMovementComponent* Move = GetCharacterMovement();
+	if (LadderState != LadderNone && PreviousState == LadderNone)
+	{
+		// Onto the ladder: the body hangs from it, moved by the climb, not walking or swimming.
+		Move->StopMovementImmediately();
+		Move->DisableMovement();
+		SetActorEnableCollision(false);
+		DisplayFeetZ = LadderFeetZ;
+		SentLadderInput = 0.f;
+		CloseInventory();
+	}
+	if (LadderState == LadderClimbingOver && PreviousState != LadderClimbingOver)
+	{
+		ClimbOverTime = 0.f;
+	}
+	if (LadderState == LadderNone && PreviousState != LadderNone)
+	{
+		// Off it, onto the deck or back into the sea, moving with the boat (and pushing off, if letting go).
+		SetActorEnableCollision(true);
+		Move->SetMovementMode(MOVE_Falling);
+		Move->Velocity = (IsValid(HomeBoat) ? HomeBoat->GetDeckPointVelocity(GetActorLocation()) : FVector::ZeroVector) + FVector(LadderLeavePush);
+		LadderRegrabBlock = 1.5f;
+		LadderInput = 0.f;
+		SentLadderInput = 0.f;
+	}
 }
 
 void ARiptideCharacter::SetLadderInput(float Axis)
 {
 	LadderInput = FMath::Clamp(Axis, -1.f, 1.f);
-	if (!HasAuthority() && IsLocallyControlled() && FMath::Abs(LadderInput - SentLadderInput) > 0.05f)
+	if (!HasAuthority() && IsLocallyControlled() && LadderState == LadderHanging && FMath::Abs(LadderInput - SentLadderInput) > 0.05f)
 	{
 		SentLadderInput = LadderInput;
 		ServerSetLadderInput(LadderInput);
@@ -334,22 +551,22 @@ void ARiptideCharacter::SetLadderInput(float Axis)
 
 void ARiptideCharacter::ServerSetLadderInput_Implementation(float Axis)
 {
-	LadderInput = FMath::Clamp(Axis, -1.f, 1.f);
+	LadderInput = FMath::IsFinite(Axis) ? FMath::Clamp(Axis, -1.f, 1.f) : 0.f;
 }
 
 void ARiptideCharacter::LetGoOfLadder()
 {
-	if (!bOnLadder)
+	if (LadderState != LadderHanging)
 	{
 		return;
 	}
-	// Pushing off backwards, away from the motors and the ladder.
-	LeaveLadder(-HomeBoat->GetActorForwardVector() * 120.f);
-	LadderRegrabBlock = 1.5f;
 	if (!HasAuthority())
 	{
 		ServerLetGoOfLadder();
+		return;
 	}
+	// Pushing off backwards, away from the motors and the ladder.
+	LeaveLadder(IsValid(HomeBoat) ? -HomeBoat->GetActorForwardVector() * 120.f : FVector::ZeroVector);
 }
 
 void ARiptideCharacter::ServerLetGoOfLadder_Implementation()
@@ -359,82 +576,99 @@ void ARiptideCharacter::ServerLetGoOfLadder_Implementation()
 
 void ARiptideCharacter::LeaveLadder(const FVector& ExtraVelocity)
 {
-	bOnLadder = false;
-	bClimbingOver = false;
-	LadderInput = 0.f;
-	SetActorEnableCollision(true);
-	UCharacterMovementComponent* Move = GetCharacterMovement();
-	Move->SetMovementMode(MOVE_Falling);
-	Move->Velocity = (HomeBoat ? HomeBoat->GetDeckPointVelocity(GetActorLocation()) : FVector::ZeroVector) + ExtraVelocity;
+	LadderLeavePush = ExtraVelocity;
+	// The climber's own machine catches up a moment later: don't correct it in between.
+	LadderGrace = 0.4f;
+	if (IsValid(HomeBoat) && HomeBoat->GetLadderUser() == this)
+	{
+		HomeBoat->SetLadderUser(nullptr);
+	}
+	SetLadderState(LadderNone);
 }
 
 void ARiptideCharacter::StartClimbOver()
 {
-	bOnLadder = false;
-	bClimbingOver = true;
-	ClimbOverTime = 0.f;
 	ClimbOverStart = HomeBoat->GetActorTransform().InverseTransformPosition(GetActorLocation());
+	SetLadderState(LadderClimbingOver);
 }
 
 void ARiptideCharacter::UpdateLadder(float DeltaSeconds)
 {
 	LadderRegrabBlock = FMath::Max(0.f, LadderRegrabBlock - DeltaSeconds);
-	if (!HomeBoat)
+	LadderGrace = FMath::Max(0.f, LadderGrace - DeltaSeconds);
+	GrabRequestCooldown = FMath::Max(0.f, GrabRequestCooldown - DeltaSeconds);
+	if (!IsValid(HomeBoat))
 	{
+		// The boat's gone: nothing to hang on to.
+		if (HasAuthority() && IsClimbing())
+		{
+			LeaveLadder(FVector::ZeroVector);
+		}
 		return;
 	}
+	// Swimming into the ladder takes hold of it (the climber's machine asks the server, which checks for itself).
 	if (IsAtLadderGrab())
 	{
-		GrabLadder();
-		if (!HasAuthority())
+		if (HasAuthority())
+		{
+			GrabLadder();
+		}
+		else if (IsLocallyControlled() && GrabRequestCooldown <= 0.f)
 		{
 			ServerClimbAboard();
+			GrabRequestCooldown = 0.5f;
 		}
 	}
 	const FTransform Boat = HomeBoat->GetActorTransform();
 	const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 	const FVector Foot = Boat.InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation());
-	if (bOnLadder)
+	if (LadderState == LadderHanging)
 	{
-		// Hand over hand while W or S is held; holding on where you are when neither is.
-		const float Low = Foot.Z + LadderLowestFeet;
-		const float High = Foot.Z + LadderHighestFeet;
-		LadderFeetZ += LadderInput * LadderClimbSpeed * DeltaSeconds;
-		if (LadderInput > 0.1f && LadderFeetZ >= High)
+		if (HasAuthority())
 		{
-			LadderFeetZ = High;
-			StartClimbOver();
-		}
-		else if (LadderInput < -0.1f && LadderFeetZ <= Low)
-		{
-			LadderFeetZ = Low;
-			SetActorLocation(Boat.TransformPosition(FVector(Foot.X - LadderBodyAft, Foot.Y, LadderFeetZ + HalfHeight)), false, nullptr,
-				ETeleportType::TeleportPhysics);
-			LeaveLadder(FVector::ZeroVector);      // climbed off the bottom, back to swimming
-			LadderRegrabBlock = 1.5f;
-			return;
-		}
-		LadderFeetZ = FMath::Clamp(LadderFeetZ, Low, High);
-		SetActorLocation(Boat.TransformPosition(FVector(Foot.X - LadderBodyAft, Foot.Y, LadderFeetZ + HalfHeight)), false, nullptr,
-			ETeleportType::TeleportPhysics);
-	}
-	if (bClimbingOver)
-	{
-		// A leg over the transom onto the stern box, and down into the cockpit.
-		ClimbOverTime += DeltaSeconds;
-		const FVector Top = Boat.InverseTransformPosition(HomeBoat->GetLadderTopTransform().GetLocation()) + FVector(0.f, 0.f, HalfHeight);
-		const FVector Landing = Boat.InverseTransformPosition(HomeBoat->GetLadderLandingTransform().GetLocation()) + FVector(0.f, 0.f, HalfHeight + 4.f);
-		FVector Where;
-		if (ClimbOverTime < ClimbOverLeg)
-		{
-			Where = FMath::Lerp(ClimbOverStart, Top, FMath::SmoothStep(0.f, 1.f, ClimbOverTime / ClimbOverLeg));
+			// Hand over hand while W or S is held; holding on where you are when neither is.
+			const float Low = Foot.Z + LadderLowestFeet;
+			const float High = Foot.Z + LadderHighestFeet;
+			LadderFeetZ = FMath::Clamp(LadderFeetZ + LadderInput * LadderClimbSpeed * DeltaSeconds, Low, High);
+			DisplayFeetZ = LadderFeetZ;
+			if (LadderInput > 0.1f && LadderFeetZ >= High)
+			{
+				SetActorLocation(Boat.TransformPosition(FVector(Foot.X - LadderBodyAft, Foot.Y, LadderFeetZ + HalfHeight)), false, nullptr,
+					ETeleportType::TeleportPhysics);
+				StartClimbOver();
+			}
+			else if (LadderInput < -0.1f && LadderFeetZ <= Low)
+			{
+				SetActorLocation(Boat.TransformPosition(FVector(Foot.X - LadderBodyAft, Foot.Y, LadderFeetZ + HalfHeight)), false, nullptr,
+					ETeleportType::TeleportPhysics);
+				LeaveLadder(FVector::ZeroVector);      // climbed off the bottom, back to swimming
+				return;
+			}
 		}
 		else
 		{
-			Where = FMath::Lerp(Top, Landing, FMath::SmoothStep(0.f, 1.f, FMath::Min(1.f, (ClimbOverTime - ClimbOverLeg) / ClimbOverLeg)));
+			// Following the server's height smoothly between its updates.
+			DisplayFeetZ = FMath::FInterpTo(DisplayFeetZ, LadderFeetZ, DeltaSeconds, 12.f);
 		}
+		if (LadderState == LadderHanging)
+		{
+			SetActorLocation(Boat.TransformPosition(FVector(Foot.X - LadderBodyAft, Foot.Y, DisplayFeetZ + HalfHeight)), false, nullptr,
+				ETeleportType::TeleportPhysics);
+		}
+	}
+	if (LadderState == LadderClimbingOver)
+	{
+		// A leg over the transom onto the stern box, and down into the cockpit (timed on every machine from when it
+		// started, so they all show the same climb).
+		ClimbOverTime += DeltaSeconds;
+		const FVector Start(ClimbOverStart);
+		const FVector Top = Boat.InverseTransformPosition(HomeBoat->GetLadderTopTransform().GetLocation()) + FVector(0.f, 0.f, HalfHeight);
+		const FVector Landing = Boat.InverseTransformPosition(HomeBoat->GetLadderLandingTransform().GetLocation()) + FVector(0.f, 0.f, HalfHeight + 4.f);
+		const FVector Where = ClimbOverTime < ClimbOverLeg
+			? FMath::Lerp(Start, Top, FMath::SmoothStep(0.f, 1.f, ClimbOverTime / ClimbOverLeg))
+			: FMath::Lerp(Top, Landing, FMath::SmoothStep(0.f, 1.f, FMath::Min(1.f, (ClimbOverTime - ClimbOverLeg) / ClimbOverLeg)));
 		SetActorLocation(Boat.TransformPosition(Where), false, nullptr, ETeleportType::TeleportPhysics);
-		if (ClimbOverTime >= 2.f * ClimbOverLeg)
+		if (HasAuthority() && ClimbOverTime >= 2.f * ClimbOverLeg)
 		{
 			LeaveLadder(FVector::ZeroVector);      // aboard, moving with the deck
 		}
@@ -505,8 +739,12 @@ void ARiptideCharacter::OnMovementModeChanged(EMovementMode PrevMovementMode, ui
 	Super::OnMovementModeChanged(PrevMovementMode, PreviousCustomMode);
 	if (HasAuthority() && IsInSea() && PrevMovementMode != MOVE_Custom)
 	{
-		++OverboardCount;
-		UE_LOG(LogTemp, Log, TEXT("Riptide: %s is in the sea at t=%.1f"), *GetName(), GetWorld()->GetTimeSeconds());
+		KnockdownEndTime = -1.0;
+		if (LadderRegrabBlock <= 0.f && GetWorld()->GetTimeSeconds() - LastInSeaTime > 1.5)
+		{
+			++OverboardCount;
+			UE_LOG(LogTemp, Log, TEXT("Riptide: %s is in the sea at t=%.1f"), *GetName(), GetWorld()->GetTimeSeconds());
+		}
 	}
 }
 
@@ -543,7 +781,7 @@ void ARiptideCharacter::OnInventoryKey(const FInputActionValue& Value)
 
 int32 ARiptideCharacter::GetLockerInReach() const
 {
-	if (!HomeBoat || bManningHelm || !HomeBoat->GetLockers())
+	if (!IsValid(HomeBoat) || bManningHelm || !HomeBoat->GetLockers() || IsInSea() || IsClimbing() || IsKnockedDown())
 	{
 		return INDEX_NONE;
 	}
@@ -578,6 +816,7 @@ void ARiptideCharacter::OpenInventory(int32 Locker)
 				Self->CloseInventory();
 			}
 		}));
+	OpenLocker = Locker;
 	InventoryWidgetContainer = SNew(SWeakWidget).PossiblyNullContent(InventoryWidget);
 	GEngine->GameViewport->AddViewportWidgetContent(InventoryWidgetContainer.ToSharedRef(), 10);
 	FInputModeUIOnly Mode;
@@ -594,8 +833,14 @@ void ARiptideCharacter::CloseInventory()
 	{
 		GEngine->GameViewport->RemoveViewportWidgetContent(InventoryWidgetContainer.ToSharedRef());
 	}
+	const bool bWasOpen = InventoryWidget.IsValid();
 	InventoryWidget.Reset();
 	InventoryWidgetContainer.Reset();
+	OpenLocker = INDEX_NONE;
+	if (!bWasOpen)
+	{
+		return;
+	}
 	if (APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
 		PC->SetInputMode(FInputModeGameOnly());
@@ -609,7 +854,8 @@ bool ARiptideCharacter::FindFuelDrum(int32& OutGrid, int32& OutUid) const
 	{
 		for (const FRiptideItem& Item : Inventory->GetStorage(Grid)->Grid.Items)
 		{
-			if (Item.Id == FName(TEXT("fuel_drum")))
+			static const FName FuelDrum(TEXT("fuel_drum"));
+			if (Item.Id == FuelDrum)
 			{
 				OutGrid = Grid;
 				OutUid = Item.Uid;
@@ -623,7 +869,7 @@ bool ARiptideCharacter::FindFuelDrum(int32& OutGrid, int32& OutUid) const
 bool ARiptideCharacter::CanRefuel() const
 {
 	int32 Grid, Uid;
-	if (!HomeBoat || bManningHelm || IsInSea() || !FindFuelDrum(Grid, Uid))
+	if (!IsValid(HomeBoat) || bManningHelm || IsInSea() || IsClimbing() || !FindFuelDrum(Grid, Uid) || !HomeBoat->HasRoomForFuel(DrumLiters))
 	{
 		return false;
 	}
@@ -650,14 +896,14 @@ void ARiptideCharacter::TryRefuel()
 void ARiptideCharacter::ServerRefuel_Implementation()
 {
 	int32 Grid, Uid;
-	if (!CanRefuel() || !FindFuelDrum(Grid, Uid) || HomeBoat->GetFuelFraction() >= 1.f)
+	if (!CanRefuel() || !FindFuelDrum(Grid, Uid))
 	{
 		return;
 	}
-	// A drum holds twenty litres (item table: fuel_drum); the empty drum goes over the side.
+	// A drum holds twenty litres (item table: fuel_drum), poured in whole; the empty drum goes over the side.
 	Inventory->GetStorage(Grid)->Grid.Take(Uid, 1);
 	Inventory->OnChanged.Broadcast();
-	const float Poured = HomeBoat->AddFuel(20.f);
+	const float Poured = HomeBoat->AddFuel(DrumLiters);
 	UE_LOG(LogTemp, Log, TEXT("Riptide: %s poured %.0f L of fuel into %s"), *GetName(), Poured, *HomeBoat->GetName());
 }
 
@@ -696,7 +942,7 @@ bool ARiptideCharacter::CanReach(const URiptideStorageComponent* Storage, int32 
 		return true;
 	}
 	// A locker on the home boat, within reach (with some slack for the boat moving under a lagging client).
-	if (HomeBoat && Storage == HomeBoat->GetLockers() && Storage->GetStorage(Index))
+	if (IsValid(HomeBoat) && Storage == HomeBoat->GetLockers() && Storage->GetStorage(Index) && !IsInSea() && !IsClimbing())
 	{
 		const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
 		return FVector::Dist(Storage->GetWorldPoint(Index), Feet + FVector(0.f, 0.f, 40.f)) <= LockerReach * 1.6f;
@@ -717,7 +963,7 @@ void ARiptideCharacter::ServerMoveItem_Implementation(URiptideStorageComponent* 
 
 bool ARiptideCharacter::IsAtHelm() const
 {
-	if (!HomeBoat || bManningHelm)
+	if (!IsValid(HomeBoat) || bManningHelm || IsKnockedDown() || IsInSea() || IsClimbing() || HomeBoat->GetHelmsman())
 	{
 		return false;
 	}
@@ -756,12 +1002,14 @@ void ARiptideCharacter::SetManningHelm(bool bManning)
 		return;
 	}
 	bManningHelm = bManning;
+	KnockdownEndTime = -1.0;
 
 	// Stands on the helm's spot either way: riding along there while driving, and stepping off from it after.
 	const FTransform Stand = HomeBoat->GetHelmStandTransform();
 	const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 	if (bManning)
 	{
+		HelmDriver = GetController();
 		ApplyManningHelm();
 		SetActorLocationAndRotation(Stand.GetLocation() + Stand.GetUnitAxis(EAxis::Z) * HalfHeight, FRotator(0.f, Stand.Rotator().Yaw, 0.f));
 		AttachToComponent(HomeBoat->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
@@ -769,7 +1017,6 @@ void ARiptideCharacter::SetManningHelm(bool bManning)
 	else
 	{
 		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		SetActorLocation(Stand.GetLocation() + Stand.GetUnitAxis(EAxis::Z) * (HalfHeight + 4.f), false, nullptr, ETeleportType::TeleportPhysics);
 		ApplyManningHelm();
 	}
 }
@@ -782,13 +1029,32 @@ void ARiptideCharacter::ApplyManningHelm()
 	{
 		GetCharacterMovement()->DisableMovement();
 	}
-	else
+	else if (IsValid(HomeBoat))
 	{
-		// Stepping off moving with the deck: dropped standing still while the boat runs at speed, the deck would
-		// sweep on under the feet and the body would end up in it.
+		// Stepping back onto the deck at the helm's spot, placed from this machine's own view of the boat (on a
+		// client it's a moment behind the server's), and a step aft if someone's standing there. Moving with the
+		// deck: dropped standing still while the boat runs at speed, the deck would sweep on under the feet and the
+		// body would end up in it.
+		const FTransform Stand = HomeBoat->GetHelmStandTransform();
+		FVector Spot = Stand.GetLocation();
+		for (const ARiptideCharacter* Other : TActorRange<ARiptideCharacter>(GetWorld()))
+		{
+			if (Other != this && !Other->IsManningHelm() && FVector::Dist2D(Other->GetActorLocation(), Spot) < 45.f)
+			{
+				Spot -= Stand.GetUnitAxis(EAxis::X) * 45.f;
+				break;
+			}
+		}
+		SetActorLocation(Spot + Stand.GetUnitAxis(EAxis::Z) * (GetCapsuleComponent()->GetScaledCapsuleHalfHeight() + 4.f), false, nullptr,
+			ETeleportType::TeleportPhysics);
 		UCharacterMovementComponent* Move = GetCharacterMovement();
 		Move->SetMovementMode(MOVE_Falling);
-		Move->Velocity = HomeBoat ? HomeBoat->GetDeckPointVelocity(GetActorLocation()) : FVector::ZeroVector;
+		Move->Velocity = HomeBoat->GetDeckPointVelocity(GetActorLocation());
+		// The deck's motion felt before taking the helm is long gone: start feeling it afresh, with a moment to
+		// find your feet.
+		bHavePrevDeckVelocity = false;
+		SmoothedDeckAccel = FVector::ZeroVector;
+		StaggerCooldown = 0.5f;
 	}
 }
 
@@ -837,7 +1103,6 @@ bool ARiptideCharacter::IsBraced() const
 void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
 {
 	UCharacterMovementComponent* Move = GetCharacterMovement();
-	KnockdownTimeLeft = FMath::Max(0.f, KnockdownTimeLeft - DeltaSeconds);
 	StaggerCooldown -= DeltaSeconds;
 	// Holding on slows you to a shuffle; down on the deck you can't move at all.
 	Move->MaxWalkSpeed = IsKnockedDown() ? 0.f : IsBraced() ? BracedWalkSpeed : 350.f;
@@ -851,9 +1116,12 @@ void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
 	}
 	const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
 	const FVector DeckVelocity = HomeBoat->GetDeckPointVelocity(Feet);
-	// Smoothed over a few frames: the physics step's own jitter isn't a jolt anyone would feel.
-	const FVector RawAccel = bHavePrevDeckVelocity ? (DeckVelocity - PrevDeckVelocity) / DeltaSeconds : FVector::ZeroVector;
-	SmoothedDeckAccel = bHavePrevDeckVelocity ? FMath::Lerp(SmoothedDeckAccel, RawAccel, FMath::Min(1.f, DeltaSeconds * 20.f)) : FVector::ZeroVector;
+	// Smoothed over about a twentieth of a second, whatever the frame rate: the physics step's own jitter isn't a
+	// jolt anyone would feel. The acceleration is taken from the smoothed velocity.
+	const float Blend = 1.f - FMath::Exp(-DeltaSeconds / 0.05f);
+	const FVector Smoothed = bHavePrevDeckVelocity ? FMath::Lerp(SmoothedDeckVelocity, DeckVelocity, Blend) : DeckVelocity;
+	SmoothedDeckAccel = bHavePrevDeckVelocity ? (Smoothed - SmoothedDeckVelocity) / DeltaSeconds : FVector::ZeroVector;
+	SmoothedDeckVelocity = Smoothed;
 	const FVector DeckAccel = SmoothedDeckAccel;
 	PrevDeckVelocity = DeckVelocity;
 	bHavePrevDeckVelocity = true;
@@ -879,7 +1147,7 @@ void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
 	StaggerCooldown = 0.6f;
 	if (bKnockedDown)
 	{
-		KnockdownTimeLeft = 1.4f;
+		KnockdownEndTime = ServerNow() + 1.4;
 		++KnockdownCount;
 	}
 	UE_LOG(LogTemp, Verbose, TEXT("Riptide: %s thrown by a %.1f g jolt"), *GetName(), Worst);
@@ -899,13 +1167,39 @@ void ARiptideCharacter::Tick(float DeltaSeconds)
 	Cam.Z = FMath::FInterpTo(Cam.Z, EyeZ, DeltaSeconds, IsKnockedDown() ? 9.f : 3.f);
 	FirstPersonCamera->SetRelativeLocation(Cam);
 
-	if (HasAuthority() || IsLocallyControlled())
+	UpdateLadder(DeltaSeconds);
+	if (IsInSea())
 	{
-		UpdateLadder(DeltaSeconds);
+		LastInSeaTime = GetWorld()->GetTimeSeconds();
 	}
 	if (IsLocallyControlled())
 	{
+		CloseInventoryIfOutOfReach();
 		DrawHud();
+	}
+	if (IsHoldingMic() && !bManningHelm)
+	{
+		HomeBoat->UpdateMicCord();
+	}
+}
+
+double ARiptideCharacter::ServerNow() const
+{
+	const AGameStateBase* State = GetWorld() ? GetWorld()->GetGameState() : nullptr;
+	return State ? State->GetServerWorldTimeSeconds() : (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0);
+}
+
+bool ARiptideCharacter::IsKnockedDown() const
+{
+	return KnockdownEndTime > ServerNow();
+}
+
+void ARiptideCharacter::CloseInventoryIfOutOfReach()
+{
+	if (IsInventoryOpen() && (IsInSea() || IsClimbing() || bManningHelm
+		|| (OpenLocker != INDEX_NONE && (!IsValid(HomeBoat) || !CanReach(HomeBoat->GetLockers(), OpenLocker)))))
+	{
+		CloseInventory();
 	}
 }
 
@@ -921,19 +1215,24 @@ void ARiptideCharacter::DrawHud() const
 	{
 		return;
 	}
-	if (bOnLadder && HomeBoat)
+	if (IsOnLadder() && IsValid(HomeBoat))
 	{
 		const float Top = HomeBoat->GetActorTransform().InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation()).Z + LadderHighestFeet;
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, LadderFeetZ >= Top - 1.f
 			? TEXT("On the ladder:  W  Climb aboard    S  Climb down    Space  Let go")
 			: TEXT("On the ladder:  W  Climb    S  Climb down    Space  Let go"));
 	}
-	else if (bClimbingOver)
+	else if (IsClimbing())
 	{
 	}
 	else if (IsAtLadder())
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Swim into the ladder to take hold of it"));
+	}
+	else if (IsInSea() && IsValid(HomeBoat) && !IsLadderFree()
+		&& FVector::Dist(GetActorLocation(), HomeBoat->GetLadderFootTransform().GetLocation()) <= LadderReach)
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Someone's on the ladder"));
 	}
 	else if (IsKnockedDown())
 	{
@@ -956,20 +1255,32 @@ void ARiptideCharacter::DrawHud() const
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
 			IsHoldingMic() ? TEXT("E  Take the helm    (holding the radio mic: look at its clip and press E to hang it up)") : TEXT("E  Take the helm"));
 	}
-	else if (HomeBoat && IsStandingOnBoat() && HomeBoat->GetSpeedKnots() > 12.f)
+	else if (IsValid(HomeBoat) && HomeBoat->GetHelmsman() && HomeBoat->GetHelmsman() != this && !bManningHelm
+		&& FVector::Dist(GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight()),
+			HomeBoat->GetHelmStandTransform().GetLocation()) <= HelmReach)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, IsBraced() ? FColor::Green : FColor::White,
-			IsBraced() ? TEXT("Holding on") : HomeBoat->IsHandholdNear(GetActorLocation(), HandholdReach)
-				? TEXT("Shift  Hold on") : TEXT("Get to a rail: the boat's moving fast"));
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Someone's at the helm"));
 	}
 	else if (CanRefuel())
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
 			FString::Printf(TEXT("E  Pour the fuel drum in (tank %d%%)"), FMath::RoundToInt(HomeBoat->GetFuelFraction() * 100.f)));
 	}
+	else if (int32 Grid, Uid; IsValid(HomeBoat) && !bManningHelm && !IsInSea() && FindFuelDrum(Grid, Uid) && !HomeBoat->HasRoomForFuel(DrumLiters)
+		&& FVector::Dist(GetActorLocation(), HomeBoat->GetFuelFillerTransform().GetLocation()) < 200.f)
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+			FString::Printf(TEXT("The tank's too full for a whole drum (%d%%)"), FMath::RoundToInt(HomeBoat->GetFuelFraction() * 100.f)));
+	}
 	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
 			FString::Printf(TEXT("E  Open the %s"), *HomeBoat->GetLockers()->GetStorage(Locker)->Title.ToString().ToLower()));
+	}
+	else if (IsValid(HomeBoat) && IsStandingOnBoat() && HomeBoat->GetSpeedKnots() > 12.f)
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, IsBraced() ? FColor::Green : FColor::White,
+			IsBraced() ? TEXT("Holding on") : HomeBoat->IsHandholdNear(GetActorLocation(), HandholdReach)
+				? TEXT("Shift  Hold on") : TEXT("Get to a rail: the boat's moving fast"));
 	}
 }

@@ -13,6 +13,19 @@ Every third-party asset in Riptide is CC0 (public domain). No attribution is req
 
 Apart from the engine excerpts, the files are unedited. Levels are set when the editor imports them (`Content/Python/init_unreal.py`).
 
+## Characters (`SourceAssets/Characters/Quaternius/`)
+
+All by [Quaternius](https://quaternius.com), CC0, downloaded from itch.io (the free Standard versions):
+
+| Folder in the repo | Pack | Source |
+|---|---|---|
+| `BaseCharacters/` | The rigged Superhero male and female bodies, eye and skin textures, from "Universal Base Characters" | [itch.io](https://quaternius.itch.io/universal-base-characters) |
+| `Hair/` | Hairstyles, beard and eyebrows rigged to the head bone, from "Universal Base Characters" | [itch.io](https://quaternius.itch.io/universal-base-characters) |
+| `Animations/UAL1_Standard.glb` | "Universal Animation Library" (locomotion, swimming, crouching, combat and more) | [itch.io](https://quaternius.itch.io/universal-animation-library) |
+| `Animations/UAL2_Standard.glb` | "Universal Animation Library 2" (parkour, climbing and more) | [itch.io](https://quaternius.itch.io/universal-animation-library-2) |
+
+The files are unedited. The crew's uniforms and military gear are our own, generated in code.
+
 ## Models
 
 The patrol skiff and outboard are our own, generated in code (`Content/Python/riptide_boat_mesh.py`).

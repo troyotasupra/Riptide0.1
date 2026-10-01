@@ -1,6 +1,8 @@
 #include "RiptideCharacterMovement.h"
 
 #include "GameFramework/Character.h"
+#include "RiptideBoat.h"
+#include "RiptideCharacter.h"
 #include "Kismet/GameplayStatics.h"
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
@@ -15,8 +17,9 @@ URiptideCharacterMovement::URiptideCharacterMovement()
 
 float URiptideCharacterMovement::GetSeaSurfaceZ() const
 {
-	if (!Ocean.IsValid())
+	if (!Ocean.IsValid() && GetWorld() && GetWorld()->GetTimeSeconds() >= NextOceanSearch)
 	{
+		NextOceanSearch = GetWorld()->GetTimeSeconds() + 2.0;
 		if (const AWaterBodyOcean* Actor = Cast<AWaterBodyOcean>(UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass())))
 		{
 			Ocean = Actor->GetWaterBodyComponent();
@@ -36,8 +39,16 @@ float URiptideCharacterMovement::GetSeaSurfaceZ() const
 
 bool URiptideCharacterMovement::IsInWater() const
 {
-	// In the water once its middle is under the surface.
-	return UpdatedComponent && CharacterOwner && UpdatedComponent->GetComponentLocation().Z < GetSeaSurfaceZ();
+	// In the water once its middle is under the surface, unless it's standing inside the boat: green water over the
+	// bow is the sea above the open ocean's surface there, but it doesn't make the cockpit a place to swim.
+	if (!UpdatedComponent || !CharacterOwner || UpdatedComponent->GetComponentLocation().Z >= GetSeaSurfaceZ())
+	{
+		return false;
+	}
+	const ARiptideCharacter* Crew = Cast<ARiptideCharacter>(CharacterOwner);
+	const ARiptideBoat* Boat = Crew ? Crew->GetHomeBoat() : nullptr;
+	const FVector Feet = UpdatedComponent->GetComponentLocation() - FVector(0.f, 0.f, CharacterOwner->GetSimpleCollisionHalfHeight() - 10.f);
+	return !(IsValid(Boat) && Boat->IsInsideHull(Feet));
 }
 
 float URiptideCharacterMovement::ImmersionDepth() const
@@ -63,14 +74,29 @@ FVector URiptideCharacterMovement::ConstrainInputAcceleration(const FVector& Inp
 	return IsSeaSwimming() ? InputAcceleration : Super::ConstrainInputAcceleration(InputAcceleration);
 }
 
-void URiptideCharacterMovement::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+void URiptideCharacterMovement::UpdateCharacterStateBeforeMovement(float DeltaSeconds)
 {
-	// Falling or stepping into the sea starts swimming.
+	Super::UpdateCharacterStateBeforeMovement(DeltaSeconds);
+	// Falling or stepping into the sea starts swimming. Decided here, inside each move, so a client and the server
+	// replaying its moves switch at the same point and don't correct each other.
 	if (CharacterOwner && (MovementMode == MOVE_Falling || MovementMode == MOVE_Walking) && CanEverSwim() && IsInWater())
 	{
 		SetMovementMode(MOVE_Custom, RIPTIDE_MOVE_SeaSwim);
 	}
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+}
+
+bool URiptideCharacterMovement::ServerCheckClientError(float ClientTimeStamp, float DeltaTime, const FVector& Accel,
+	const FVector& ClientWorldLocation, const FVector& RelativeClientLocation, UPrimitiveComponent* ClientMovementBase,
+	FName ClientBaseBoneName, uint8 ClientMovementMode)
+{
+	// On the boarding ladder the server places the climber itself (the movement is switched off), and the client
+	// catches up a moment later each time the climb starts or ends: no corrections then.
+	if (const ARiptideCharacter* Crew = Cast<ARiptideCharacter>(CharacterOwner); Crew && Crew->IsLadderLocked())
+	{
+		return false;
+	}
+	return Super::ServerCheckClientError(ClientTimeStamp, DeltaTime, Accel, ClientWorldLocation, RelativeClientLocation,
+		ClientMovementBase, ClientBaseBoneName, ClientMovementMode);
 }
 
 void URiptideCharacterMovement::PhysCustom(float DeltaTime, int32 Iterations)

@@ -6,12 +6,14 @@
 #include "WaterBodyOceanActor.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
+#include "RiptidePlayerState.h"
 #include "RiptidePlayerController.h"
 
 ARiptideGameMode::ARiptideGameMode()
 {
 	DefaultPawnClass = ARiptideCharacter::StaticClass();
 	PlayerControllerClass = ARiptidePlayerController::StaticClass();
+	PlayerStateClass = ARiptidePlayerState::StaticClass();
 	BoatClass = ARiptideBoat::StaticClass();
 }
 
@@ -41,6 +43,25 @@ ARiptideBoat* ARiptideGameMode::FindOrLaunchBoat(AActor* StartSpot)
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	return GetWorld()->SpawnActor<ARiptideBoat>(BoatClass, Location, Facing, Params);
+}
+
+FString ARiptideGameMode::InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options,
+	const FString& Portal)
+{
+	const FString Error = Super::InitNewPlayer(NewPlayerController, UniqueId, Options, Portal);
+	if (ARiptidePlayerState* State = NewPlayerController ? NewPlayerController->GetPlayerState<ARiptidePlayerState>() : nullptr)
+	{
+		const FString Look = UGameplayStatics::ParseOption(Options, TEXT("Look"));
+		if (!Look.IsEmpty())
+		{
+			State->SetAppearance(FRiptideAppearance::FromString(Look));
+		}
+		else if (NewPlayerController->IsLocalController())
+		{
+			State->SetAppearance(URiptideProfileSave::LoadOrCreate()->Appearance);
+		}
+	}
+	return Error;
 }
 
 APawn* ARiptideGameMode::SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot)

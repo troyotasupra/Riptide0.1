@@ -3,9 +3,9 @@
 Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLAN.md`.
 
 ## Current state: milestone 1 (the boat), and walking its deck from milestone 2
-- A full-size 26 ft (7.9 m, 2.6 m beam) aluminium centre-console patrol boat (deep-V hull, fender collar, T-top, bow rail) with twin 250 hp outboards (about 30 knots flat out) that swing as they steer and tilt with the trim on brackets fixed to the transom, floating on the Water plugin ocean. Each motor pushes only while its own prop is in the water. Trimming out lifts the bow at speed, trimming in holds it down. It's the standard boat of the islands' mercenary crews, which players can take in a fight or steal: fitted out for patrol work, with open-array radar, satcom and GPS antennas, VHF and AIS whips, masthead and bow nav lights, a searchlight and FLIR camera, a loudhailer, an overhead radio box, cleats, a tow post, bow and stern eyes, trim tabs, a boarding ladder, weapon mount sockets, and a stern bulkhead and splashwell closing the cockpit off from the sea. The model is our own, generated in code by `Content/Python/riptide_boat_mesh.py` and imported when the editor opens; change the shape there and bump `BOAT_MODEL_VERSION` in `init_unreal.py` to rebuild it.
+- A full-size 26 ft (7.9 m, 2.6 m beam) aluminium centre-console patrol boat (deep-V hull, fender collar, T-top, bow rail) with twin 300 hp outboards (about 30 knots flat out) that swing as they steer and tilt with the trim on brackets fixed to the transom, floating on the Water plugin ocean. Each motor pushes only while its own prop is in the water. Trimming out lifts the bow at speed, trimming in holds it down. It's the standard boat of the islands' mercenary crews, which players can take in a fight or steal: fitted out for patrol work, with open-array radar, satcom and GPS antennas, VHF and AIS whips, masthead and bow nav lights, a searchlight and FLIR camera, a loudhailer, an overhead radio box, cleats, a tow post, bow and stern eyes, trim tabs, a boarding ladder, weapon mount sockets, and a stern bulkhead and splashwell closing the cockpit off from the sea. The model is our own, generated in code by `Content/Python/riptide_boat_mesh.py` and imported when the editor opens; change the shape there and bump `BOAT_MODEL_VERSION` in `init_unreal.py` to rebuild it.
 - The ocean test map (2 km of open sea with a moderate 1-1.5 m swell) builds itself the first time the editor opens (`Content/Python/init_unreal.py`). To rebuild it after changing that script, delete `Content/Riptide/Maps/Ocean_Test.umap` with the editor closed.
-- You start on foot on the deck, in first person, and can walk all of it: round the console on either side, up to the bow and across the aft deck, at rest or at full speed through turns. Step up to the wheel and press E to take the helm; E again lets go (the throttle stays where you left it). At speed the deck's jolts throw you: slams, hard turns and throttle changes stagger an unbraced crew member, and the worst slams knock you off your feet. Hold Shift at a handhold to ride it out (you can still shuffle along). At the helm you're holding the wheel. Go over the side and you swim (where you look; Space swims up, C dives); the boarding ladder on the stern's port side reaches into the water, and E at its foot climbs you back aboard.
+- You start on foot on the deck, in first person, and can walk all of it: round the console on either side, up to the bow and across the aft deck, at rest or at full speed through turns. Step up to the wheel and press E to take the helm; E again lets go (the throttle stays where you left it). At speed the deck's jolts throw you: slams, hard turns and throttle changes stagger an unbraced crew member, and the worst slams knock you off your feet. Hold Shift at a handhold to ride it out (you can still shuffle along). At the helm you're holding the wheel. Go over the side and you swim (where you look; Space swims up, C or Ctrl dives). The boarding ladder on the stern's port side reaches into the water: swim into it and you take hold. W climbs, S climbs down, and letting go of both keeps you hanging there, so you can look over the transom before going aboard; W at the top takes you over onto the deck, and Space (or S at the bottom) lets go. One crew member on the ladder at a time. The VHF radio in the overhead box has a hand mic on a coiled cord: look at it and press E to take it (M at the helm), look at its clip and press E to hang it up; walk out of the cord's reach and it's pulled back onto its clip. The wheel turns with the motors, and the props spin with the engines.
 - At the helm: a twin-lever throttle (centred is neutral; forward engages ahead, then opens the throttle; back is astern), and live gauges on the dash: tachometer, speedometer, and a screen showing gear, throttle, trim, fuel, heading and warnings.
 - Fuel and engines: a 450 L tank (about 70% full when you find a boat), burned at twin-250 rates (about 190 L an hour flat out, a trickle at idle). Carry the fuel drum from the stern locker to the filler on the starboard gunwale and E pours its 20 L in. Each motor has its own health: a damaged one sputters, a dead one stops, and the boat limps on the other, pulling toward the dead side. The dash warns which motor, and when fuel runs low.
 - Storage: the floor lockers in front of the console, the stern hatches and the anchor locker hold gear. E beside one opens it in the inventory screen (the Godot build's Delta Force-style grid): drag items between the locker and your pockets and backpack. Tab opens your own inventory.
@@ -17,7 +17,17 @@ Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLA
 - Builds and runs on Unreal Engine 5.7 (Windows, Visual Studio 2022).
 
 ## Handling test
-`Tools/boat_handling_test.py` plays Ocean_Test hands-free and checks the boat floats, stays upright, drives, and steers the right way. It also checks the props and hull never flicker in and out of the water, the outboards swing with the wheel, trim moves the bow up and down, the sea stays below the deck, a locker opens from beside it and gives up its gear, the fuel drum from the stern locker pours into the tank at the filler, the boat runs on one motor when the other dies, a crew member walking laps at speed holds on and isn't thrown (while one standing unbraced at 30 knots is), and a crew member who goes in the sea swims, keeps their head above water, and climbs the ladder back aboard. Meanwhile the player walks laps of the whole deck, at rest and at speed, and must never get stuck, hop or fall off; at the end it takes the helm and leaves it again. Run it with the editor closed:
+`Tools/boat_handling_test.py` plays Ocean_Test hands-free and checks the boat floats, stays upright, drives, and steers the right way. It also checks:
+- the props and hull never flicker in and out of the water;
+- the outboards and the wheel swing with the steering, the props spin ahead and astern, and trim moves the bow up and down;
+- a locker opens from beside it and gives up its gear, and the fuel drum from the stern locker pours into the tank at the filler;
+- the boat runs on one motor when the other dies;
+- a crew member who goes in the sea swims with their head above water, swims into the ladder, climbs, hangs on when W is let go, and climbs back aboard;
+- the radio mic comes off its clip and is pulled back when carried out of the cord's reach;
+- the player walks laps of the whole deck, at rest and at speed, and never gets stuck, hops or falls off;
+- the player takes the helm and steps off it again, at rest and at 30 knots, landing on the deck.
+
+It logs, without failing on them, how often the sea comes over each part of the deck and how often the walking crew member is thrown off balance. Run it with the editor closed:
 
 ```
 UnrealEditor Riptide.uproject -nullrhi -unattended -nosplash -nosound -ExecCmds="py <project>/Tools/boat_handling_test.py"
@@ -37,9 +47,10 @@ Each sound is levelled on import to a target loudness, with peaks held below -8 
 | Look around | Mouse | Right stick |
 | Hold on (near a rail, the gunwale, a T-top leg or the leaning post) | Shift | Left bumper |
 | Jump (swim up in the water) | Space | A |
-| Dive (in the water) | C | B |
-| Take the helm (at the wheel), or open a locker (beside it) | E | X |
-| Inventory | Tab | Menu |
+| Dive (in the water) | C or Ctrl | B |
+| On the ladder: climb up / down (let go of both to hang on), let go | W / S, Space | Left stick, A |
+| Take the helm (at the wheel), take or hang up the radio mic (looking at it), refuel (at the filler with a fuel drum), or open a locker (beside it) | E | X |
+| Inventory (Tab, E or Esc closes it) | Tab | Menu (B or X closes it) |
 
 ## Helm controls
 | Action | Keyboard / mouse | Gamepad |
@@ -53,6 +64,7 @@ Each sound is levelled on import to a target loudness, with peaks held below -8 
 | Searchlight on / off (it follows where you look) | L | D-pad left |
 | Navigation lights on / off | N | |
 | Cockpit floods on / off | K | D-pad right |
+| Radio mic: take it / hang it up | M | Right stick press |
 | Tuning readout on screen | H | |
 
 The dash gauges show everything you need; H brings up the old tuning readout (speed, throttle, motor angle, trim, fuel, engine health, props in the water).

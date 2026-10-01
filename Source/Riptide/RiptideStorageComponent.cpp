@@ -76,6 +76,9 @@ bool URiptideStorageComponent::MoveItem(URiptideStorageComponent* From, int32 Fr
 	const int32 Moving = Count <= 0 ? Item.Count : FMath::Min(Count, Item.Count);
 	const bool bSameGrid = Source == Target;
 	bool bMoved = false;
+	// Moving the whole stack within its own grid, its old cells don't count as in the way; moving part of it, the
+	// rest stays where it is and does.
+	const int32 Ignore = bSameGrid && Moving == Item.Count ? Uid : 0;
 
 	if (X < 0)
 	{
@@ -105,22 +108,34 @@ bool URiptideStorageComponent::MoveItem(URiptideStorageComponent* From, int32 Fr
 			bMoved = Left < Taken.Count;
 		}
 	}
-	else if (Target->Grid.Fits(Item.Id, X, Y, bRotated, bSameGrid ? Uid : 0))
+	else if (Target->Grid.Fits(Item.Id, X, Y, bRotated, Ignore))
 	{
-		if (bSameGrid && Moving == Item.Count)
+		if (Ignore)
 		{
 			FRiptideItem* Moved = Source->Grid.Get(Uid);
 			Moved->X = X;
 			Moved->Y = Y;
 			Moved->bRotated = bRotated;
+			bMoved = true;
 		}
 		else
 		{
-			Target->Grid.Place(Source->Grid.Take(Uid, Moving), X, Y, bRotated);
+			FRiptideItem Taken = Source->Grid.Take(Uid, Moving);
+			if (Target->Grid.Place(Taken, X, Y, bRotated))
+			{
+				bMoved = true;
+			}
+			else if (FRiptideItem* Still = Source->Grid.Get(Uid))
+			{
+				Still->Count += Taken.Count;       // didn't fit after all: it never left
+			}
+			else
+			{
+				Source->Grid.Place(Item, Item.X, Item.Y, Item.bRotated);
+			}
 		}
-		bMoved = true;
 	}
-	else if (const FRiptideItem* Onto = Target->Grid.SingleOverlap(Item.Id, X, Y, bRotated, bSameGrid ? Uid : 0))
+	else if (const FRiptideItem* Onto = Target->Grid.SingleOverlap(Item.Id, X, Y, bRotated, Ignore))
 	{
 		// Dropped on a stack of the same thing: top it up.
 		if (Def && Onto->Id == Item.Id && Onto->Uid != Uid && Onto->Count < Def->Stack)

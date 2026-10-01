@@ -88,7 +88,7 @@ private:
 	TArray<FSlateRoundedBoxBrush> CardBrushes;     // by rarity
 	TUniquePtr<FSlateRoundedBoxBrush> TooltipBrush;
 
-	FVector2f Mouse;
+	FVector2f Mouse = FVector2f(-1.f, -1.f);
 	FVector2f ScreenSize = FVector2f(1920.f, 1080.f);
 	FDrag Drag;
 };
