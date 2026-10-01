@@ -857,7 +857,7 @@ void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
 	const FVector DeckAccel = SmoothedDeckAccel;
 	PrevDeckVelocity = DeckVelocity;
 	bHavePrevDeckVelocity = true;
-	if (!HasAuthority() || IsBraced() || StaggerCooldown > 0.f)
+	if (!HasAuthority() || IsBraced() || bSteadyFeet || StaggerCooldown > 0.f)
 	{
 		return;
 	}

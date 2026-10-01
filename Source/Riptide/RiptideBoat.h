@@ -242,6 +242,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	float GetPropSpinRate(int32 Motor) const { return Motor == 0 || Motor == 1 ? PropSpinRate[Motor] : 0.f; }
 
+	// For the dev mode's physics overlay: where each motor (0 port, 1 starboard) pushes, whether its prop is biting,
+	// and which way the motors push (along their shafts, steered and trimmed), in the world.
+	FVector GetPropLocation(int32 Motor) const { return (Motor == 1 ? PropellerStarboard : Propeller)->GetComponentLocation(); }
+	bool IsPropWet(int32 Motor) const { return bPropWet[Motor == 1 ? 1 : 0]; }
+	FVector GetThrustDirection() const { return GetActorQuat() * GetOutboardRotation().RotateVector(FVector::ForwardVector); }
+
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UBoxComponent> HullBody;

@@ -117,6 +117,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsKnockedDown() const { return KnockdownTimeLeft > 0.f; }
 
+	/** The dev mode's god mode: the deck's jolts never throw this crew member, braced or not (and it's back on its feet). */
+	void SetSteadyFeet(bool bSteady) { bSteadyFeet = bSteady; KnockdownTimeLeft = bSteady ? 0.f : KnockdownTimeLeft; }
+
 	/** How many times the boat's motion has thrown this crew member off balance, and knocked them down. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	int32 GetStaggerCount() const { return StaggerCount; }
@@ -301,6 +304,8 @@ private:
 
 	UPROPERTY(Replicated)
 	bool bBracing = false;
+
+	bool bSteadyFeet = false;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Knockdown)
 	float KnockdownTimeLeft = 0.f;

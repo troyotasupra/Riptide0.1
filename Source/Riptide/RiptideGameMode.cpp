@@ -6,10 +6,12 @@
 #include "WaterBodyOceanActor.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
+#include "RiptidePlayerController.h"
 
 ARiptideGameMode::ARiptideGameMode()
 {
 	DefaultPawnClass = ARiptideCharacter::StaticClass();
+	PlayerControllerClass = ARiptidePlayerController::StaticClass();
 	BoatClass = ARiptideBoat::StaticClass();
 }
 

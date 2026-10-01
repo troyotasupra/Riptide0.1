@@ -57,6 +57,30 @@ Each sound is levelled on import to a target loudness, with peaks held below -8 
 
 The dash gauges show everything you need; H brings up the old tuning readout (speed, throttle, motor angle, trim, fuel, engine health, props in the water).
 
+## Dev mode
+For playtesting and checking the boat and its effects from anywhere. It's in every build except Shipping, and works in single player (or for the host). F1 shows a panel listing all of this with each key's state, plus live readings: frame rate, spray in the air, the boat's speed, heading, trim, fuel and engines, the camera's position and mode, the time of day and game speed.
+
+| Action | Key |
+|---|---|
+| Dev panel on / off | F1 |
+| Fly (a camera that goes through anything); again to go back to exactly where you were, on foot or at the helm (the boat keeps running) | F2 |
+| Camera mode: free fly, ride along with the boat (the camera is carried with it underway), orbit the boat, chase the boat | F3 |
+| Flying: drop in where the camera is (onto the deck, or into the sea). On foot: back to the boat's helm | F4 |
+| Time of day: day, golden hour, dusk, night | F5 |
+| Slow motion: 1×, ½×, ¼×, 1/10× | F6 |
+| Freeze the world (the camera still flies, so you can fly round spray hanging in the air) | Pause, or backslash (`\`) |
+| God mode: the deck never throws you, and the tank never empties | F7 |
+| Photo mode: hides every prompt and the panel | F10 |
+| Physics overlay: buoyancy pontoons (blue in the sea, orange out, with the sea's surface over each), props (green biting, red dry), thrust, velocity, the physics box | Page Up |
+| Sea state: calm, moderate (the map's own swell), rough | Page Down |
+| Refuel and repair the boat | Insert or Delete |
+| Right the boat and stop it where it is (the throttle stays where it was) | Home |
+| Bring the boat to where the camera is looking | End |
+
+Flying: W A S D fly where you look, E or Space up, Q or C down, Shift fast, Ctrl slow, mouse to look, mouse wheel sets the speed. Orbiting or chasing, the mouse swings the camera round the boat, the wheel (or W and S) zooms, A and D circle it, E and Q raise and lower it. A gamepad flies too (sticks, triggers for up and down, bumpers for fast and slow).
+
+`Tools/dev_mode_test.py` checks all of it headless, the same way as the handling test (search the log for `RiptideDevTest`).
+
 ## Development PC
 Windows 11, AMD Ryzen 5 2600X (6 cores), 32 GB RAM. NVIDIA GeForce RTX 3060. Target: 1080p, 60 fps, Lumen on, with DLSS as an option.
 Effects are tuned to run at playable frame rates on this machine first.
