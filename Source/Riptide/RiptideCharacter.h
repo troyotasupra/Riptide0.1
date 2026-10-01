@@ -34,6 +34,12 @@ public:
 	virtual void NotifyControllerChanged() override;
 
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void PossessedBy(AController* NewController) override;
+	virtual void OnRep_PlayerState() override;
+
+	/** Builds this crew member's body from their player's look (ARiptidePlayerState): build, skin, hair, uniform
+	 * and gear. Called on every machine whenever the look arrives or changes. */
+	void ApplyAppearance();
 
 	/** The boat this character belongs to: the one it stands on, returns to after going overboard, and drives. */
 	UFUNCTION(BlueprintCallable, Category = "Crew")
@@ -263,6 +269,11 @@ private:
 	/** A stand-in body so other players can see this crew member until there's a character model (hidden from
 	 * its own player's eyes). */
 	void MakeStandInBody();
+
+	/** Listens for the player state's look changing. */
+	void WatchAppearance();
+	FDelegateHandle AppearanceWatch;
+	TWeakObjectPtr<class ARiptidePlayerState> WatchedState;
 
 	UFUNCTION(Server, Reliable)
 	void ServerClimbAboard();

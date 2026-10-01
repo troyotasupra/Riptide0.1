@@ -20,6 +20,7 @@
 #include "Net/UnrealNetwork.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacterMovement.h"
+#include "RiptidePlayerState.h"
 #include "RiptideInventoryWidget.h"
 #include "RiptideStorageComponent.h"
 #include "Engine/GameViewportClient.h"
@@ -232,8 +233,47 @@ void ARiptideCharacter::OnHomeBoatDestroyed(AActor* Boat)
 	}
 }
 
+void ARiptideCharacter::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+	WatchAppearance();
+}
+
+void ARiptideCharacter::OnRep_PlayerState()
+{
+	Super::OnRep_PlayerState();
+	WatchAppearance();
+}
+
+void ARiptideCharacter::WatchAppearance()
+{
+	ARiptidePlayerState* State = GetPlayerState<ARiptidePlayerState>();
+	if (!State || State == WatchedState.Get())
+	{
+		return;
+	}
+	if (ARiptidePlayerState* Old = WatchedState.Get())
+	{
+		Old->OnAppearanceChanged.Remove(AppearanceWatch);
+	}
+	WatchedState = State;
+	AppearanceWatch = State->OnAppearanceChanged.AddUObject(this, &ARiptideCharacter::ApplyAppearance);
+	ApplyAppearance();
+}
+
+void ARiptideCharacter::ApplyAppearance()
+{
+	// The body is built here from the look (to come: the crew character); for now the stand-in shows it's arrived.
+	const ARiptidePlayerState* State = WatchedState.Get();
+	UE_LOG(LogTemp, Verbose, TEXT("Riptide: %s's look is %s"), *GetName(), State ? *State->GetAppearance().ToString() : TEXT("(none)"));
+}
+
 void ARiptideCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (ARiptidePlayerState* Old = WatchedState.Get())
+	{
+		Old->OnAppearanceChanged.Remove(AppearanceWatch);
+	}
 	CloseInventory();
 	if (HasAuthority() && IsValid(HomeBoat) && HomeBoat->GetLadderUser() == this)
 	{

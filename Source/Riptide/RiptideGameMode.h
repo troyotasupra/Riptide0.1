@@ -20,6 +20,11 @@ public:
 
 	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
 
+	/** Takes the joining player's look from their join URL (?Look=..., see FRiptideAppearance::ToString), or, for
+	 * a player on this machine who didn't send one (playing in the editor), from their saved profile. */
+	virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options,
+		const FString& Portal = TEXT("")) override;
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Riptide")
 	TSubclassOf<ARiptideBoat> BoatClass;
