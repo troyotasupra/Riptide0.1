@@ -91,7 +91,8 @@ int32 SRiptideGauge::PaintDial(const FGeometry& G, FSlateWindowElementList& Out,
 	const float MaxValue = bTach ? 7.f : 30.f;             // x1000 rpm, or knots
 	const float Major = bTach ? 1.f : 5.f;
 	const float Minor = bTach ? 0.5f : 1.f;
-	const float Value = bTach ? B.GetEngineRpm() / 1000.f : B.GetSpeedKnots();
+	// An engine racing on the rev limiter reads into the red, but the needle stops at the end of the dial.
+	const float Value = FMath::Min(bTach ? B.GetEngineRpm() / 1000.f : B.GetSpeedKnots(), MaxValue * 1.02f);
 
 	// Red line: the top of the rev range.
 	if (bTach)

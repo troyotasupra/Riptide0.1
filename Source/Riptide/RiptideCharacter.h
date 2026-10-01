@@ -206,14 +206,23 @@ protected:
 	float HelmReach = 110.f;
 
 	// Riding the boat: the deck's jolts (from slams, hard turns and big throttle changes) throw an unbraced crew member.
-	// Past StaggerG they stumble the way they're thrown; past KnockdownG they go down for a moment.
+	// Past the stagger figures they stumble the way they're thrown; past the knockdown ones they go down for a moment.
+	// Someone standing without holding on staggers at about 0.4 g sideways (a hard turn at speed), and has their
+	// knees buckled by the deck driving up into them at over a g on top of gravity (a hard slam into a swell).
 
-	/** Deck acceleration (in g, beyond gravity) that throws you off balance, and that knocks you down. */
+	/** Sideways deck acceleration (in g) that throws you off balance, and that knocks you down. */
 	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
-	float StaggerG = 0.9f;
+	float StaggerG = 0.4f;
 
 	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
-	float KnockdownG = 2.2f;
+	float KnockdownG = 1.1f;
+
+	/** The same for the deck slamming up into your feet (in g beyond gravity). */
+	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
+	float SlamStaggerG = 1.2f;
+
+	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
+	float SlamKnockdownG = 3.f;
 
 	/** How far a handhold can be to hold on to it (cm). */
 	UPROPERTY(EditAnywhere, Category = "Crew|Balance")

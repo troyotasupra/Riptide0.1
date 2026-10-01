@@ -1109,15 +1109,16 @@ void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
 	const FVector Sideways(DeckAccel.X, DeckAccel.Y, 0.f);
 	const float SidewaysG = Sideways.Size() / G;
 	const float SlamG = FMath::Max(0.f, DeckAccel.Z) / G;     // the deck driving up into the feet
-	const float Worst = FMath::Max(SidewaysG, SlamG * 0.7f);
-	if (Worst < StaggerG)
+	// How hard the jolt is against what a body can stand: 1 is a stumble.
+	const float Worst = FMath::Max(SidewaysG / StaggerG, SlamG / SlamStaggerG);
+	if (Worst < 1.f)
 	{
 		return;
 	}
 	// A stumble against the deck's acceleration (a metre or two a second, like a real one): enough to throw you
 	// into the bulwark or the console, not over the side. The worst slams take your legs out from under you.
-	const bool bKnockedDown = Worst >= KnockdownG;
-	const FVector Throw = -Sideways.GetSafeNormal() * FMath::Clamp((SidewaysG - StaggerG) * 150.f + 80.f, 0.f, 250.f);
+	const bool bKnockedDown = SidewaysG >= KnockdownG || SlamG >= SlamKnockdownG;
+	const FVector Throw = -Sideways.GetSafeNormal() * FMath::Clamp(FMath::Max(0.f, SidewaysG - StaggerG) * 150.f + 80.f, 0.f, 250.f);
 	LaunchCharacter(FVector(Throw.X, Throw.Y, bKnockedDown ? 40.f : 0.f), false, false);
 	++StaggerCount;
 	StaggerCooldown = 0.6f;
@@ -1126,7 +1127,7 @@ void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
 		KnockdownEndTime = ServerNow() + KnockdownSeconds;
 		++KnockdownCount;
 	}
-	UE_LOG(LogTemp, Verbose, TEXT("Riptide: %s thrown by a %.1f g jolt"), *GetName(), Worst);
+	UE_LOG(LogTemp, Verbose, TEXT("Riptide: %s thrown by a jolt of %.2f g sideways, %.2f g up"), *GetName(), SidewaysG, SlamG);
 }
 
 void ARiptideCharacter::Tick(float DeltaSeconds)

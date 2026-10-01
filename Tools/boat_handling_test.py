@@ -6,9 +6,13 @@ Run it with the editor closed (it quits the editor when done):
 Then read the "RiptideTest:" lines in Saved/Logs/Riptide.log. The last one says PASS or FAIL.
 Use -RenderOffscreen instead of -nullrhi to also save first-person screenshots and report frame rate.
 While the boat runs its course, the player's character walks laps of the whole deck (round the console, up to
-the bow, across the aft deck), first at rest and then at speed and through the turns. At the end it takes the
-helm and leaves it again.
-To try tuning values without rebuilding, set RIPTIDE_TEST_SET before launching, e.g. "planing_lift=0,rock_damping=4".
+the bow, across the aft deck), first at rest and then at speed and through the turns. After that it takes the
+helm and leaves it again. Then it idles in gear, runs full astern, and sprints off with the crew member standing on the
+aft deck without holding on, into a hard turn that should throw them. Partway through it brings the boat back to the
+middle of the test sea, so the late runs don't sail off its edge. It also logs the boat's realism figures: its
+attitude at rest and flat out, how long it takes to plane and reach 25 kn, and its roll and pitch periods (it kicks
+the hull at rest and times the swings; set RIPTIDE_TEST_CALM=1 for clean numbers, as the swell muddles them).
+To try tuning values without rebuilding, set RIPTIDE_TEST_SET before launching, e.g. "planing_lift=0,roll_damping=1".
 """
 
 import math
@@ -36,8 +40,24 @@ SCRIPT = [
     (123.0, 0.0, 0.0, "refuel"),         # fetches the fuel drum from the stern locker and pours it in,
     (125.5, 1.0, 0.0, "one engine"),     # and the port motor dies: the boat runs on the starboard one
     (127.5, 0.0, 0.0, "one engine run"),
+    (134.0, 0.0, 0.0, "idle ahead"),     # port motor mended; lever eased back to in gear at idle (see IDLE_LEVER)
+    (164.0, -1.0, 0.0, "full astern"),   # lever pulled all the way back: full astern
+    (189.0, 1.0, 0.0, "sprint"),         # then flat out again, with the crew member standing on the aft deck
+    (192.5, 0.0, 0.0, "sprint run"),     # without holding on,
+    (206.0, 0.0, 1.0, "unbraced turn"),  # and a hard turn at speed throws them
 ]
-END_TIME = 134.0
+END_TIME = 214.0
+UNBRACED_SPOT = (-250.0, 0.0)
+IDLE_LEVER = 0.16                            # in gear, throttle closed: inside the binnacle's idle band
+# A real 26 ft twin-outboard boat: idles in gear at 3-4 kn, can't go much over 6 kn transom-first, takes 3-4 s to
+# get onto the plane and 8-10 s to reach 25 kn (timed from the moment the lever starts forward).
+IDLE_KN = (3.0, 5.0)
+ASTERN_KN = (3.0, 8.0)
+TO_25_S = (6.0, 12.0)
+TOP_KN = (28.0, 32.0)
+# Kicks at rest to measure how the hull rocks: (time, axis, degrees per second). The period is read off the roll
+# (or pitch) crossing back and forth through where it sat before the kick.
+KICKS = [(7.0, "roll", 40.0), (11.0, "pitch", 25.0)]
 SWIM_IN_T, CLIMB_T, ABOARD_CHECK_T = 112.5, 116.0, 122.8
 HANG_START, HANG_END = 1.0, 2.0              # seconds into the climb: lets go of W and should hang there
 # Points on the deck (cm, boat frame) checked against the sea surface every frame.
@@ -59,7 +79,9 @@ AUDIO_LOG = bool(os.environ.get("RIPTIDE_TEST_AUDIO"))
 
 # Laps of the deck, as points on the boat (cm, X forward, Y starboard): from the helm down the port side past the
 # console, up to the bow, back down the starboard side, round the aft deck, and back to the helm.
-WALK_ROUTE = [(-110, 0), (-110, -90), (60, -85), (150, -40), (300, 0), (150, 40), (60, 85), (-85, 90), (-200, 90),
+# The side decks narrow going forward past the console (the bulwarks follow the hull in), so the points abreast of the
+# foredeck sit a little inboard of the ones aft.
+WALK_ROUTE = [(-110, 0), (-110, -90), (60, -78), (150, -40), (300, 0), (150, 40), (60, 78), (-85, 90), (-200, 90),
               (-305, 70), (-305, -70), (-200, -90), (-110, -90), (-110, 0)]
 WALK_START, WALK_END = 6.0, 52.0          # walks laps from settling in until the turns end, finishing the last lap at the helm
 WALK_REACHED_CM = 35.0
@@ -101,8 +123,8 @@ def sample(boat, t, phase):
             r = comp.get_editor_property("relative_rotation")
             s["motor_yaw"], s["motor_pitch"] = r.yaw, r.pitch
     state["samples"].append(s)
-    log("t=%5.1f %-13s z=%7.1f pitch=%6.1f roll=%6.1f yaw=%7.1f speed=%5.1fkn lever=%+.2f engine=%+.2f prop=%s fuel=%.2f trim=%+.0f motor yaw %+.0f pitch %+.0f"
-        % (t, phase, s["z"], s["pitch"], s["roll"], s["yaw"], s["kn"], s["lever"], s["engine"],
+    log("t=%5.1f %-13s x=%7.0f y=%7.0f z=%7.1f pitch=%6.1f roll=%6.1f yaw=%7.1f speed=%5.1fkn lever=%+.2f engine=%+.2f prop=%s fuel=%.2f trim=%+.0f motor yaw %+.0f pitch %+.0f"
+        % (t, phase, s["x"], s["y"], s["z"], s["pitch"], s["roll"], s["yaw"], s["kn"], s["lever"], s["engine"],
            "wet" if s["prop"] else "DRY", s["fuel"], s["trim"], s.get("motor_yaw", 0), s.get("motor_pitch", 0)))
     if AUDIO_LOG and int(t) % 10 == 0:
         for audio in boat.get_components_by_class(unreal.AudioComponent):
@@ -148,7 +170,7 @@ def walk(world, boat, walker, t):
         spot = (int(round(local.x / 25.0) * 25), int(round(local.y / 25.0) * 25))
         w.setdefault("off_spots", {})[spot] = w.setdefault("off_spots", {}).get(spot, 0) + 1
     # Walking laps at speed, the crew member holds on (Shift at the rails), as anyone sensible would.
-    walker.set_bracing(WALK_START <= t < WALK_END)
+    walker.set_bracing(WALK_START <= t < WALK_END or t - state.get("recentred_at", -99.0) < 1.5)
     if t < WALK_START or (t >= WALK_END and w["leg"] == 1):
         return
 
@@ -260,6 +282,10 @@ def mic_check(world, boat, walker, t):
         walker.try_toggle_mic()
         mc["took"] = walker.is_holding_mic() and boat.get_mic_holder() == walker
         log("t=%5.1f at the helm, looking at the radio mic: can take it %s, holding it %s" % (t, mc["could"], mc["took"]))
+        return
+    if "recentred" not in mc and t >= 62.8:
+        recentre(boat, t)
+        mc["recentred"] = t
         return
     if "walked" not in mc and t >= 63.0:
         walker.set_actor_location(boat.get_actor_transform().transform_location(unreal.Vector(-300.0, 0.0, 20.0 + 92.0)), False, True)
@@ -423,6 +449,19 @@ def boat_relative_speed(walker):
     return math.hypot(here.x - last[0].x, here.y - last[0].y) / (now - last[1])
 
 
+def recentre(boat, t):
+    """Brings the boat back to the middle of the 2 km test sea, moving as it was: the full-speed runs carry it most of
+    the way across. Crew standing on the deck ride along with it (they're carried by the deck they stand on)."""
+    # The crew member holds on through the jump (it isn't a jolt the boat gave them).
+    state["recentred_at"] = t
+    if state["walker"]:
+        state["walker"].set_bracing(True)
+    loc = boat.get_actor_location()
+    boat.set_actor_location(unreal.Vector(state["home"].x, state["home"].y, loc.z), False, True)
+    state.pop("deck_vel", None)
+    log("t=%5.1f brought the boat back to the middle of the sea from %.0f, %.0f m out" % (t, loc.x / 100.0, loc.y / 100.0))
+
+
 def fuel_and_engine_check(world, boat, walker, t):
     """Takes the fuel drum from the stern locker and pours it in at the filler; then kills the port motor."""
     fe = state.setdefault("fuel", {})
@@ -448,6 +487,88 @@ def fuel_and_engine_check(world, boat, walker, t):
         boat.apply_engine_damage(1.0, 0)
         fe["killed"] = t
         fe["yaw0"] = boat.get_actor_rotation().yaw
+    if t >= 189.0 and "aft" not in fe:
+        # Stood on the aft deck, hands free, for the sprint and the turn.
+        walker.set_actor_location(boat.get_actor_transform().transform_location(
+            unreal.Vector(UNBRACED_SPOT[0], UNBRACED_SPOT[1], 20.0 + 92.0)), False, True)
+        fe["aft"] = t
+    if t >= 134.0 and "mended" not in fe:
+        boat.apply_engine_damage(-1.0, 0)    # both motors again for the idle and astern runs
+        fe["mended"] = t
+        recentre(boat, t)
+
+
+def realism(boat, t, phase):
+    """Records what the realism checks need, every frame: the time to plane and to 25 kn from the moment the lever goes
+    forward, the attitude at rest, and the hull's rocking after a kick."""
+    r = state.setdefault("real", {"marks": {}, "rest": [], "kicks": {}})
+    kn = boat.get_speed_knots()
+    rot = boat.get_actor_rotation()
+    if phase in ("throttle up", "full ahead"):
+        for mark in (12, 15, 25, 28):
+            if kn >= mark and mark not in r["marks"]:
+                r["marks"][mark] = t - 15.0
+                log("t=%5.2f reached %d kn, %.1f s after the lever went forward" % (t, mark, t - 15.0))
+    if phase == "settle" and t >= 5.0:
+        r["rest"].append((t, rot.pitch, rot.roll))
+    # What a crew member on the aft deck feels: the deck's acceleration there, smoothed over a few frames the way the
+    # crew's balance reads it, so the log shows how hard each phase throws an unbraced crew member about.
+    hull = boat.get_component_by_class(unreal.BoxComponent)
+    spot = boat.get_actor_transform().transform_location(unreal.Vector(-270.0, 0.0, 20.0))
+    vel = hull.get_physics_linear_velocity_at_point(spot)
+    dt = unreal.GameplayStatics.get_world_delta_seconds(boat)
+    prev = state.get("deck_vel")
+    state["deck_vel"] = vel
+    if prev is not None and dt > 0.0 and t >= 5.0 and t - state.get("recentred_at", -99.0) > 1.0:
+        raw = (vel - prev) * (1.0 / dt)
+        sm = state.get("deck_acc", raw)
+        a = min(1.0, dt * 20.0)
+        sm = sm * (1.0 - a) + raw * a
+        state["deck_acc"] = sm
+        j = r.setdefault("jolts", {}).setdefault(phase, [0.0, 0.0])
+        j[0] = max(j[0], math.hypot(sm.x, sm.y) / 980.0)
+        j[1] = max(j[1], max(0.0, sm.z) / 980.0)
+    for start, axis, rate in KICKS:
+        k = r["kicks"].setdefault(axis, {"before": [], "after": []})
+        angle = rot.roll if axis == "roll" else rot.pitch
+        if start - 1.0 <= t < start:
+            k["before"].append(angle)
+        elif t >= start and "kicked" not in k:
+            # The hull's own axis, in the world: roll about its length, pitch about its beam.
+            xf = boat.get_actor_transform()
+            about = xf.transform_direction(unreal.Vector(1, 0, 0) if axis == "roll" else unreal.Vector(0, 1, 0))
+            boat.get_component_by_class(unreal.BoxComponent).add_angular_impulse_in_degrees(about * rate, "None", vel_change=True)
+            k["kicked"] = t
+        elif "kicked" in k and t < start + 5.0:
+            k["after"].append((t, angle))
+
+
+def rock_period(axis):
+    """The period (s) of the hull's rocking after a kick: twice the time from its first big swing to its swing back
+    the other way (a real hull's rocking is damped hard enough that this is often the only clean swing back)."""
+    k = state.get("real", {}).get("kicks", {}).get(axis)
+    if not k or not k["before"] or len(k["after"]) < 3:
+        return None, 0.0
+    rest = sum(k["before"]) / len(k["before"])
+    dev = [(t, a - rest) for t, a in k["after"]]
+    trace, next_t = [], dev[0][0]
+    for t, d in dev:
+        if t >= next_t:
+            trace.append("%+.1f" % d)
+            next_t += 0.1
+    log("%s after the kick, every 0.1 s (deg from where it sat): %s" % (axis, " ".join(trace[:30])))
+    first = max(range(len(dev)), key=lambda i: abs(dev[i][1]))
+    peak = dev[first][1]
+    # The swing back: the furthest the other way before it comes back again.
+    back = None
+    for i in range(first + 1, len(dev)):
+        if dev[i][1] * peak < 0.0 and (back is None or abs(dev[i][1]) > abs(dev[back][1])):
+            back = i
+        elif back is not None and abs(dev[i][1]) < 0.5 * abs(dev[back][1]):
+            break
+    if back is None:
+        return None, abs(peak)
+    return 2.0 * (dev[back][0] - dev[first][0]), abs(peak)
 
 
 def in_phase(name):
@@ -459,6 +580,11 @@ def yaw_change(samples):
     for a, b in zip(samples, samples[1:]):
         total += (b["yaw"] - a["yaw"] + 180.0) % 360.0 - 180.0
     return total
+
+
+def boat_lever_at(phase):
+    samples = in_phase(phase)
+    return samples[-1]["lever"] if samples else float("nan")
 
 
 def verdict():
@@ -614,6 +740,52 @@ def verdict():
     else:
         checks.append(("the player spawned on foot", False, ""))
 
+    # --- Realism: what a real 26 ft aluminium boat with twin 300s does ---
+    real = state.get("real", {})
+    rest = real.get("rest", [])
+    if rest:
+        log("at rest: pitch %.1f deg (bow up +), roll %.1f deg, averaged over %.0f s"
+            % (sum(p for _, p, _ in rest) / len(rest), sum(r for _, _, r in rest) / len(rest), rest[-1][0] - rest[0][0]))
+    for axis in ("roll", "pitch"):
+        period, peak = rock_period(axis)
+        log("%s period after a kick: %s (swung %.1f deg)" % (axis, "%.2f s" % period if period else "not measured", peak))
+    log("hardest deck jolts on the aft deck, by phase (sideways g, slam g): %s" % ", ".join(
+        "%s %.2f/%.2f" % (ph, j[0], j[1]) for ph, j in real.get("jolts", {}).items()))
+    marks = real.get("marks", {})
+    log("acceleration from the lever going forward: %s" % ", ".join("%d kn in %.1f s" % (m, marks[m]) for m in sorted(marks)))
+    idle = [s["kn"] for s in in_phase("idle ahead") if s["t"] >= 156.0]
+    if idle:
+        avg = sum(idle) / len(idle)
+        checks.append(("idles along in gear at %.0f-%.0f kn" % IDLE_KN, IDLE_KN[0] <= avg <= IDLE_KN[1],
+                       "%.1f kn (lever %.2f)" % (avg, boat_lever_at("idle ahead"))))
+    astern = [s["kn"] for s in in_phase("full astern") if s["t"] >= 179.0]
+    if astern:
+        top = max(astern)
+        checks.append(("full astern tops out at %.0f-%.0f kn (a transom shoves a lot of water)" % ASTERN_KN,
+                       ASTERN_KN[0] <= top <= ASTERN_KN[1], "%.1f kn" % top))
+    to25 = marks.get(25)
+    checks.append(("reaches 25 kn in %.0f-%.0f s from the lever going forward" % TO_25_S,
+                   to25 is not None and TO_25_S[0] <= to25 <= TO_25_S[1], "%s" % ("%.1f s" % to25 if to25 else "never")))
+    full = in_phase("full ahead")
+    if full:
+        top = max(s["kn"] for s in full)
+        checks.append(("tops out at %.0f-%.0f kn flat out" % TOP_KN, TOP_KN[0] <= top <= TOP_KN[1], "%.1f kn" % top))
+        flat_out = [s for s in full if s["t"] >= 26.0]
+        log("running trim flat out (motors at neutral trim, last %d s of full ahead): %.1f deg bow up at %.1f kn"
+            % (len(flat_out), sum(s["pitch"] for s in flat_out) / len(flat_out), sum(s["kn"] for s in flat_out) / len(flat_out)))
+    # The crew's balance: an unbraced crew member rides out normal running at 30 knots in the swell (an odd stumble on
+    # a big slam at most), but a hard turn at speed throws them.
+    thrown = state["walk"].get("thrown", {})
+    if state["walker"]:
+        running = sum(thrown.get(ph, 0) for ph in ("trim out", "trim in"))
+        checks.append(("an unbraced crew member rides out 28 s of running flat out in the swell (stumbles at most twice)",
+                       running <= 2, "%d stumbles" % running))
+        checks.append(("a hard turn at speed throws an unbraced crew member", thrown.get("unbraced turn", 0) >= 1,
+                       "%d stumbles" % thrown.get("unbraced turn", 0)))
+    tp = state.get("trim_pitch", {})
+    if "trim neutral" in tp:
+        log("running trim flat out, motors at neutral trim: %.1f deg bow up" % (sum(tp["trim neutral"]) / len(tp["trim neutral"])))
+
     ok = True
     for name, passed, detail in checks:
         ok &= bool(passed)
@@ -663,6 +835,10 @@ def _tick(_dt):
                     finish()
                 return
             state["boat"] = boats[0]
+            state["home"] = boats[0].get_actor_location()
+            hull = boats[0].get_component_by_class(unreal.BoxComponent)
+            log("hull mass %.0f kg, inertia %s kg m^2, centre of mass %s" % (
+                hull.get_mass(), hull.get_inertia_tensor() * 0.0001, hull.get_center_of_mass()))
             log("boat found: %s" % state["boat"].get_name())
             walkers = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideCharacter)
             state["walker"] = walkers[0] if walkers else None
@@ -694,6 +870,13 @@ def _tick(_dt):
         boat = state["boat"]
         t = unreal.GameplayStatics.get_time_seconds(world)
         start, throttle, steer, phase = phase_at(t)
+        if phase == "idle ahead":
+            # Ease the lever to just in gear, as a hand on it would, and leave it there.
+            throttle = max(-1.0, min(1.0, (IDLE_LEVER - boat.get_throttle_lever()) * 8.0))
+            # And head back toward where the boat started: by now it's run a long way, and the test sea is 2 km across.
+            loc, home = boat.get_actor_location(), state["home"]
+            bearing = math.degrees(math.atan2(home.y - loc.y, home.x - loc.x))
+            steer = max(-1.0, min(1.0, ((bearing - boat.get_actor_rotation().yaw + 180.0) % 360.0 - 180.0) / 30.0))
         boat.set_helm_input(throttle, steer)
         if "lights" not in state and t > 1.0:
             nav = boat.are_nav_lights_on()
@@ -762,6 +945,8 @@ def _tick(_dt):
         if t >= 5.0:
             bow = state["bow"].setdefault(phase, [])
             bow.append((boat.get_bow_freeboard_cm(), boat.get_actor_rotation().pitch))
+
+        realism(boat, t, phase)
 
         if t >= state["next_log"]:
             sample(boat, t, phase)
