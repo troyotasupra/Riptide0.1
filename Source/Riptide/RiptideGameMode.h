@@ -4,6 +4,12 @@
 #include "GameFramework/GameModeBase.h"
 #include "RiptideGameMode.generated.h"
 
+class ARiptideBoat;
+
+/**
+ * Puts the crew on a boat: the first player to join launches one at the player start, and every player stands
+ * on its deck (the first at the helm) on foot.
+ */
 UCLASS()
 class RIPTIDE_API ARiptideGameMode : public AGameModeBase
 {
@@ -12,9 +18,12 @@ class RIPTIDE_API ARiptideGameMode : public AGameModeBase
 public:
 	ARiptideGameMode();
 
-	/** On a map with a world director, boats start off the start island instead of at a player start. */
 	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
 
+protected:
+	UPROPERTY(EditAnywhere, Category = "Riptide")
+	TSubclassOf<ARiptideBoat> BoatClass;
+
 private:
-	int32 BoatsSpawned = 0;
+	ARiptideBoat* FindOrLaunchBoat(AActor* StartSpot);
 };
