@@ -18,6 +18,25 @@ Co-op naval survival shooter in Unreal Engine 5. The design plan is in `Docs/PLA
 - The game opens on the main menu: a live shot of the patrol boat at night, drifting on the swell with its searchlight sweeping slowly across the water and a crew member in kit standing dark at the bow rail. From there you host or join a game with up to four crew, set your callsign and look, and change the settings (see "Playing together" below).
 - Builds and runs on Unreal Engine 5.7 (Windows, Visual Studio 2022).
 
+## Installing and playing
+Riptide runs from its source, on Windows or macOS, with Unreal Engine 5.7.
+
+1. **Install the tools.**
+   - **Windows:** the Epic Games Launcher with Unreal Engine 5.7, and Visual Studio 2022 with the "Game development with C++" workload.
+   - **macOS:** Unreal Engine 5.7 from the Epic Games Launcher, and Xcode (the version Epic lists for 5.7).
+   - **Both:** Git with Git LFS (`git lfs install` once), and Steam for online play.
+2. **Get the game:** `git clone https://github.com/troyotasupra/Riptide0.1.git`, then `git lfs pull` inside it. The art and sounds come down through LFS.
+3. **First launch:** open `Riptide.uproject` in Unreal Engine 5.7 once and let it compile and finish opening.
+   - The first open builds the game's maps, boat, crew and materials, which takes several minutes.
+   - Close the editor when it's done.
+4. **Play:** use the launcher in `Tools/Launch/`. It brings the code up to date (quick when nothing has changed) and starts the game in its own window, on the main menu.
+   - **Windows:** `Play Riptide.bat`. Right-click it and choose Send to, Desktop (create shortcut) for a desktop icon.
+   - **macOS:** `Play Riptide.command`. Double-click it in Finder; the first time, macOS may ask you to allow it in System Settings, Privacy & Security.
+   - If Unreal Engine isn't in the default place, set `UE_ROOT` to its folder.
+5. **Updating:** `git pull` (and `git lfs pull`), then play as usual. After an update that changes the generated content, open the editor once to rebuild it.
+
+For online play, start Steam first on every PC (see "Playing together"). Windows and Mac players can play together.
+
 ## Playing together
 Riptide is online co-op for up to four players, over Steam when it's running.
 
