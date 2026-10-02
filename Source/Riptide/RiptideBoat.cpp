@@ -392,6 +392,15 @@ ARiptideBoat::ARiptideBoat()
 	WheelMesh->SetupAttachment(HullBody);
 	WheelMesh->SetRelativeLocationAndRotation(WheelCentre, FRotator(WheelTiltDeg, 180.f, 0.f));
 	// The radio's hand mic on its clip, and its cord.
+	// Where voices come out: the VHF's speaker in the face of the overhead box, and the loudhailer horn under the
+	// T-top's front edge (riptide_boat_mesh.py's _electronics_box and _t_top).
+	RadioSpeaker = CreateDefaultSubobject<USceneComponent>(TEXT("RadioSpeaker"));
+	RadioSpeaker->SetupAttachment(HullBody);
+	RadioSpeaker->SetRelativeLocation(FVector(-78.f, 0.f, DeckZ + 205.f));
+	LoudhailerHorn = CreateDefaultSubobject<USceneComponent>(TEXT("LoudhailerHorn"));
+	LoudhailerHorn->SetupAttachment(HullBody);
+	LoudhailerHorn->SetRelativeLocationAndRotation(FVector(46.f, 0.f, DeckZ + 215.f), FRotator::ZeroRotator);
+
 	MicMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MicMesh"));
 	MicMesh->SetupAttachment(HullBody);
 	MicMesh->SetRelativeLocation(MicHook);
@@ -1337,6 +1346,8 @@ void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ARiptideBoat, EngineOutput);
 	DOREPLIFETIME(ARiptideBoat, SteerAngleDeg);
 	DOREPLIFETIME(ARiptideBoat, MicHolder);
+	DOREPLIFETIME(ARiptideBoat, RadioChannel);
+	DOREPLIFETIME(ARiptideBoat, MicMode);
 	DOREPLIFETIME(ARiptideBoat, LadderUser);
 	DOREPLIFETIME(ARiptideBoat, TrimDeg);
 	DOREPLIFETIME(ARiptideBoat, FuelLiters);
@@ -1411,6 +1422,10 @@ void ARiptideBoat::BuildInput()
 	SearchlightAction->ValueType = EInputActionValueType::Boolean;
 	HelmMapping->MapKey(SearchlightAction, EKeys::L);
 	HelmMapping->MapKey(SearchlightAction, EKeys::Gamepad_DPad_Left);
+	AimSearchlightAction = NewObject<UInputAction>(this, TEXT("IA_AimSearchlight"));
+	AimSearchlightAction->ValueType = EInputActionValueType::Boolean;
+	HelmMapping->MapKey(AimSearchlightAction, EKeys::RightMouseButton);
+	HelmMapping->MapKey(AimSearchlightAction, EKeys::Gamepad_LeftShoulder);
 	NavLightsAction = NewObject<UInputAction>(this, TEXT("IA_NavLights"));
 	NavLightsAction->ValueType = EInputActionValueType::Boolean;
 	HelmMapping->MapKey(NavLightsAction, EKeys::N);
@@ -1445,6 +1460,8 @@ void ARiptideBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindAction(TrimAction, ETriggerEvent::Canceled, this, &ARiptideBoat::OnTrimReleased);
 		Input->BindActionValueLambda(DebugHudAction, ETriggerEvent::Started, [this](const FInputActionValue&) { bShowDebugHud = !bShowDebugHud; });
 		Input->BindActionValueLambda(SearchlightAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(0); });
+		Input->BindActionValueLambda(AimSearchlightAction, ETriggerEvent::Started, [this](const FInputActionValue&) { bAimingSearchlight = true; });
+		Input->BindActionValueLambda(AimSearchlightAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { bAimingSearchlight = false; });
 		Input->BindActionValueLambda(NavLightsAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(1); });
 		Input->BindActionValueLambda(DeckLightsAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(2); });
 		Input->BindActionValueLambda(MicAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleMic(); });
@@ -1699,8 +1716,13 @@ void ARiptideBoat::ApplyLights()
 
 void ARiptideBoat::UpdateSearchlight(float DeltaSeconds)
 {
-	// The helmsman aims it by looking: it follows the helm camera's direction.
-	if (IsLocallyControlled() && Helmsman)
+	// The helmsman aims it by holding the aim key (right mouse) and looking: it follows the helm camera's direction
+	// while held, and stays where it was left when let go, so you can look about with it trained on something.
+	if (!IsLocallyControlled() || !Helmsman)
+	{
+		bAimingSearchlight = false;
+	}
+	else if (bAimingSearchlight && (!FMath::IsNearlyEqual(LookYaw, SearchlightYaw, 0.2f) || !FMath::IsNearlyEqual(LookPitch, SearchlightPitch, 0.2f)))
 	{
 		if (HasAuthority())
 		{
@@ -2334,8 +2356,8 @@ void ARiptideBoat::DrawDebugHud() const
 	if (Helmsman)
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, IsHelmViewOnMic()
-			? (MicHolder && MicHolder == Helmsman ? TEXT("E  Hang up the mic      H  Tuning readout") : TEXT("E  Take the radio mic      H  Tuning readout"))
-			: TEXT("E  Leave the helm      (look at the radio mic overhead and press E to take it)      H  Tuning readout"));
+			? (MicHolder && MicHolder == Helmsman ? TEXT("E  Hang up the mic      Hold right mouse  Aim the searchlight      H  Tuning readout") : TEXT("E  Take the radio mic      Hold right mouse  Aim the searchlight      H  Tuning readout"))
+			: TEXT("E  Leave the helm      Hold right mouse  Aim the searchlight (L on/off)      Look at the radio mic + E  Take it      H  Tuning readout"));
 	}
 	if (!bShowDebugHud)
 	{
@@ -2420,6 +2442,15 @@ void ARiptideBoat::ServerToggleMic_Implementation()
 	else
 	{
 		GrabMic(Helmsman);
+	}
+}
+
+void ARiptideBoat::SetRadio(int32 Channel, ERiptideMicMode Mode)
+{
+	if (HasAuthority())
+	{
+		RadioChannel = FMath::Clamp(Channel, 1, URiptideVoiceComponent::MaxChannel);
+		MicMode = Mode;
 	}
 }
 

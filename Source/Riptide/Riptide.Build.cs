@@ -13,6 +13,8 @@ public class Riptide : ModuleRules
 		{
 			"Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Water", "ProceduralMeshComponent", "Niagara", "UMG", "Slate", "SlateCore",
 			"OnlineSubsystem", "OnlineSubsystemUtils", "Sockets",
+			// The radio's and loudhailer's sound (band-pass and drive on voices, URiptideVoiceComponent).
+			"AudioExtensions", "Synthesis",
 			// Two-bone IK for the crew's hands and feet on the ladder (URiptideCrewAnimInstance).
 			"AnimationCore"
 		});

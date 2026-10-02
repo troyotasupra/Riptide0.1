@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
+#include "RiptideVoice.h"
 #include "RiptideBoat.generated.h"
 
 class ARiptideCharacter;
@@ -237,6 +238,21 @@ public:
 	/** Takes the mic off its clip for a crew member in reach of it. Server only. False if someone else has it. */
 	bool GrabMic(ARiptideCharacter* Crew);
 
+	/** The CB channel the boat's radio is on (1-40): it hears, and its mic sends on, that channel. */
+	UFUNCTION(BlueprintPure, Category = "Boat|Radio")
+	int32 GetRadioChannel() const { return RadioChannel; }
+
+	/** Whether the hand mic is switched to the CB or the loudhailer. */
+	UFUNCTION(BlueprintPure, Category = "Boat|Radio")
+	ERiptideMicMode GetMicMode() const { return MicMode; }
+
+	/** Tunes the radio and switches the mic. Server only. */
+	void SetRadio(int32 Channel, ERiptideMicMode Mode);
+
+	/** The radio's speaker in the overhead box, and the loudhailer's horn under the T-top's front edge. */
+	USceneComponent* GetRadioSpeaker() const { return RadioSpeaker; }
+	USceneComponent* GetLoudhailerHorn() const { return LoudhailerHorn; }
+
 	/** Hangs the mic back on its clip. Server only. */
 	void HangUpMic();
 
@@ -471,6 +487,18 @@ protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_MicHolder)
 	TObjectPtr<ARiptideCharacter> MicHolder;
+
+	UPROPERTY(Replicated)
+	int32 RadioChannel = 19;
+
+	UPROPERTY(Replicated)
+	ERiptideMicMode MicMode = ERiptideMicMode::Radio;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Radio")
+	TObjectPtr<USceneComponent> RadioSpeaker;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat|Radio")
+	TObjectPtr<USceneComponent> LoudhailerHorn;
 
 	UFUNCTION()
 	void OnRep_MicHolder();
@@ -1041,6 +1069,13 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> SearchlightAction;
+
+	/** Held (right mouse button) at the helm: the searchlight follows where the helmsman looks. */
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> AimSearchlightAction;
+
+	/** The helmsman is holding the aim key; the light stays where it was left otherwise. */
+	bool bAimingSearchlight = false;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> NavLightsAction;
