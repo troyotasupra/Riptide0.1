@@ -42,6 +42,12 @@ def toward(a, b, t):
     return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
 
 
+def _mark(kind, up):
+    """Where the first sand mark of a kind lies (design metres), `up` metres above it and a little to one side."""
+    mark = next(m for m in island.decals() if m["kind"] == kind)
+    return (mark["x"] - up * 0.35, mark["y"] - up * 0.35, island.height(mark["x"], mark["y"]) + up)
+
+
 def _shots():
     bx, by = island.beach
     ox, oy = island.beach_out
@@ -72,6 +78,11 @@ def _shots():
         ("20_low_along_the_beach_west", (bx + out[0] * 14.0 + out[1] * 38.0, by + out[1] * 14.0 - out[0] * 38.0, 1.3), (bx - out[1] * 10.0, by + out[0] * 10.0, 1.2)),
         ("21_low_off_the_point", island.place(-34.0, 78.0) + (1.3,), island.place(-18.0, 44.0) + (1.5,)),
         ("22_low_off_the_spit", island.place(-100.0, 42.0) + (1.3,), island.place(-70.0, 12.0) + (1.0,)),
+        ("23_tide_line_close", (bx - out[0] * 3.0 + out[1] * 6.0, by - out[1] * 3.0 - out[0] * 6.0, 1.1), (bx - out[0] * 4.5 - out[1] * 6.0, by - out[1] * 4.5 + out[0] * 6.0, 1.2)),
+        ("24_beach_from_the_dune", standing(bx - out[0] * 18.0, by - out[1] * 18.0), (bx + out[0] * 10.0 + out[1] * 20.0, by + out[1] * 10.0 - out[0] * 20.0, 0.8)),
+        ("25_shell_drift_from_above", _mark("shells", 3.5), _mark("shells", 0.0)),
+        ("26_wrack_line_from_above", _mark("wrack", 3.0), _mark("wrack", 0.0)),
+        ("27_damp_patch_from_above", _mark("damp", 4.0), _mark("damp", 0.0)),
         ("16_cliff_edge_from_above", island.place(46.0, -40.0) + (9.0,), island.place(58.0, -44.0) + (0.0,)),
         ("17_cliff_edge_looking_along", island.place(20.0, -45.5) + (4.6,), island.place(60.0, -41.0) + (0.5,)),
         ("18_cliff_under_the_bluff", island.place(118.0, -30.0) + (2.2,), island.place(96.0, -8.0) + (3.0,)),

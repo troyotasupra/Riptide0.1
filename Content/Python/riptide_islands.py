@@ -15,7 +15,7 @@ ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
 ISLAND_VERSIONS = {"StartCay": "9"}
 GREY_VERSION = "3"
-ISLAND_MAP_VERSION = "10"
+ISLAND_MAP_VERSION = "12"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
 # tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in
@@ -79,7 +79,7 @@ return float3(shade, shade, shade);""")
 # The ground's photo surfaces (SourceAssets/Textures, credited in Docs/CREDITS.md) and the material that lays them
 # over an island by its surface map. Bump SURFACE_VERSION when the material's recipe changes.
 TEXTURES_PATH = f"{ISLANDS_PATH}/Textures"
-SURFACE_VERSION = "6"
+SURFACE_VERSION = "8"
 GROUND_TEXTURES = ["dense_sand", "aerial_beach_01", "shell_floor_01", "coral_mud_01", "seaside_rock", "forrest_sand_01",
                    "low_tide_rocks"]
 TEXTURE_MAPS = ["diff", "nor_dx", "arm", "disp"]
@@ -736,7 +736,7 @@ def _place_props(name, island, origin=(0.0, 0.0, 0.0)):
                 continue
             # Grass: only the upright tufts, not the dead or flattened scraps.
             if which == "grass_bermuda_01":
-                entries = [e for e in entries if "medium" in e["path"] or "seedling" in e["path"]] or entries
+                entries = [e for e in entries if "medium" in e["path"] or "seedling" in e["path"] or "small" in e["path"]] or entries
             path = entries[n % len(entries)]["path"]
         mesh = loaded.get(path) or unreal.load_asset(path)
         loaded[path] = mesh
@@ -763,6 +763,128 @@ def _place_props(name, island, origin=(0.0, 0.0, 0.0)):
         holder.add_prop(mesh, transform, solid)
         counts[prop["kind"]] = counts.get(prop["kind"], 0) + 1
     unreal.log(f"Riptide: {name} planted: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
+
+
+# --- Marks on the sand -------------------------------------------------------------------------------------------
+# Decals laid over the beach from the island's design (Island.decals): drifts of broken shell, lines of dried weed
+# and litter the tide left, and damp patches. Each is a soft-edged patch of a photo laid on by world position.
+DECAL_CODE = {
+    "shells": """
+float2 c = UV - 0.5;
+float edge = 1.0 - smoothstep(0.35, 1.0, length(c) * 2.0);
+float4 pic = Picture.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 300.0);
+float4 nrm = Bumps.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 300.0);
+float lum = dot(pic.rgb, float3(0.3, 0.59, 0.11));
+// Only the shells themselves show, scattered thicker in the middle of the drift.
+float grain = Grain.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 1100.0).r;
+// The shells, lighter than the sand of their photo, scattered thicker toward the middle of the drift.
+Opacity = edge * smoothstep(0.28, 0.5, lum + (grain - 0.5) * 0.35 + edge * 0.1) * 0.95;
+Normal = UnpackNormalMap(nrm).xyz;
+Rough = 0.5;
+return pic.rgb * float3(1.3, 1.26, 1.18);
+""",
+    "wrack": """
+float2 c = UV - 0.5;
+float edge = (1.0 - smoothstep(0.2, 1.0, abs(c.x) * 2.0)) * (1.0 - smoothstep(0.25, 1.0, abs(c.y) * 2.0));
+float4 pic = Picture.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 200.0);
+float4 nrm = Bumps.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 200.0);
+float lum = dot(pic.rgb, float3(0.3, 0.59, 0.11));
+float grain = Grain.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 700.0).r;
+// The dark litter in the photo, not the sand between it.
+Opacity = edge * smoothstep(0.58, 0.3, lum + (grain - 0.5) * 0.25) * 0.9;
+Normal = UnpackNormalMap(nrm).xyz;
+Rough = 0.8;
+return pic.rgb * float3(0.7, 0.62, 0.48);
+""",
+    "damp": """
+float2 c = UV - 0.5;
+float edge = 1.0 - smoothstep(0.3, 1.0, length(c) * 2.0);
+float grain = Grain.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 900.0).r;
+float4 pic = Picture.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 180.0);
+Opacity = edge * saturate(0.35 + grain * 0.5) * 0.6;
+Normal = float3(0.0, 0.0, 1.0);
+Rough = 0.3;
+return pic.rgb * float3(0.5, 0.47, 0.42);
+""",
+}
+DECAL_PICTURES = {"shells": "shell_floor_01", "wrack": "forrest_sand_01", "damp": "dense_sand"}
+
+
+def _decal_material(kind):
+    """M_SandDecal_<kind>: a mark laid over the sand (see DECAL_CODE)."""
+    name = f"M_SandDecal_{kind}"
+    path = f"{MATERIALS_PATH}/{name}"
+    assets = unreal.EditorAssetLibrary
+    if assets.does_asset_exist(path):
+        if assets.get_metadata_tag(unreal.load_asset(path), "RiptideVersion") == SURFACE_VERSION:
+            return unreal.load_asset(path)
+        assets.delete_asset(path)
+    import_ground_textures()
+    mel = unreal.MaterialEditingLibrary
+    mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(name, MATERIALS_PATH, unreal.Material, unreal.MaterialFactoryNew())
+    mat.set_editor_property("material_domain", unreal.MaterialDomain.MD_DEFERRED_DECAL)
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    node = mel.create_material_expression(mat, unreal.MaterialExpressionCustom, -300, 0)
+    uv = mel.create_material_expression(mat, unreal.MaterialExpressionTextureCoordinate, -900, -300)
+    world = mel.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, -900, -200)
+    sources = [("UV", uv), ("WorldPos", world)]
+    picture = DECAL_PICTURES[kind]
+    for i, (pin_name, texture, kind_of) in enumerate(((("Picture", f"T_{picture}_diff", "diff")), ("Bumps", f"T_{picture}_nor_dx", "nor"),
+                                                      ("Grain", "T_aerial_beach_01_disp", "data"))):
+        obj = mel.create_material_expression(mat, unreal.MaterialExpressionTextureObject, -1500, i * 120)
+        obj.set_editor_property("texture", unreal.load_asset(f"{TEXTURES_PATH}/{texture}"))
+        obj.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if kind_of == "diff"
+                                else unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL if kind_of == "nor"
+                                else unreal.MaterialSamplerType.SAMPLERTYPE_MASKS)
+        sources.append((pin_name, obj))
+    pins = []
+    for pin_name, _ in sources:
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", pin_name)
+        pins.append(pin)
+    outs = []
+    for out_name, out_kind in (("Opacity", unreal.CustomMaterialOutputType.CMOT_FLOAT1), ("Normal", unreal.CustomMaterialOutputType.CMOT_FLOAT3),
+                               ("Rough", unreal.CustomMaterialOutputType.CMOT_FLOAT1)):
+        out = unreal.CustomOutput()
+        out.set_editor_property("output_name", out_name)
+        out.set_editor_property("output_type", out_kind)
+        outs.append(out)
+    node.set_editor_property("inputs", pins)
+    node.set_editor_property("additional_outputs", outs)
+    node.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    node.set_editor_property("code", DECAL_CODE[kind])
+    for pin_name, src in sources:
+        mel.connect_material_expressions(src, "", node, pin_name)
+    mel.connect_material_property(node, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    mel.connect_material_property(node, "Opacity", unreal.MaterialProperty.MP_OPACITY)
+    mel.connect_material_property(node, "Normal", unreal.MaterialProperty.MP_NORMAL)
+    mel.connect_material_property(node, "Rough", unreal.MaterialProperty.MP_ROUGHNESS)
+    mel.recompile_material(mat)
+    assets.set_metadata_tag(mat, "RiptideVersion", SURFACE_VERSION)
+    assets.save_asset(path, only_if_is_dirty=False)
+    return mat
+
+
+def _place_decals(name, island, origin=(0.0, 0.0, 0.0)):
+    """Lays the island's sand marks (Island.decals) as decal actors, projecting down onto the ground."""
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    materials = {kind: _decal_material(kind) for kind in DECAL_CODE}
+    counts = {}
+    for mark in island.decals():
+        x, y = mark["x"], mark["y"]
+        z = island.height(x, y)
+        # Unreal's X is north (the design's y), Y is east (the design's x). Pitched to look straight down, the
+        # decal's own Y runs across its yaw and Z along it.
+        actor = actors.spawn_actor_from_class(unreal.DecalActor, unreal.Vector(origin[0] + y * 100.0, origin[1] + x * 100.0, origin[2] + z * 100.0 + 60.0),
+                                              unreal.Rotator(roll=0.0, pitch=-90.0, yaw=mark["yaw"]))
+        along, across = mark["size"]
+        decal = actor.get_component_by_class(unreal.DecalComponent)
+        decal.set_decal_material(materials[mark["kind"]])
+        decal.set_editor_property("decal_size", unreal.Vector(120.0, across * 50.0, along * 50.0))
+        actor.set_actor_label(f"{name}_{mark['kind']}")
+        actor.set_folder_path(f"Islands/{name}/Marks")
+        counts[mark["kind"]] = counts.get(mark["kind"], 0) + 1
+    unreal.log(f"Riptide: {name} marked: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
 
 
 def _spawn_island_ocean(ns):
@@ -830,6 +952,7 @@ def build_island_test_map(ns, rebuilt):
     _place_island("StartCay")
     island = _load_island("StartCay")
     _place_props("StartCay", island)
+    _place_decals("StartCay", island)
 
     # The boat is launched here: off the wash-up beach, bow toward it.
     bx, by = island.beach

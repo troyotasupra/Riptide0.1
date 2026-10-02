@@ -12,7 +12,7 @@ MATERIALS_PATH = "/Game/Riptide/Materials"
 PALMS_PATH = f"{ISLANDS_PATH}/Palms"
 MODELS_PATH = f"{ISLANDS_PATH}/Models"
 REVIEW_MAP_PATH = "/Game/Riptide/Maps/Props_Review"
-PROPS_VERSION = "5"
+PROPS_VERSION = "6"
 
 # The scanned models: name -> how its meshes are treated. "rock": solid, drawn with Nanite. "plant": leaves cut out
 # by their alpha picture, lit from both sides. "wood": solid, plain.
@@ -392,10 +392,12 @@ def make_model_assets():
             alpha = textures.get(f"{stem}_alpha")
             pictures = {"Diffuse": textures.get(f"{stem}_diff"), "Normal": textures.get(f"{stem}_nor_gl"),
                         "Rough": textures.get(f"{stem}_rough"), "Alpha": alpha}
-            parent = leaf_parent if (alpha or (kind == "plant" and part != "branches" and model == "grass_bermuda_01")) else solid_parent
-            if parent == leaf_parent and not alpha:
+            # Leaves with a cut-out picture use the foliage material; everything else (bark, rock, wood, and grass
+            # whose blades are real geometry) the plain one, which is drawn from both sides.
+            parent = leaf_parent if alpha else solid_parent
+            if not alpha:
                 pictures.pop("Alpha")
-            name = f"MI_{stem}" + ("" if parent == solid_parent or alpha else "_blades")
+            name = f"MI_{stem}"
             path = f"{folder}/{name}"
             if unreal.EditorAssetLibrary.does_asset_exist(path):
                 return unreal.load_asset(path)
