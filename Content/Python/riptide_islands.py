@@ -13,8 +13,8 @@ ISLANDS_PATH = "/Game/Riptide/Islands"
 MATERIALS_PATH = "/Game/Riptide/Materials"
 ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
-ISLAND_VERSIONS = {"StartCay": "3"}
-GREY_VERSION = "2"
+ISLAND_VERSIONS = {"StartCay": "6"}
+GREY_VERSION = "3"
 ISLAND_MAP_VERSION = "7"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
@@ -68,6 +68,7 @@ return float3(shade, shade, shade);""")
     rough.set_editor_property("r", 0.92)
     mel.connect_material_property(grid, "", unreal.MaterialProperty.MP_BASE_COLOR)
     mel.connect_material_property(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    mel.set_material_usage(mat, unreal.MaterialUsage.MATUSAGE_NANITE)
     mel.recompile_material(mat)
     assets.set_metadata_tag(mat, "RiptideVersion", GREY_VERSION)
     assets.save_asset(path, only_if_is_dirty=False)
@@ -78,7 +79,7 @@ return float3(shade, shade, shade);""")
 # The ground's photo surfaces (SourceAssets/Textures, credited in Docs/CREDITS.md) and the material that lays them
 # over an island by its surface map. Bump SURFACE_VERSION when the material's recipe changes.
 TEXTURES_PATH = f"{ISLANDS_PATH}/Textures"
-SURFACE_VERSION = "3"
+SURFACE_VERSION = "4"
 GROUND_TEXTURES = ["dense_sand", "aerial_beach_01", "shell_floor_01", "coral_mud_01", "seaside_rock", "forrest_sand_01",
                    "low_tide_rocks"]
 TEXTURE_MAPS = ["diff", "nor_dx", "arm", "disp"]
@@ -310,6 +311,8 @@ def _ground_material():
     mel.connect_material_property(node, "Normal", unreal.MaterialProperty.MP_NORMAL)
     mel.connect_material_property(node, "Rough", unreal.MaterialProperty.MP_ROUGHNESS)
     mel.connect_material_property(node, "AO", unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
+    # The ground is Nanite; without this the game (not the editor) draws it with the grey default material.
+    mel.set_material_usage(mat, unreal.MaterialUsage.MATUSAGE_NANITE)
     mel.recompile_material(mat)
     assets.set_metadata_tag(mat, "RiptideVersion", SURFACE_VERSION)
     assets.save_asset(path, only_if_is_dirty=False)
@@ -416,9 +419,14 @@ def make_island_assets(name):
             slot.set_editor_property("material_interface", ground)
             materials[i] = slot
         mesh.set_editor_property("static_materials", materials)
-        # Plain meshes for now: the ground is only a few thousand triangles a square.
+        # Nanite: 144 squares of ordinary mesh overflow the shadow maps' budget for them (the engine's "Non-Nanite
+        # Marking Job Queue overflow" warning). The stand-in mesh the collision is made from keeps every triangle,
+        # so the crew still walks on exactly the ground that's drawn.
         nanite = mesh_tools.get_nanite_settings(mesh)
-        nanite.set_editor_property("enabled", False)
+        nanite.set_editor_property("enabled", True)
+        nanite.set_editor_property("fallback_target", unreal.NaniteFallbackTarget.PERCENT_TRIANGLES)
+        nanite.set_editor_property("fallback_percent_triangles", 1.0)
+        nanite.set_editor_property("fallback_relative_error", 0.0)
         mesh_tools.set_nanite_settings(mesh, nanite, True)
         # The crew, the boat's hull and everything else stand on the ground's own triangles.
         body = mesh.get_editor_property("body_setup")

@@ -12,7 +12,7 @@ MATERIALS_PATH = "/Game/Riptide/Materials"
 PALMS_PATH = f"{ISLANDS_PATH}/Palms"
 MODELS_PATH = f"{ISLANDS_PATH}/Models"
 REVIEW_MAP_PATH = "/Game/Riptide/Maps/Props_Review"
-PROPS_VERSION = "3"
+PROPS_VERSION = "5"
 
 # The scanned models: name -> how its meshes are treated. "rock": solid, drawn with Nanite. "plant": leaves cut out
 # by their alpha picture, lit from both sides. "wood": solid, plain.
@@ -73,7 +73,17 @@ def _versioned(path):
     return None
 
 
+def mark_usage(mat):
+    """Says what a material is drawn on: batched instances and Nanite meshes, as everything on an island is. The
+    editor quietly allows any use, so it looks right there; the game itself draws the grey default material on
+    anything a material isn't marked for."""
+    mel = unreal.MaterialEditingLibrary
+    for usage in (unreal.MaterialUsage.MATUSAGE_INSTANCED_STATIC_MESHES, unreal.MaterialUsage.MATUSAGE_NANITE):
+        mel.set_material_usage(mat, usage)
+
+
 def _finish(mat, path):
+    mark_usage(mat)
     unreal.MaterialEditingLibrary.recompile_material(mat)
     unreal.EditorAssetLibrary.set_metadata_tag(mat, "RiptideVersion", PROPS_VERSION)
     unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
@@ -256,8 +266,9 @@ def _palm_materials(bark):
 
 # --- Meshes ------------------------------------------------------------------------------------------------------
 
-def _dress(mesh, path, materials, nanite, solid):
-    """A mesh's slots given their materials, Nanite on or off, and (for solid things) its own triangles to stand on."""
+def _dress(mesh, path, materials, nanite, solid, leafy=False):
+    """A mesh's slots given their materials, Nanite on or off, and (for solid things) its own triangles to stand on.
+    `leafy` tells Nanite to keep thin leaves from thinning away to nothing with distance."""
     slots = mesh.get_editor_property("static_materials")
     for i, slot in enumerate(slots):
         name = str(slot.get_editor_property("material_slot_name"))
@@ -271,6 +282,11 @@ def _dress(mesh, path, materials, nanite, solid):
     tools = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
     settings = tools.get_nanite_settings(mesh)
     settings.set_editor_property("enabled", nanite)
+    if nanite and leafy:
+        try:
+            settings.set_editor_property("shape_preservation", unreal.NaniteShapePreservation.PRESERVE_AREA)
+        except Exception as err:  # noqa: BLE001 - an engine without the setting still draws the leaves
+            unreal.log_warning(f"Riptide: no leaf preservation for {path.split('/')[-1]} ({err})")
     tools.set_nanite_settings(mesh, settings, True)
     if solid:
         body = mesh.get_editor_property("body_setup")
@@ -315,8 +331,9 @@ def make_palm_assets():
         if not mesh:
             unreal.log_error(f"Riptide: palm {name} failed to import")
             continue
-        # Not Nanite: it can't draw leaves this thin from both sides. The trunk is what blocks the crew.
-        _dress(mesh, path, materials, nanite=False, solid=True)
+        # Nanite, leaves and all: as ordinary meshes, an island's worth of palms overflows the shadow maps' budget.
+        # The trunk is what blocks the crew.
+        _dress(mesh, path, materials, nanite=True, solid=True, leafy=True)
         unreal.log(f"Riptide: {name}: {tris} triangles")
     for leftover in assets.list_assets(PALMS_PATH, recursive=True):
         if leftover.split(".")[0].split("/")[-1] not in keep:
@@ -396,7 +413,11 @@ def make_model_assets():
                 assets.delete_asset(path.split(".")[0])
                 continue
             slots = [str(s.get_editor_property("material_slot_name")) for s in obj.get_editor_property("static_materials")]
-            _dress(obj, path.split(".")[0], material_for, nanite=(kind == "rock"), solid=(kind != "plant" or model == "island_tree_02"))
+            # Nanite for everything with weight to it (the tree alone is a million triangles); the small ferns,
+            # grass and twigs stay ordinary meshes.
+            heavy = obj.get_num_triangles(0) > 5000
+            _dress(obj, path.split(".")[0], material_for, nanite=(kind == "rock" or heavy), leafy=(kind == "plant"),
+                   solid=(kind != "plant" or model == "island_tree_02"))
             box = obj.get_bounding_box()
             entry = {"path": path.split(".")[0], "kind": kind, "slots": slots,
                      "min": [box.min.x, box.min.y, box.min.z], "max": [box.max.x, box.max.y, box.max.z],

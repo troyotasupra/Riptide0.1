@@ -230,6 +230,8 @@ void ARiptideIslandProps::AddProp(UStaticMesh* Mesh, const FTransform& WorldTran
 		Batch->SetMobility(EComponentMobility::Static);
 		Batch->SetStaticMesh(Mesh);
 		Batch->SetCollisionProfileName(Profile);
+		// Small things (ferns, twigs) cast no shadow: hundreds of little shadow casters cost more than they show.
+		Batch->SetCastShadow(Mesh->GetBounds().SphereRadius > 75.f);
 		Batch->SetupAttachment(Root);
 		AddInstanceComponent(Batch);
 		Batch->RegisterComponent();
