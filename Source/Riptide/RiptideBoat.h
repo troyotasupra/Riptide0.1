@@ -248,6 +248,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Boat|Radio")
 	FVector GetMicHookLocation() const;
 
+	/** The helm's view is on the radio mic's clip overhead: E there takes the mic (or hangs it back up) instead of
+	 * leaving the helm. */
+	UFUNCTION(BlueprintPure, Category = "Boat|Radio")
+	bool IsHelmViewOnMic() const;
+
 	/** How far from the radio (cm) the mic can be carried before its cord pulls it back. */
 	float GetMicCordReach() const { return MicCordReach; }
 
@@ -969,6 +974,7 @@ private:
 	void OnCutThrottle(const FInputActionValue& Value);
 	void OnLook(const FInputActionValue& Value);
 	void OnLeaveHelm(const FInputActionValue& Value);
+
 	void OnTrim(const FInputActionValue& Value);
 	void ApplyLights();
 	void UpdateSearchlight(float DeltaSeconds);

@@ -701,11 +701,12 @@ void ARiptideBoat::SetUpLockers()
 	}
 	// Each opens from its lid (riptide_boat_mesh.py's _fittings and _stern_box). Stocked the way a crew running this
 	// boat keeps it: whoever takes the boat takes what's aboard.
-	const int32 Forward = Lockers->AddStorage(NSLOCTEXT("Riptide", "ForwardLocker", "Forward locker"), 8, 5, FVector(102.f, 0.f, DeckZ));
-	const int32 Bow = Lockers->AddStorage(NSLOCTEXT("Riptide", "BowLocker", "Bow locker"), 6, 4, FVector(205.f, 0.f, DeckZ + 4.f));
-	const int32 SternPort = Lockers->AddStorage(NSLOCTEXT("Riptide", "SternPort", "Stern locker (port)"), 5, 3, FVector(-367.f, -97.f, DeckZ + 55.f));
-	const int32 SternStarboard = Lockers->AddStorage(NSLOCTEXT("Riptide", "SternStarboard", "Stern locker (starboard)"), 5, 3, FVector(-367.f, 97.f, DeckZ + 55.f));
-	const int32 Anchor = Lockers->AddStorage(NSLOCTEXT("Riptide", "AnchorLocker", "Anchor locker"), 3, 3, FVector(372.f, 0.f, DeckZ + 95.f));
+	// Each opened by looking at its lid (riptide_boat_mesh.py's hatches): the point is the lid's centre, then its half size.
+	const int32 Forward = Lockers->AddStorage(NSLOCTEXT("Riptide", "ForwardLocker", "Forward locker"), 8, 5, FVector(102.5f, 0.f, DeckZ), FVector2D(47.5f, 40.f));
+	const int32 Bow = Lockers->AddStorage(NSLOCTEXT("Riptide", "BowLocker", "Bow locker"), 6, 4, FVector(205.f, 0.f, DeckZ + 3.f), FVector2D(35.f, 28.f));
+	const int32 SternPort = Lockers->AddStorage(NSLOCTEXT("Riptide", "SternPort", "Stern locker (port)"), 5, 3, FVector(-366.f, -99.f, DeckZ + 55.f), FVector2D(18.f, 13.f));
+	const int32 SternStarboard = Lockers->AddStorage(NSLOCTEXT("Riptide", "SternStarboard", "Stern locker (starboard)"), 5, 3, FVector(-366.f, 99.f, DeckZ + 55.f), FVector2D(18.f, 13.f));
+	const int32 Anchor = Lockers->AddStorage(NSLOCTEXT("Riptide", "AnchorLocker", "Anchor locker"), 3, 3, FVector(375.f, 0.f, DeckZ + 95.f), FVector2D(12.f, 10.f));
 	auto Stock = [this](int32 Locker, const TCHAR* Id, int32 Count) { Lockers->GetStorage(Locker)->Grid.Add(FName(Id), Count); };
 	Stock(Forward, TEXT("first_aid_kit"), 1);
 	Stock(Forward, TEXT("flare_gun"), 1);
@@ -1418,7 +1419,6 @@ void ARiptideBoat::BuildInput()
 	HelmMapping->MapKey(DeckLightsAction, EKeys::K);
 	MicAction = NewObject<UInputAction>(this, TEXT("IA_Mic"));
 	MicAction->ValueType = EInputActionValueType::Boolean;
-	HelmMapping->MapKey(MicAction, EKeys::M);
 	HelmMapping->MapKey(MicAction, EKeys::Gamepad_RightThumbstick);
 	HelmMapping->MapKey(DeckLightsAction, EKeys::Gamepad_DPad_Right);
 
@@ -1558,8 +1558,23 @@ void ARiptideBoat::OnLook(const FInputActionValue& Value)
 	HelmCamera->SetRelativeRotation(FRotator(LookPitch, LookYaw, 0.f));
 }
 
+bool ARiptideBoat::IsHelmViewOnMic() const
+{
+	const FVector Eye = HelmCamera->GetComponentLocation();
+	const FVector View = HelmCamera->GetForwardVector();
+	const FVector To = (GetMicHookLocation() - FVector(0.f, 0.f, 6.f)) - Eye;
+	const float Along = FVector::DotProduct(To, View);
+	return Along > 0.f && Along <= 170.f && (To - View * Along).Size() <= 22.f;
+}
+
 void ARiptideBoat::OnLeaveHelm(const FInputActionValue& Value)
 {
+	// Looking at the mic, E takes it off its clip (or hangs it back up) rather than leaving the helm.
+	if (IsHelmViewOnMic())
+	{
+		ServerToggleMic();
+		return;
+	}
 	if (HasAuthority())
 	{
 		LeaveHelm();
@@ -2318,8 +2333,9 @@ void ARiptideBoat::DrawDebugHud() const
 	const uint64 KeyBase = 0x52495054ull;
 	if (Helmsman)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, MicHolder && MicHolder == Helmsman ? TEXT("E  Leave the helm      M  Hang up the mic      H  Tuning readout")
-			: TEXT("E  Leave the helm      M  Radio mic      H  Tuning readout"));
+		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, IsHelmViewOnMic()
+			? (MicHolder && MicHolder == Helmsman ? TEXT("E  Hang up the mic      H  Tuning readout") : TEXT("E  Take the radio mic      H  Tuning readout"))
+			: TEXT("E  Leave the helm      (look at the radio mic overhead and press E to take it)      H  Tuning readout"));
 	}
 	if (!bShowDebugHud)
 	{
