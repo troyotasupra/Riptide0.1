@@ -13,7 +13,7 @@ ISLANDS_PATH = "/Game/Riptide/Islands"
 MATERIALS_PATH = "/Game/Riptide/Materials"
 ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
-ISLAND_VERSIONS = {"StartCay": "2"}
+ISLAND_VERSIONS = {"StartCay": "3"}
 GREY_VERSION = "2"
 ISLAND_MAP_VERSION = "1"
 
@@ -62,6 +62,284 @@ return float3(shade, shade, shade);""")
     return mat
 
 
+# --- Surfaces ----------------------------------------------------------------------------------------------------
+# The ground's photo surfaces (SourceAssets/Textures, credited in Docs/CREDITS.md) and the material that lays them
+# over an island by its surface map. Bump SURFACE_VERSION when the material's recipe changes.
+TEXTURES_PATH = f"{ISLANDS_PATH}/Textures"
+SURFACE_VERSION = "2"
+GROUND_TEXTURES = ["dense_sand", "aerial_beach_01", "shell_floor_01", "coral_mud_01", "seaside_rock", "forrest_sand_01",
+                   "low_tide_rocks"]
+TEXTURE_MAPS = ["diff", "nor_dx", "arm", "disp"]
+
+# The ground material's inputs: (name in the code below, texture, map).
+GROUND_INPUTS = [
+    ("SandD", "dense_sand", "diff"), ("SandN", "dense_sand", "nor_dx"), ("SandA", "dense_sand", "arm"), ("SandH", "dense_sand", "disp"),
+    ("FarD", "aerial_beach_01", "diff"), ("FarN", "aerial_beach_01", "nor_dx"), ("FarH", "aerial_beach_01", "disp"),
+    ("ShellD", "shell_floor_01", "diff"), ("ShellN", "shell_floor_01", "nor_dx"), ("ShellA", "shell_floor_01", "arm"),
+    ("CoralD", "coral_mud_01", "diff"), ("CoralN", "coral_mud_01", "nor_dx"), ("CoralA", "coral_mud_01", "arm"), ("CoralH", "coral_mud_01", "disp"),
+    ("RockD", "seaside_rock", "diff"), ("RockN", "seaside_rock", "nor_dx"), ("RockA", "seaside_rock", "arm"), ("RockH", "seaside_rock", "disp"),
+    ("GroveD", "forrest_sand_01", "diff"), ("GroveN", "forrest_sand_01", "nor_dx"), ("GroveA", "forrest_sand_01", "arm"), ("GroveH", "forrest_sand_01", "disp"),
+    ("ReefD", "low_tide_rocks", "diff"), ("ReefN", "low_tide_rocks", "nor_dx"), ("ReefA", "low_tide_rocks", "arm"),
+]
+
+# The whole ground surface in one piece of shader code. UV is the mesh's own, in metres (east, north); every
+# photo is laid at its real size. Each surface is only read where the surface map says it's present.
+GROUND_CODE = """
+float2 dx = ddx(UV), dy = ddy(UV);
+#define RT_TEX(T, sc) T.SampleGrad(Material.Wrap_WorldGroupSettings, UV / (sc), dx / (sc), dy / (sc))
+// A photo's colour pulled toward grey by d, then tinted: the photos are of browner ground than a coral cay's.
+#define RT_TONE(c, d, t) (lerp((c), dot((c), float3(0.3, 0.59, 0.11)).xxx, (d)) * (t))
+float zm = WorldPos.z / 100.0;
+
+// Broad, soft variation (the far beach photo's height, tens of metres across): breaks up edges and repeats.
+float broad = RT_TEX(FarH, 47.0).r;
+float mid = RT_TEX(FarH, 11.0).r;
+
+// The island's surface map, read by world position (u east, v north), nudged so its edges wander.
+float2 suv = (WorldPos.yx / 100.0 + SurfaceHalf + (float2(mid, broad) - 0.5) * 3.0) / (2.0 * SurfaceHalf);
+float4 sm = Surface.SampleLevel(Material.Clamp_WorldGroupSettings, suv, 0);
+float wRock = sm.r, wCoral = sm.g, wGrove = sm.b, wReef = sm.a;
+// Any face too steep to hold sand is bare rock, read from the ground's own slope (finer than the map).
+float steep = 1.0 - smoothstep(0.72, 0.84, Up.z);
+wRock = max(wRock, steep);
+wCoral *= 1.0 - steep; wGrove *= 1.0 - steep; wReef *= 1.0 - steep;
+float wSand = saturate(1.0 - wRock - wCoral - wGrove - wReef);
+
+// Where two surfaces meet, the one standing higher in its photo wins: sand lies in the rock's hollows.
+float hSand = RT_TEX(SandH, 1.8).r;
+float hCoral = wCoral > 0.004 ? RT_TEX(CoralH, 2.0).r : 0.5;
+float hRock = wRock > 0.004 ? RT_TEX(RockH, 2.0).r : 0.5;
+float hGrove = wGrove > 0.004 ? RT_TEX(GroveH, 2.0).r : 0.5;
+float aSand = wSand * (0.25 + hSand * 0.6);
+float aCoral = wCoral * (0.3 + hCoral);
+float aRock = wRock * (0.35 + hRock);
+float aGrove = wGrove * (0.3 + hGrove);
+float aReef = wReef * 0.8;
+float top = max(max(max(aSand, aCoral), max(aRock, aGrove)), aReef);
+float cut = top * 0.7;
+aSand = max(aSand - cut, 0); aCoral = max(aCoral - cut, 0); aRock = max(aRock - cut, 0);
+aGrove = max(aGrove - cut, 0); aReef = max(aReef - cut, 0);
+float total = aSand + aCoral + aRock + aGrove + aReef + 1e-5;
+aSand /= total; aCoral /= total; aRock /= total; aGrove /= total; aReef /= total;
+
+float3 col = 0; float3 nrm = 0; float rough = 0; float ao = 0;
+
+if (aSand > 0.004)
+{
+    // Close up, the fine sand photo; further off, the wind-rippled one, so the beach never looks tiled.
+    float far = saturate((Dist / 100.0 - 6.0) / 30.0);
+    float3 c = RT_TEX(SandD, 1.8).rgb;
+    float3 n = UnpackNormalMap(RT_TEX(SandN, 1.8)).xyz;
+    float3 arm = RT_TEX(SandA, 1.8).rgb;
+    float3 fc = RT_TEX(FarD, 30.0).rgb;
+    float3 fn = UnpackNormalMap(RT_TEX(FarN, 30.0)).xyz;
+    c = lerp(c, fc, far * 0.85);
+    n = normalize(lerp(n, fn, far * 0.7));
+    // Broken shell gathers along the high-tide line.
+    float tide = zm + (mid - 0.5) * 0.5;
+    float shell = smoothstep(1.0, 1.2, tide) * (1.0 - smoothstep(1.45, 1.8, tide)) * smoothstep(0.35, 0.6, RT_TEX(FarH, 3.7).r) * 0.85;
+    if (shell > 0.004)
+    {
+        c = lerp(c, RT_TEX(ShellD, 3.0).rgb, shell);
+        n = normalize(lerp(n, UnpackNormalMap(RT_TEX(ShellN, 3.0)).xyz, shell));
+        arm = lerp(arm, RT_TEX(ShellA, 3.0).rgb, shell);
+    }
+    // Pale coral sand.
+    col += aSand * RT_TONE(c, 0.45, float3(1.32, 1.3, 1.24)) * SandTint.rgb; nrm += aSand * n; rough += aSand * arm.g; ao += aSand * arm.r;
+}
+if (aCoral > 0.004)
+{
+    float3 arm = RT_TEX(CoralA, 2.0).rgb;
+    // Weathered limestone: grey-white, not the photo's orange.
+    col += aCoral * RT_TONE(RT_TEX(CoralD, 2.0).rgb, 0.7, float3(0.92, 0.92, 0.88)); nrm += aCoral * UnpackNormalMap(RT_TEX(CoralN, 2.0)).xyz;
+    rough += aCoral * arm.g; ao += aCoral * arm.r;
+}
+if (aRock > 0.004)
+{
+    // Two sizes of the same rock mixed, so cliffs don't show the photo repeating.
+    float3 arm = RT_TEX(RockA, 2.0).rgb;
+    float3 c = lerp(RT_TEX(RockD, 2.0).rgb, RT_TEX(RockD, 7.3).rgb, 0.45);
+    float3 n = normalize(lerp(UnpackNormalMap(RT_TEX(RockN, 2.0)).xyz, UnpackNormalMap(RT_TEX(RockN, 7.3)).xyz, 0.45));
+    c = RT_TONE(c, 0.3, float3(1.25, 1.22, 1.15));
+    n = normalize(n * float3(1.6, 1.6, 1.0));
+    col += aRock * c; nrm += aRock * n; rough += aRock * arm.g; ao += aRock * arm.r;
+}
+if (aGrove > 0.004)
+{
+    float3 arm = RT_TEX(GroveA, 2.0).rgb;
+    // Darker, browner soil under the trees.
+    col += aGrove * RT_TONE(RT_TEX(GroveD, 2.0).rgb, 0.15, float3(0.66, 0.6, 0.5)); nrm += aGrove * UnpackNormalMap(RT_TEX(GroveN, 2.0)).xyz;
+    rough += aGrove * arm.g; ao += aGrove * arm.r;
+}
+if (aReef > 0.004)
+{
+    float3 arm = RT_TEX(ReefA, 2.17).rgb;
+    col += aReef * RT_TEX(ReefD, 2.17).rgb; nrm += aReef * UnpackNormalMap(RT_TEX(ReefN, 2.17)).xyz;
+    rough += aReef * arm.g; ao += aReef * arm.r;
+}
+
+// Lighter and darker over tens of metres, as real ground is.
+col *= lerp(0.86, 1.1, broad);
+
+// Wet where the sea reaches: darker and glossier up to the top of the wash, and everything below the waterline.
+float wet = 1.0 - smoothstep(-0.05, 0.55, zm + (mid - 0.5) * 0.2);
+col *= lerp(1.0, 0.58, wet);
+rough = lerp(rough, 0.28, wet * 0.85);
+
+Normal = normalize(nrm);
+Rough = rough;
+AO = ao;
+#undef RT_TEX
+#undef RT_TONE
+return col;
+"""
+
+
+def import_ground_textures():
+    """The ground photos, imported when missing. Colour stays sRGB; normals, the packed roughness maps and heights
+    are plain data."""
+    assets = unreal.EditorAssetLibrary
+    source = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()), "SourceAssets", "Textures")
+    tasks, wanted = [], []
+    for name in GROUND_TEXTURES:
+        for kind in TEXTURE_MAPS:
+            asset = f"T_{name}_{kind}"
+            wanted.append((asset, kind))
+            if assets.does_asset_exist(f"{TEXTURES_PATH}/{asset}"):
+                continue
+            task = unreal.AssetImportTask()
+            task.filename = os.path.join(source, name, f"{name}_{kind}.jpg")
+            task.destination_path = TEXTURES_PATH
+            task.destination_name = asset
+            task.automated = True
+            task.replace_existing = True
+            task.save = False
+            tasks.append(task)
+    if not tasks:
+        return
+    unreal.log(f"Riptide: importing {len(tasks)} ground textures")
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
+    for asset, kind in wanted:
+        path = f"{TEXTURES_PATH}/{asset}"
+        tex = unreal.load_asset(path)
+        if not tex:
+            unreal.log_error(f"Riptide: ground texture {asset} failed to import")
+            continue
+        if kind == "nor_dx":
+            tex.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_NORMALMAP)
+            tex.set_editor_property("srgb", False)
+        elif kind != "diff":
+            tex.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_MASKS)
+            tex.set_editor_property("srgb", False)
+        assets.save_asset(path, only_if_is_dirty=False)
+
+
+def _ground_material():
+    """M_IslandGround: sand, shell, coral rock, dark rock, grove floor and reef, laid by an island's surface map
+    (the Surface texture and SurfaceHalf, set per island in its material instance), wet near the waterline."""
+    path = f"{MATERIALS_PATH}/M_IslandGround"
+    assets = unreal.EditorAssetLibrary
+    if assets.does_asset_exist(path):
+        if assets.get_metadata_tag(unreal.load_asset(path), "RiptideVersion") == SURFACE_VERSION:
+            return unreal.load_asset(path)
+        assets.delete_asset(path)
+    import_ground_textures()
+    mel = unreal.MaterialEditingLibrary
+    mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset("M_IslandGround", MATERIALS_PATH, unreal.Material,
+                                                                  unreal.MaterialFactoryNew())
+    node = mel.create_material_expression(mat, unreal.MaterialExpressionCustom, -300, 0)
+    sources = []
+
+    uv = mel.create_material_expression(mat, unreal.MaterialExpressionTextureCoordinate, -900, -300)
+    world = mel.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, -900, -200)
+    camera = mel.create_material_expression(mat, unreal.MaterialExpressionCameraPositionWS, -1100, -100)
+    dist = mel.create_material_expression(mat, unreal.MaterialExpressionDistance, -900, -100)
+    mel.connect_material_expressions(world, "", dist, "A")
+    mel.connect_material_expressions(camera, "", dist, "B")
+    half = mel.create_material_expression(mat, unreal.MaterialExpressionScalarParameter, -900, 0)
+    half.set_editor_property("parameter_name", "SurfaceHalf")
+    half.set_editor_property("default_value", 256.0)
+    tint = mel.create_material_expression(mat, unreal.MaterialExpressionVectorParameter, -900, 100)
+    tint.set_editor_property("parameter_name", "SandTint")
+    tint.set_editor_property("default_value", unreal.LinearColor(1.0, 1.0, 1.0, 1.0))
+    surface = mel.create_material_expression(mat, unreal.MaterialExpressionTextureObjectParameter, -900, 250)
+    surface.set_editor_property("parameter_name", "Surface")
+    surface.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+    up = mel.create_material_expression(mat, unreal.MaterialExpressionVertexNormalWS, -900, 400)
+    sources += [("Up", up), ("UV", uv), ("WorldPos", world), ("Dist", dist), ("SurfaceHalf", half), ("SandTint", tint), ("Surface", surface)]
+    for i, (name, texture, kind) in enumerate(GROUND_INPUTS):
+        obj = mel.create_material_expression(mat, unreal.MaterialExpressionTextureObject, -1500, i * 120)
+        tex = unreal.load_asset(f"{TEXTURES_PATH}/T_{texture}_{kind}")
+        obj.set_editor_property("texture", tex)
+        obj.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if kind == "diff"
+                                else unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL if kind == "nor_dx"
+                                else unreal.MaterialSamplerType.SAMPLERTYPE_MASKS)
+        sources.append((name, obj))
+
+    pins = []
+    for name, _ in sources:
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    outs = []
+    for name, kind in (("Normal", unreal.CustomMaterialOutputType.CMOT_FLOAT3), ("Rough", unreal.CustomMaterialOutputType.CMOT_FLOAT1),
+                       ("AO", unreal.CustomMaterialOutputType.CMOT_FLOAT1)):
+        out = unreal.CustomOutput()
+        out.set_editor_property("output_name", name)
+        out.set_editor_property("output_type", kind)
+        outs.append(out)
+    node.set_editor_property("inputs", pins)
+    node.set_editor_property("additional_outputs", outs)
+    node.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    node.set_editor_property("code", GROUND_CODE)
+    for name, src in sources:
+        mel.connect_material_expressions(src, "", node, name)
+    mel.connect_material_property(node, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    mel.connect_material_property(node, "Normal", unreal.MaterialProperty.MP_NORMAL)
+    mel.connect_material_property(node, "Rough", unreal.MaterialProperty.MP_ROUGHNESS)
+    mel.connect_material_property(node, "AO", unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
+    mel.recompile_material(mat)
+    assets.set_metadata_tag(mat, "RiptideVersion", SURFACE_VERSION)
+    assets.save_asset(path, only_if_is_dirty=False)
+    return mat
+
+
+def _island_ground(name, island, out_dir):
+    """An island's own ground material: M_IslandGround with the island's surface map."""
+    import riptide_island_shape
+    assets = unreal.EditorAssetLibrary
+    parent = _ground_material()
+    png = os.path.join(out_dir, f"T_{name}_Surface.png")
+    riptide_island_shape.write_surface_map(island, png)
+    task = unreal.AssetImportTask()
+    task.filename = png
+    task.destination_path = f"{ISLANDS_PATH}/{name}"
+    task.destination_name = f"T_{name}_Surface"
+    task.automated = True
+    task.replace_existing = True
+    task.save = False
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    tex_path = f"{ISLANDS_PATH}/{name}/T_{name}_Surface"
+    tex = unreal.load_asset(tex_path)
+    # Plain numbers, kept exactly as written: no colour curve, no lossy compression.
+    tex.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP)
+    tex.set_editor_property("srgb", False)
+    assets.save_asset(tex_path, only_if_is_dirty=False)
+
+    mi_path = f"{ISLANDS_PATH}/{name}/MI_{name}_Ground"
+    if assets.does_asset_exist(mi_path):
+        assets.delete_asset(mi_path)
+    mi = unreal.AssetToolsHelpers.get_asset_tools().create_asset(f"MI_{name}_Ground", f"{ISLANDS_PATH}/{name}",
+                                                                 unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+    mel = unreal.MaterialEditingLibrary
+    mel.set_material_instance_parent(mi, parent)
+    mel.set_material_instance_texture_parameter_value(mi, "Surface", tex)
+    mel.set_material_instance_scalar_parameter_value(mi, "SurfaceHalf", float(riptide_island_shape.SURFACE_MAP_HALF))
+    mel.update_material_instance(mi)
+    assets.save_asset(mi_path, only_if_is_dirty=False)
+    return mi
+
+
 def _load_island(name):
     import importlib
     import riptide_island_shape
@@ -75,7 +353,7 @@ def island_chunk_paths(name):
     assets = unreal.EditorAssetLibrary
     if not assets.does_directory_exist(folder):
         return []
-    return sorted(p.split(".")[0] for p in assets.list_assets(folder, recursive=False))
+    return sorted(p.split(".")[0] for p in assets.list_assets(folder, recursive=False) if "/SM_" in p)
 
 
 def make_island_assets(name):
@@ -88,7 +366,10 @@ def make_island_assets(name):
     folder = f"{ISLANDS_PATH}/{name}"
     version = ISLAND_VERSIONS[name]
     existing = island_chunk_paths(name)
-    if existing and assets.get_metadata_tag(unreal.load_asset(existing[0]), "RiptideVersion") == version:
+    ground_path = f"{MATERIALS_PATH}/M_IslandGround"
+    surfaces_current = (assets.does_asset_exist(ground_path)
+                        and assets.get_metadata_tag(unreal.load_asset(ground_path), "RiptideVersion") == SURFACE_VERSION)
+    if existing and surfaces_current and assets.get_metadata_tag(unreal.load_asset(existing[0]), "RiptideVersion") == version:
         return False
     unreal.log(f"Riptide: building {name}'s ground")
     if assets.does_directory_exist(folder):
@@ -109,7 +390,7 @@ def make_island_assets(name):
         tasks.append(task)
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
 
-    grey = _grey_material()
+    ground = _island_ground(name, island, out_dir)
     mesh_tools = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
     made = 0
     for mesh_name, _, _ in written:
@@ -120,7 +401,7 @@ def make_island_assets(name):
             continue
         materials = mesh.get_editor_property("static_materials")
         for i, slot in enumerate(materials):
-            slot.set_editor_property("material_interface", grey)
+            slot.set_editor_property("material_interface", ground)
             materials[i] = slot
         mesh.set_editor_property("static_materials", materials)
         # Plain meshes for now: the ground is only a few thousand triangles a square.
@@ -136,7 +417,7 @@ def make_island_assets(name):
         if made % 24 == 0:
             unreal.SystemLibrary.collect_garbage()
     # The importer makes a placeholder material per mesh; ours replaces them.
-    wanted = {m for m, _, _ in written}
+    wanted = {m for m, _, _ in written} | {f"T_{name}_Surface", f"MI_{name}_Ground"}
     for leftover in assets.list_assets(folder, recursive=True):
         if leftover.split(".")[0].split("/")[-1] not in wanted:
             assets.delete_asset(leftover.split(".")[0])

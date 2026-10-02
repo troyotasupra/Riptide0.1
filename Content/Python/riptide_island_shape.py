@@ -344,13 +344,33 @@ class StartCay(Island):
         length = math.hypot(*self.spit_run)
         self.spit_run = (self.spit_run[0] / length, self.spit_run[1] / length)
 
+    def _profile(self, d, r):
+        """The shore's plain cross-section: height at d metres from the coast, before hills, hollows and reef."""
+        if d >= 0.0:
+            return lerp(self.SAND_SHORE(d), self.ROCK_SHORE(d), r)
+        return lerp(self.SAND_SEABED(-d), self.ROCK_SEABED(-d), r)
+
+    def surface(self, x, y, h, slope):
+        """How much of each surface the ground has at a point, each 0..1: (dark rock, pale coral rock, grove
+        floor, reef). Whatever is left over is sand."""
+        d = self.coast_distance(x, y)
+        r = smoothstep(0.35, 0.7, self.rock(x, y))
+        # Dark weathered rock: anything steep, and the rock shore's cliff from just under the water to its lip.
+        steep = smoothstep(24.0, 36.0, slope) if h > -3.0 else 0.0
+        cliff = r * smoothstep(-16.0, -6.0, d) * (1.0 - smoothstep(3.0, 7.0, d))
+        rock = max(steep, cliff)
+        # Pale coral rock: the bench behind the cliff, and the tops of the bluff and the point.
+        bench = r * smoothstep(2.0, 5.0, d) * (1.0 - smoothstep(12.0, 20.0, d))
+        tops = max(smoothstep(0.25, 0.5, self._knoll(x, y)), smoothstep(0.35, 0.6, self._mound(x, y, self.point, self.POINT_RADIUS)))
+        coral = max(bench, tops if d > 0.0 else 0.0) * (1.0 - rock)
+        grove = smoothstep(19.0, 27.0, d) * smoothstep(1.7, 2.1, h) * (1.0 - rock) * (1.0 - coral)
+        reef = smoothstep(0.3, 0.9, h - self._profile(d, self.rock(x, y))) if d < -40.0 else 0.0
+        return rock, coral, grove, reef
+
     def height(self, x, y):
         d = self.coast_distance(x, y)
         r = self.rock(x, y)
-        if d >= 0.0:
-            h = lerp(self.SAND_SHORE(d), self.ROCK_SHORE(d), r)
-        else:
-            h = lerp(self.SAND_SEABED(-d), self.ROCK_SEABED(-d), r)
+        h = self._profile(d, r)
 
         inland = smoothstep(0.0, 7.0, d)
         if inland > 0.0:
@@ -462,3 +482,47 @@ def walk_check(island, start, step=1.0, limit=None):
             frontier.append((jx, jy))
     land = {(ix, iy) for ix in range(n) for iy in range(n) if h(ix, iy) > 0.0}
     return reached, land
+
+
+# --- Surfaces ----------------------------------------------------------------------------------------------------
+
+SURFACE_MAP_HALF = 256      # the surface map covers this far each way from the island's centre, metres
+SURFACE_MAP_STEP = 1.0      # metres per pixel
+
+
+def write_png(path, width, height, rows, alpha=False):
+    """A PNG from rows of pixel tuples: (r, g, b), or (r, g, b, a) with alpha=True. Row 0 is the top of the picture."""
+    import struct
+    import zlib
+    raw = b"".join(b"\x00" + bytes(c for px in row for c in px) for row in rows)
+
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6 if alpha else 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
+def write_surface_map(island, path):
+    """The island's surface map: one pixel a metre, red = dark rock, green = pale coral rock, blue = grove floor,
+    alpha = reef (see Island.surface). The ground material reads it by world position. Row 0 is the south edge,
+    column 0 the west edge."""
+    half, step = SURFACE_MAP_HALF, SURFACE_MAP_STEP
+    n = int(2 * half / step)
+    heights = [[island.height(-half + ix * step, -half + iy * step) for ix in range(n + 2)] for iy in range(n + 2)]
+    planes = [[0.0] * (n * n) for _ in range(4)]
+    for iy in range(n):
+        for ix in range(n):
+            h = heights[iy][ix]
+            dx = (heights[iy][ix + 1] - heights[iy][max(0, ix - 1)]) / (step * (2 if ix else 1))
+            dy = (heights[iy + 1][ix] - heights[max(0, iy - 1)][ix]) / (step * (2 if iy else 1))
+            slope = math.degrees(math.atan(math.hypot(dx, dy)))
+            weights = island.surface(-half + ix * step, -half + iy * step, h, slope)
+            for c in range(4):
+                planes[c][iy * n + ix] = weights[c]
+    # Softened by a metre, so no surface ends in a hard line.
+    planes = [_blur(p, n, 1) for p in planes]
+    rows = [[tuple(int(max(0.0, min(1.0, planes[c][iy * n + ix])) * 255.0 + 0.5) for c in range(4)) for ix in range(n)]
+            for iy in range(n)]
+    write_png(path, n, n, rows, alpha=True)

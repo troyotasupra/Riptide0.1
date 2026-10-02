@@ -31,6 +31,22 @@ The files are unedited. What the game uses from them (imported by `Content/Pytho
 
 The crew's uniforms, boots, gloves, balaclava, shemagh, headgear, glasses, vests, packs and rifle are our own, generated in code (`Content/Python/riptide_crew_mesh.py`).
 
+## Ground textures (`SourceAssets/Textures/`)
+
+All from [Poly Haven](https://polyhaven.com), CC0, photo-scanned. Each folder holds four JPGs: colour (`_diff`), normal (`_nor_dx`), ambient occlusion / roughness / metal packed (`_arm`) and height (`_disp`), at 2K (`aerial_beach_01` at 4K).
+
+| Folder | Source | Used for |
+|---|---|---|
+| `dense_sand` | [polyhaven.com/a/dense_sand](https://polyhaven.com/a/dense_sand) | dry beach sand up close |
+| `aerial_beach_01` | [polyhaven.com/a/aerial_beach_01](https://polyhaven.com/a/aerial_beach_01) | beach sand from a distance |
+| `shell_floor_01` | [polyhaven.com/a/shell_floor_01](https://polyhaven.com/a/shell_floor_01) | broken shell along the high-tide line |
+| `coral_mud_01` | [polyhaven.com/a/coral_mud_01](https://polyhaven.com/a/coral_mud_01) | pale coral rock: rock benches and bluff tops |
+| `seaside_rock` | [polyhaven.com/a/seaside_rock](https://polyhaven.com/a/seaside_rock) | dark weathered rock: sea cliffs and steep ground |
+| `forrest_sand_01` | [polyhaven.com/a/forrest_sand_01](https://polyhaven.com/a/forrest_sand_01) | grove floor: sandy soil with plant litter |
+| `low_tide_rocks` | [polyhaven.com/a/low_tide_rocks](https://polyhaven.com/a/low_tide_rocks) | reef and rock under water |
+
+The files are unedited (renamed without the resolution suffix). They're imported and blended by `Content/Python/riptide_islands.py`.
+
 ## Models
 
 The patrol skiff and outboard are our own, generated in code (`Content/Python/riptide_boat_mesh.py`).
