@@ -46,7 +46,8 @@ SCRIPT = [
     (192.5, 0.0, 0.0, "sprint run"),     # without holding on,
     (206.0, 0.0, 1.0, "unbraced turn"),  # and a hard turn at speed throws them
 ]
-END_TIME = 214.0
+END_TIME = 222.0
+SEA_EDGE_T = 214.0                         # the boat is put past the edge of the sea: it must come back onto the water
 UNBRACED_SPOT = (-250.0, 0.0)
 IDLE_LEVER = 0.16                            # in gear, throttle closed: inside the binnacle's idle band
 # A real 26 ft twin-outboard boat: idles in gear at 3-4 kn, can't go much over 6 kn transom-first, takes 3-4 s to
@@ -462,6 +463,24 @@ def recentre(boat, t):
     log("t=%5.1f brought the boat back to the middle of the sea from %.0f, %.0f m out" % (t, loc.x / 100.0, loc.y / 100.0))
 
 
+def sea_edge_check(world, boat, t):
+    """Puts the boat past the edge of the sea, where there's no water: it must be put back on the water just inside
+    the edge, floating, rather than falling through the world."""
+    se = state.setdefault("sea_edge", {})
+    if t < SEA_EDGE_T or "done" in se:
+        return
+    if "placed" not in se:
+        boat.set_actor_location(unreal.Vector(1300000.0, 0.0, 0.0), False, True)
+        se["placed"] = t
+        return
+    if t >= se["placed"] + 6.0:
+        loc = boat.get_actor_location()
+        se["done"] = True
+        se["back"] = loc.x < 1200000.0 and abs(loc.z - boat.get_sea_surface_z(loc)) < 150.0
+        log("t=%5.1f put past the edge of the sea: now at %s, sea there %.0f, back on the water %s"
+            % (t, loc, boat.get_sea_surface_z(loc), se["back"]))
+
+
 def fuel_and_engine_check(world, boat, walker, t):
     """Takes the fuel drum from the stern locker and pours it in at the filler; then kills the port motor."""
     fe = state.setdefault("fuel", {})
@@ -669,6 +688,8 @@ def verdict():
                        min(s["prop_spin"] for s in ahead) > 5.0 and max(s["prop_spin"] for s in astern) < -1.0,
                        "%.1f rev/s ahead, %.1f astern (as drawn)" % (min(s["prop_spin"] for s in ahead), max(s["prop_spin"] for s in astern))))
     hs = state.get("helm_fast", {})
+    se = state.get("sea_edge", {})
+    checks.append(("past the edge of the sea, the boat is put back on the water instead of falling", bool(se.get("back")), ""))
     checks.append(("steps off the helm at full speed onto the deck (not into it, not left behind)",
                    bool(hs.get("stood")) and hs.get("kn", 0) > 20.0, "at %.1f kn" % hs.get("kn", 0)))
     mc = state.get("mic", {})
@@ -900,6 +921,7 @@ def _tick(_dt):
             storage_check(world, boat, state["walker"], t)
             swim_check(world, boat, state["walker"], t)
             fuel_and_engine_check(world, boat, state["walker"], t)
+            sea_edge_check(world, boat, t)
 
         # How often the prop and in-water readings flip, every frame: real ventilation comes and goes over a swell,
         # but a reading that flips back and forth every few frames is a glitch (the HUD and engine sound stutter).

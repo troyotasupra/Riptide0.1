@@ -88,12 +88,13 @@ def _spawn(actor_class, location=(0.0, 0.0, 0.0), yaw=0.0, pitch=0.0):
     )
 
 
-# Open water the test map covers, in cm (2 km square). The boat does ~15 kn, so this is a few minutes of driving.
-SEA_SIZE = 200000.0
+# Open water the maps cover, in cm (24 km square): about 13 minutes flat out from the start to any edge. Past the
+# edge there's no sea at all, and the boat drops through the world (a 2 km sea was reached in a minute at 30 kn).
+SEA_SIZE = 2400000.0
 
 # The ocean treats the inside of its shoreline spline as dry land for an island. There's no island yet,
 # so the shoreline is shrunk to a 4 m loop parked in a far corner, leaving the spawn point in open water.
-SHORE_CENTRE = (-90000.0, -90000.0)
+SHORE_CENTRE = (-SEA_SIZE * 0.45, -SEA_SIZE * 0.45)
 SHORE_HALF_SIZE = 200.0
 
 # A moderate swell, about 1-1.5 m trough to crest: the engine's default ocean waves (up to 5 m) are storm
@@ -1325,8 +1326,16 @@ def update_ocean_test_map():
     levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
     levels.load_level(MAP_PATH)
     changed = False
-    for actor in unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors():
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
+    zone = next((a for a in actors if isinstance(a, unreal.WaterZone)), None)
+    for actor in actors:
         if isinstance(actor, unreal.WaterBodyOcean):
+            # A map built with a smaller sea grows to the current one.
+            extents = actor.get_water_body_component().get_editor_property("collision_extents")
+            if zone and extents.x < SEA_SIZE / 2.0 - 1.0:
+                _open_up_sea(zone, actor)
+                unreal.log(f"Riptide: the sea now reaches {SEA_SIZE / 200000.0:.0f} km each way from the start")
+                changed = True
             changed |= _cover_waves(actor)
         elif isinstance(actor, unreal.ExponentialHeightFog):
             changed |= _fog_for_light_beams(actor)
@@ -1377,7 +1386,7 @@ def build_ocean_test_map():
 
 
 # Bump when the main menu map's recipe below changes, so every machine rebuilds it on its next launch.
-MENU_MAP_VERSION = "3"
+MENU_MAP_VERSION = "4"
 
 # The menu's night: a low moon ahead of the camera (which looks across the boat from its starboard side), laying a
 # path of light on the sea behind the boat, so the boat and its crew stand dark against it.

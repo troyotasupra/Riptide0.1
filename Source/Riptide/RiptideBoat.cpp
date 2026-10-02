@@ -7,6 +7,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/Engine.h"
+#include "EngineUtils.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/StaticMesh.h"
 #include "EnhancedInputComponent.h"
@@ -31,6 +33,7 @@
 #include "RiptideWakeFoamComponent.h"
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
+#include "WaterBodyOceanComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "ProceduralMeshComponent.h"
 #include "Sound/SoundAttenuation.h"
@@ -1794,6 +1797,7 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 	// The helm, the engines and the fuel are the server's to decide (and replicate).
 	if (HasAuthority())
 	{
+		RescueIfOffTheSea();
 		UpdateControls(DeltaSeconds);
 		UpdateEngine(DeltaSeconds);
 	}
@@ -2476,4 +2480,48 @@ void ARiptideBoat::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 	LadderUser = nullptr;
 	Super::EndPlay(EndPlayReason);
+}
+
+void ARiptideBoat::RescueIfOffTheSea()
+{
+	// Twenty metres under sea level, the boat has left the sea: driven off its edge, where there's no water to float
+	// on, it falls through the world. Put it back on the water just inside the edge, upright and stopped, with its
+	// crew aboard where they were standing.
+	const FVector Here = GetActorLocation();
+	if (Here.Z > -2000.f)
+	{
+		return;
+	}
+	FVector Target = Here;
+	if (!CachedOcean.IsValid())
+	{
+		CachedOcean = Cast<AWaterBodyOcean>(UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass()));
+	}
+	if (const AWaterBodyOcean* Ocean = CachedOcean.Get())
+	{
+		if (const UWaterBodyComponent* Body = Ocean->GetWaterBodyComponent())
+		{
+			const FVector Centre = Ocean->GetActorLocation();
+			const FVector Reach = Body->GetCollisionExtents() * 0.95f;
+			Target.X = FMath::Clamp(Target.X, Centre.X - Reach.X, Centre.X + Reach.X);
+			Target.Y = FMath::Clamp(Target.Y, Centre.Y - Reach.Y, Centre.Y + Reach.Y);
+		}
+	}
+	Target.Z = GetSeaSurfaceZ(FVector(Target.X, Target.Y, 0.f)) + 15.f;
+	const FRotator Upright(0.f, GetActorRotation().Yaw, 0.f);
+	const FTransform Old = GetActorTransform();
+	const FTransform New(Upright, Target);
+	for (ARiptideCharacter* Crew : TActorRange<ARiptideCharacter>(GetWorld()))
+	{
+		if (Crew->GetHomeBoat() == this && !Crew->IsInSea())
+		{
+			Crew->SetActorLocation(New.TransformPosition(Old.InverseTransformPosition(Crew->GetActorLocation())) + FVector(0.f, 0.f, 5.f),
+				false, nullptr, ETeleportType::TeleportPhysics);
+			Crew->GetCharacterMovement()->Velocity = FVector::ZeroVector;
+		}
+	}
+	SetActorLocationAndRotation(Target, Upright, false, nullptr, ETeleportType::ResetPhysics);
+	HullBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
+	HullBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	UE_LOG(LogRiptideBoat, Warning, TEXT("%s went off the edge of the sea at %s: back on the water at %s"), *GetName(), *Here.ToString(), *Target.ToString());
 }

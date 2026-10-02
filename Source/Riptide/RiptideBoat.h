@@ -467,6 +467,9 @@ protected:
 
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+	/** Puts the boat back on the water (with its crew) if it has fallen off the edge of the sea. Server only. */
+	void RescueIfOffTheSea();
+
 	void UpdatePropsAndWheel(float DeltaSeconds);
 	float PropSpinRate[2] = { 0.f, 0.f };
 	float PropAngle[2] = { 0.f, 0.f };
