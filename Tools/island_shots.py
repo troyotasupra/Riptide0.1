@@ -67,6 +67,9 @@ def _shots():
         ("11_rock_shore_from_the_sea", seaward + (1.6,), seaward_shore + (1.0,)),
         ("12_on_the_rock_shore", standing(*island.place(40.0, -40.0)), island.place(95.0, -20.0) + (2.0,)),
         ("13_spit_looking_back", standing(*island.place(-108.0, 0.0)), (sx, sy, 4.0)),
+        ("16_cliff_edge_from_above", island.place(46.0, -40.0) + (9.0,), island.place(58.0, -44.0) + (0.0,)),
+        ("17_cliff_edge_looking_along", island.place(20.0, -45.5) + (4.6,), island.place(60.0, -41.0) + (0.5,)),
+        ("18_cliff_under_the_bluff", island.place(118.0, -30.0) + (2.2,), island.place(96.0, -8.0) + (3.0,)),
     ]
 
 

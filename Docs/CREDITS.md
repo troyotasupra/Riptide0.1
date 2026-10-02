@@ -44,6 +44,7 @@ All from [Poly Haven](https://polyhaven.com), CC0, photo-scanned. Each folder ho
 | `seaside_rock` | [polyhaven.com/a/seaside_rock](https://polyhaven.com/a/seaside_rock) | dark weathered rock: sea cliffs and steep ground |
 | `forrest_sand_01` | [polyhaven.com/a/forrest_sand_01](https://polyhaven.com/a/forrest_sand_01) | grove floor: sandy soil with plant litter |
 | `low_tide_rocks` | [polyhaven.com/a/low_tide_rocks](https://polyhaven.com/a/low_tide_rocks) | reef and rock under water |
+| `rock_face_03` | [polyhaven.com/a/rock_face_03](https://polyhaven.com/a/rock_face_03) | the sea cliffs' rock (three JPGs: colour, normal, roughness; carried over from the Godot build) |
 | `palm_tree_bark` | [polyhaven.com/a/palm_tree_bark](https://polyhaven.com/a/palm_tree_bark) | the palms' trunks (three JPGs: colour, normal, roughness; carried over from the Godot build) |
 
 The files are unedited (renamed without the resolution suffix). They're imported and blended by `Content/Python/riptide_islands.py`.

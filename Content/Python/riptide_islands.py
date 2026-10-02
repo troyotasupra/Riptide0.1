@@ -13,9 +13,9 @@ ISLANDS_PATH = "/Game/Riptide/Islands"
 MATERIALS_PATH = "/Game/Riptide/Materials"
 ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
-ISLAND_VERSIONS = {"StartCay": "6"}
+ISLAND_VERSIONS = {"StartCay": "8"}
 GREY_VERSION = "3"
-ISLAND_MAP_VERSION = "7"
+ISLAND_MAP_VERSION = "9"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
 # tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in
@@ -79,7 +79,7 @@ return float3(shade, shade, shade);""")
 # The ground's photo surfaces (SourceAssets/Textures, credited in Docs/CREDITS.md) and the material that lays them
 # over an island by its surface map. Bump SURFACE_VERSION when the material's recipe changes.
 TEXTURES_PATH = f"{ISLANDS_PATH}/Textures"
-SURFACE_VERSION = "4"
+SURFACE_VERSION = "6"
 GROUND_TEXTURES = ["dense_sand", "aerial_beach_01", "shell_floor_01", "coral_mud_01", "seaside_rock", "forrest_sand_01",
                    "low_tide_rocks"]
 TEXTURE_MAPS = ["diff", "nor_dx", "arm", "disp"]
@@ -355,6 +355,190 @@ def _island_ground(name, island, out_dir):
     return mi
 
 
+# The cliff's rock, laid on by position from three directions (it has faces every way, undercuts included), so it
+# never stretches: dark weathered rock on its faces, pale limestone where it lies flat, darker and green-tinged
+# with weed where the sea reaches.
+CLIFF_CODE = """
+float3 n = normalize(VNormal);
+float3 w = pow(abs(n), 4.0);
+w /= (w.x + w.y + w.z);
+float3 p = WorldPos / 100.0;
+#define RT_PLANE(T, uv) T.Sample(Material.Wrap_WorldGroupSettings, (uv))
+float2 ux = p.yz / 3.4, uy = p.xz / 3.4, uz = p.xy / 3.4;
+float3 rock = RT_PLANE(RockD, ux).rgb * w.x + RT_PLANE(RockD, uy).rgb * w.y + RT_PLANE(RockD, uz).rgb * w.z;
+float3 big = RT_PLANE(RockD, ux / 3.7).rgb * w.x + RT_PLANE(RockD, uy / 3.7).rgb * w.y + RT_PLANE(RockD, uz / 3.7).rgb * w.z;
+rock = lerp(rock, big, 0.35);
+float lum = dot(rock, float3(0.3, 0.59, 0.11));
+// Sun-bleached grey-tan limestone: the photo is of redder rock.
+rock = lerp(rock, lum.xxx, 0.55) * float3(1.08, 1.04, 0.96);
+float3 arm = RT_PLANE(RockA, ux).rgb * w.x + RT_PLANE(RockA, uy).rgb * w.y + RT_PLANE(RockA, uz).rgb * w.z;
+arm = float3(1.0, arm.r, 0.0);
+
+// Bumps from the same three directions, straight into world space.
+float3 tx = UnpackNormalMap(RT_PLANE(RockN, ux)).xyz;
+float3 ty = UnpackNormalMap(RT_PLANE(RockN, uy)).xyz;
+float3 tz = UnpackNormalMap(RT_PLANE(RockN, uz)).xyz;
+// The photo's normals are OpenGL-style: green is flipped for Unreal.
+tx.y = -tx.y; ty.y = -ty.y; tz.y = -tz.y;
+tx = float3(tx.xy * 1.3 + n.yz, abs(tx.z) * n.x);
+ty = float3(ty.xy * 1.3 + n.xz, abs(ty.z) * n.y);
+tz = float3(tz.xy * 1.3 + n.xy, abs(tz.z) * n.z);
+float3 bumped = normalize(tx.zxy * w.x + ty.xzy * w.y + tz.xyz * w.z);
+
+// Flat tops are the same pale limestone as the ground behind the cliff.
+float flat = smoothstep(0.62, 0.9, n.z);
+float3 top = RT_PLANE(CoralD, p.xy / 2.0).rgb;
+top = lerp(top, dot(top, float3(0.3, 0.59, 0.11)).xxx, 0.75) * float3(0.6, 0.6, 0.57);
+float3 col = lerp(rock, top, flat * 0.85);
+
+// Beds a little lighter and darker than their neighbours, and long stains running down the face.
+float bed = frac(sin(floor(p.z / 0.72) * 12.9898) * 43758.5453);
+col *= lerp(0.88, 1.08, bed);
+col *= lerp(0.82, 1.0, RT_PLANE(RockA, float2(dot(p.xy, float2(0.31, 0.27)), p.z / 9.0)).r);
+
+// Dark in the joints and under the ledges, where light and weather don't reach.
+float recess = saturate(UV.x);
+col *= lerp(1.0, 0.42, recess * (1.0 - flat));
+
+// Where the sea reaches: a dark wet band at the waterline, weed-green just above it.
+float wet = 1.0 - smoothstep(0.05, 0.55, p.z);
+float weed = (1.0 - smoothstep(0.3, 0.95, p.z)) * (1.0 - flat);
+col = lerp(col, col * float3(0.5, 0.62, 0.36), weed * 0.7);
+col *= lerp(1.0, 0.6, wet);
+Rough = lerp(arm.g, 0.3, wet * 0.8);
+AO = arm.r * lerp(1.0, 0.55, recess);
+#undef RT_PLANE
+Normal = bumped;
+return col;
+"""
+
+
+def _cliff_material():
+    """M_IslandCliff: the rock of the sea cliffs (riptide_island_cliff.py), with its normal given in world space."""
+    path = f"{MATERIALS_PATH}/M_IslandCliff"
+    assets = unreal.EditorAssetLibrary
+    if assets.does_asset_exist(path):
+        if assets.get_metadata_tag(unreal.load_asset(path), "RiptideVersion") == SURFACE_VERSION:
+            return unreal.load_asset(path)
+        assets.delete_asset(path)
+    import_ground_textures()
+    mel = unreal.MaterialEditingLibrary
+    mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset("M_IslandCliff", MATERIALS_PATH, unreal.Material,
+                                                                  unreal.MaterialFactoryNew())
+    mat.set_editor_property("tangent_space_normal", False)
+    node = mel.create_material_expression(mat, unreal.MaterialExpressionCustom, -300, 0)
+    world = mel.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, -900, -200)
+    normal = mel.create_material_expression(mat, unreal.MaterialExpressionVertexNormalWS, -900, -100)
+    uv = mel.create_material_expression(mat, unreal.MaterialExpressionTextureCoordinate, -900, -300)
+    sources = [("WorldPos", world), ("VNormal", normal), ("UV", uv)]
+    # The cliff-face photo (rock_face_03: colour, OpenGL-style normal, roughness), and the ground's limestone.
+    source = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()), "SourceAssets", "Textures", "rock_face_03")
+    face = {}
+    for kind in ("diff", "nor_gl", "rough"):
+        asset = f"T_rock_face_03_{kind}"
+        if not assets.does_asset_exist(f"{TEXTURES_PATH}/{asset}"):
+            task = unreal.AssetImportTask()
+            task.filename = os.path.join(source, f"rock_face_03_{kind}.jpg")
+            task.destination_path = TEXTURES_PATH
+            task.destination_name = asset
+            task.automated = True
+            task.replace_existing = True
+            task.save = False
+            unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+        tex = unreal.load_asset(f"{TEXTURES_PATH}/{asset}")
+        if kind == "nor_gl":
+            tex.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_NORMALMAP)
+            tex.set_editor_property("srgb", False)
+        elif kind == "rough":
+            tex.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_MASKS)
+            tex.set_editor_property("srgb", False)
+        assets.save_asset(f"{TEXTURES_PATH}/{asset}", only_if_is_dirty=False)
+        face[kind] = tex
+    for i, (name, tex, kind) in enumerate((("RockD", face["diff"], "diff"), ("RockN", face["nor_gl"], "normal"),
+                                            ("RockA", face["rough"], "data"),
+                                            ("CoralD", unreal.load_asset(f"{TEXTURES_PATH}/T_coral_mud_01_diff"), "diff"))):
+        obj = mel.create_material_expression(mat, unreal.MaterialExpressionTextureObject, -1500, i * 120)
+        obj.set_editor_property("texture", tex)
+        obj.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_COLOR if kind == "diff"
+                                else unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL if kind == "normal"
+                                else unreal.MaterialSamplerType.SAMPLERTYPE_MASKS)
+        sources.append((name, obj))
+    pins = []
+    for name, _ in sources:
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    outs = []
+    for name, kind in (("Normal", unreal.CustomMaterialOutputType.CMOT_FLOAT3), ("Rough", unreal.CustomMaterialOutputType.CMOT_FLOAT1),
+                       ("AO", unreal.CustomMaterialOutputType.CMOT_FLOAT1)):
+        out = unreal.CustomOutput()
+        out.set_editor_property("output_name", name)
+        out.set_editor_property("output_type", kind)
+        outs.append(out)
+    node.set_editor_property("inputs", pins)
+    node.set_editor_property("additional_outputs", outs)
+    node.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    node.set_editor_property("code", CLIFF_CODE)
+    for name, src in sources:
+        mel.connect_material_expressions(src, "", node, name)
+    mel.connect_material_property(node, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    mel.connect_material_property(node, "Normal", unreal.MaterialProperty.MP_NORMAL)
+    mel.connect_material_property(node, "Rough", unreal.MaterialProperty.MP_ROUGHNESS)
+    mel.connect_material_property(node, "AO", unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
+    mel.set_material_usage(mat, unreal.MaterialUsage.MATUSAGE_NANITE)
+    mel.recompile_material(mat)
+    assets.set_metadata_tag(mat, "RiptideVersion", SURFACE_VERSION)
+    assets.save_asset(path, only_if_is_dirty=False)
+    return mat
+
+
+def _island_cliffs(name, island, out_dir, version):
+    """An island's sea cliffs, generated (and checked sealed) and imported beside its ground."""
+    import importlib
+    import riptide_palm_mesh
+    import riptide_island_cliff
+    importlib.reload(riptide_palm_mesh)
+    importlib.reload(riptide_island_cliff)
+    assets = unreal.EditorAssetLibrary
+    folder = f"{ISLANDS_PATH}/{name}"
+    written = riptide_island_cliff.write_cliffs(island, out_dir)
+    tasks = []
+    for mesh_name, obj, _ in written:
+        task = unreal.AssetImportTask()
+        task.filename = obj
+        task.destination_path = folder
+        task.destination_name = mesh_name
+        task.automated = True
+        task.replace_existing = True
+        task.save = False
+        tasks.append(task)
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
+    rock = _cliff_material()
+    mesh_tools = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+    for mesh_name, _, tris in written:
+        path = f"{folder}/{mesh_name}"
+        mesh = unreal.load_asset(path)
+        if not mesh:
+            unreal.log_error(f"Riptide: cliff {path} failed to import")
+            continue
+        materials = mesh.get_editor_property("static_materials")
+        for i, slot in enumerate(materials):
+            slot.set_editor_property("material_interface", rock)
+            materials[i] = slot
+        mesh.set_editor_property("static_materials", materials)
+        nanite = mesh_tools.get_nanite_settings(mesh)
+        nanite.set_editor_property("enabled", True)
+        nanite.set_editor_property("fallback_target", unreal.NaniteFallbackTarget.PERCENT_TRIANGLES)
+        nanite.set_editor_property("fallback_percent_triangles", 1.0)
+        mesh_tools.set_nanite_settings(mesh, nanite, True)
+        body = mesh.get_editor_property("body_setup")
+        body.set_editor_property("collision_trace_flag", unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE)
+        assets.set_metadata_tag(mesh, "RiptideVersion", version)
+        assets.save_asset(path, only_if_is_dirty=False)
+        unreal.log(f"Riptide: {mesh_name}: {tris} triangles, sealed into the ground")
+    return [m for m, _, _ in written]
+
+
 def _load_island(name):
     import importlib
     import riptide_island_shape
@@ -368,7 +552,16 @@ def island_chunk_paths(name):
     assets = unreal.EditorAssetLibrary
     if not assets.does_directory_exist(folder):
         return []
-    return sorted(p.split(".")[0] for p in assets.list_assets(folder, recursive=False) if "/SM_" in p)
+    return sorted(p.split(".")[0] for p in assets.list_assets(folder, recursive=False) if "/SM_" in p and "_Cliff_" not in p)
+
+
+def island_cliff_paths(name):
+    """The asset paths of an island's sea cliffs."""
+    folder = f"{ISLANDS_PATH}/{name}"
+    assets = unreal.EditorAssetLibrary
+    if not assets.does_directory_exist(folder):
+        return []
+    return sorted(p.split(".")[0] for p in assets.list_assets(folder, recursive=False) if "_Cliff_" in p)
 
 
 def make_island_assets(name):
@@ -437,7 +630,8 @@ def make_island_assets(name):
         if made % 24 == 0:
             unreal.SystemLibrary.collect_garbage()
     # The importer makes a placeholder material per mesh; ours replaces them.
-    wanted = {m for m, _, _ in written} | {f"T_{name}_Surface", f"MI_{name}_Ground"}
+    cliffs = _island_cliffs(name, island, out_dir, version)
+    wanted = {m for m, _, _ in written} | {f"T_{name}_Surface", f"MI_{name}_Ground"} | set(cliffs)
     for leftover in assets.list_assets(folder, recursive=True):
         if leftover.split(".")[0].split("/")[-1] not in wanted:
             assets.delete_asset(leftover.split(".")[0])
@@ -455,6 +649,12 @@ def _place_island(name, origin=(0.0, 0.0, 0.0)):
         actor.set_actor_label(path.split("/")[-1])
         actor.set_folder_path(f"Islands/{name}")
         actor.tags = [unreal.Name("RiptideIsland"), unreal.Name(name)]
+    # The sea cliffs: part of the ground, standing on it and sealed into it.
+    for path in island_cliff_paths(name):
+        actor = actors.spawn_actor_from_object(unreal.load_asset(path), unreal.Vector(*origin))
+        actor.set_actor_label(path.split("/")[-1])
+        actor.set_folder_path(f"Islands/{name}")
+        actor.tags = [unreal.Name("RiptideIsland"), unreal.Name(name)]
 
 
 # What the Water plugin's own ocean factory gives a new ocean, and a plain spawn doesn't: its materials.
@@ -469,7 +669,7 @@ PROP_MESHES = {
     "palm_sweeping": ("palm", "SM_Palm_Sweeping", True), "palm_medium": ("palm", "SM_Palm_Medium", True),
     "palm_young": ("palm", "SM_Palm_Young", True),
     "tree": ("model", "island_tree_02", True), "shrub": ("model", "searsia_lucida", False), "fern": ("model", "fern_02", False),
-    "grass": ("model", "grass_bermuda_01", False), "cliff": ("model", "coastal_cliff_02", True),
+    "grass": ("model", "grass_bermuda_01", False),
     "outcrop": ("model", "coast_rocks_05", True), "boulder": ("model", "boulder_01", True),
     "rubble": ("model", "sand_rocks_small_01", True), "log": ("model", "dead_tree_trunk_02", True),
     "branch": ("model", "dry_branches_medium_01", False),

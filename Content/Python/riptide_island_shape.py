@@ -435,7 +435,7 @@ class StartCay(Island):
         import random
         rng = random.Random(7411)
         out = []
-        taken = []          # (x, y, radius) of everything that needs room
+        taken = [(self.summit[0], self.summit[1], 6.0)]     # (x, y, radius) of everything that needs room; the summit stays clear
 
         def facing(dx, dy):
             return math.degrees(math.atan2(dx, dy))
@@ -479,7 +479,8 @@ class StartCay(Island):
         on_bluff = lambda x, y: self._knoll(x, y) > 0.12 or self._mound(x, y, self.point, self.POINT_RADIUS) > 0.3
         in_hollow = lambda x, y: self._mound(x, y, self.hollow, self.HOLLOW_RADIUS) > 0.35
 
-        # --- Rock: a low broken sea cliff along the rock shore, taller round the bluff, with boulders at its foot.
+        # --- Rock. The sea cliff itself is part of the ground (riptide_island_cliff.py); here, the boulders fallen
+        # at its foot, every nine metres or so along the rock shore.
         gap = 0.0
         for i in range(self.cn):
             j = (i + 1) % self.cn
@@ -491,18 +492,11 @@ class StartCay(Island):
             length = math.hypot(tx, ty) or 1.0
             # The coast runs clockwise, so the sea is on its left.
             ox, oy = -ty / length, tx / length
-            # It stands just out from the waterline, its foot under the sand and its top level with the ground a few
-            # metres behind it (the scan is 10 m tall and 41 m long at full size).
-            px, py = x + ox * 0.6, y + oy * 0.6
-            behind = min(self.height(x - ox * 4.5, y - oy * 4.5), 5.2) + rng.uniform(-0.1, 0.25)
-            foot = self.height(px, py) - 0.5
-            scale = min(0.6, max(0.24, (behind - foot) / 9.9))
-            gap = -41.0 * scale * 0.4 + 9.0          # the next piece overlaps this one's end a little
-            add("cliff", px, py, yaw=facing(ox, oy) + rng.uniform(-6.0, 6.0), scale=scale, sink=0.5)
+            gap = 0.0
             if rng.random() < 0.7:
-                bx, by = x + ox * rng.uniform(1.5, 6.0) + rng.uniform(-4.0, 4.0), y + oy * rng.uniform(1.5, 6.0) + rng.uniform(-4.0, 4.0)
-                add(rng.choice(("outcrop", "boulder", "boulder")), bx, by, scale=rng.uniform(0.8, 2.2), sink=rng.uniform(0.15, 0.5),
-                    tilt=rng.uniform(0.0, 14.0))
+                bx, by = x + ox * rng.uniform(3.0, 7.5) + rng.uniform(-4.0, 4.0), y + oy * rng.uniform(3.0, 7.5) + rng.uniform(-4.0, 4.0)
+                size = rng.uniform(0.9, 2.3)
+                add("boulder", bx, by, scale=size, sink=0.35 * size, tilt=rng.uniform(0.0, 25.0))
         # Outcrops breaking through on the bluff and the point, and rubble where the beach meets the rock.
         for x, y, d, h in scatter(16, lambda x, y, d, h, sl: on_bluff(x, y) and d > 4.0 and 6.0 < sl < 30.0, 2.5):
             if rng.random() < 0.3:
