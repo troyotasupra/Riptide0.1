@@ -15,7 +15,7 @@ ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
 ISLAND_VERSIONS = {"StartCay": "3"}
 GREY_VERSION = "2"
-ISLAND_MAP_VERSION = "5"
+ISLAND_MAP_VERSION = "7"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
 # tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in
@@ -78,7 +78,7 @@ return float3(shade, shade, shade);""")
 # The ground's photo surfaces (SourceAssets/Textures, credited in Docs/CREDITS.md) and the material that lays them
 # over an island by its surface map. Bump SURFACE_VERSION when the material's recipe changes.
 TEXTURES_PATH = f"{ISLANDS_PATH}/Textures"
-SURFACE_VERSION = "2"
+SURFACE_VERSION = "3"
 GROUND_TEXTURES = ["dense_sand", "aerial_beach_01", "shell_floor_01", "coral_mud_01", "seaside_rock", "forrest_sand_01",
                    "low_tide_rocks"]
 TEXTURE_MAPS = ["diff", "nor_dx", "arm", "disp"]
@@ -163,7 +163,7 @@ if (aCoral > 0.004)
 {
     float3 arm = RT_TEX(CoralA, 2.0).rgb;
     // Weathered limestone: grey-white, not the photo's orange.
-    col += aCoral * RT_TONE(RT_TEX(CoralD, 2.0).rgb, 0.7, float3(0.92, 0.92, 0.88)); nrm += aCoral * UnpackNormalMap(RT_TEX(CoralN, 2.0)).xyz;
+    col += aCoral * RT_TONE(RT_TEX(CoralD, 2.0).rgb, 0.75, float3(0.6, 0.6, 0.57)); nrm += aCoral * UnpackNormalMap(RT_TEX(CoralN, 2.0)).xyz;
     rough += aCoral * arm.g; ao += aCoral * arm.r;
 }
 if (aRock > 0.004)
@@ -454,6 +454,61 @@ OCEAN_MATERIALS = ["water_material", "water_static_mesh_material", "underwater_p
                    "water_info_material"]
 
 
+# Which mesh each kind of prop in an island's design uses: a palm by name, or one of a scanned model's meshes
+# (picked by the prop's place in the list, so the same prop always gets the same mesh). Solid things block the crew.
+PROP_MESHES = {
+    "palm_tall": ("palm", "SM_Palm_Tall", True), "palm_leaning": ("palm", "SM_Palm_Leaning", True),
+    "palm_sweeping": ("palm", "SM_Palm_Sweeping", True), "palm_medium": ("palm", "SM_Palm_Medium", True),
+    "palm_young": ("palm", "SM_Palm_Young", True),
+    "tree": ("model", "island_tree_02", True), "shrub": ("model", "searsia_lucida", False), "fern": ("model", "fern_02", False),
+    "grass": ("model", "grass_bermuda_01", False), "cliff": ("model", "coastal_cliff_02", True),
+    "outcrop": ("model", "coast_rocks_05", True), "boulder": ("model", "boulder_01", True),
+    "rubble": ("model", "sand_rocks_small_01", True), "log": ("model", "dead_tree_trunk_02", True),
+    "branch": ("model", "dry_branches_medium_01", False),
+}
+
+
+def _place_props(name, island, origin=(0.0, 0.0, 0.0)):
+    """Plants and places everything in an island's design (Island.props) as one ARiptideIslandProps actor."""
+    import riptide_island_props
+    catalogue = riptide_island_props.model_catalogue()
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    holder = actors.spawn_actor_from_class(unreal.RiptideIslandProps, unreal.Vector(*origin))
+    holder.set_actor_label(f"{name}_Props")
+    holder.set_folder_path(f"Islands/{name}")
+    loaded = {}
+    counts = {}
+    for n, prop in enumerate(island.props()):
+        source, which, solid = PROP_MESHES[prop["kind"]]
+        if source == "palm":
+            path = f"{riptide_island_props.PALMS_PATH}/{which}"
+        else:
+            entries = catalogue.get(which, [])
+            if not entries:
+                continue
+            # Grass: only the upright tufts, not the dead or flattened scraps.
+            if which == "grass_bermuda_01":
+                entries = [e for e in entries if "medium" in e["path"] or "seedling" in e["path"]] or entries
+            path = entries[n % len(entries)]["path"]
+        mesh = loaded.get(path) or unreal.load_asset(path)
+        loaded[path] = mesh
+        if not mesh:
+            continue
+        x, y = prop["x"], prop["y"]
+        z = island.height(x, y) - prop["sink"]
+        # Unreal's X is north (the design's y), Y is east (the design's x). The design's yaw is a compass bearing,
+        # which is Unreal's yaw as it stands. Scans whose face is their +Y side (the cliff) turn a quarter less.
+        yaw = prop["yaw"] - (90.0 if prop["kind"] == "cliff" else 0.0)
+        tilt = prop["tilt"]
+        rotation = unreal.Rotator(roll=tilt * math.sin(n * 2.4), pitch=tilt * math.cos(n * 2.4), yaw=yaw)
+        scale = prop["scale"]
+        transform = unreal.Transform(location=unreal.Vector(origin[0] + y * 100.0, origin[1] + x * 100.0, origin[2] + z * 100.0),
+                                     rotation=rotation, scale=unreal.Vector(scale, scale, scale))
+        holder.add_prop(mesh, transform, solid)
+        counts[prop["kind"]] = counts.get(prop["kind"], 0) + 1
+    unreal.log(f"Riptide: {name} planted: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
+
+
 def _spawn_island_ocean(ns):
     """The ocean for a map with islands: ARiptideOcean, whose waves die away in the shallows for the game as well
     as on screen. The plugin's factory only dresses its own ocean class, so a stock ocean is placed first and its
@@ -517,9 +572,10 @@ def build_island_test_map(ns, rebuilt):
     ambience_audio.set_editor_property("allow_spatialization", False)
 
     _place_island("StartCay")
+    island = _load_island("StartCay")
+    _place_props("StartCay", island)
 
     # The boat is launched here: off the wash-up beach, bow toward it.
-    island = _load_island("StartCay")
     bx, by = island.beach
     ox, oy = island.beach_out[0] - bx, island.beach_out[1] - by
     length = math.hypot(ox, oy)
@@ -535,7 +591,15 @@ def build_island_test_map(ns, rebuilt):
 
 
 def build(ns):
+    # What stands on the islands first (palms, rocks, plants): the islands are planted with them.
+    import importlib
+    import riptide_island_props
+    importlib.reload(riptide_island_props)
     rebuilt = False
+    try:
+        rebuilt = riptide_island_props.build(ns)
+    except Exception as err:  # noqa: BLE001 - the islands' ground is still worth building without them
+        unreal.log_error(f"Riptide: could not build the islands' props: {err}")
     for name in ISLAND_VERSIONS:
         rebuilt |= make_island_assets(name)
     build_island_test_map(ns, rebuilt)

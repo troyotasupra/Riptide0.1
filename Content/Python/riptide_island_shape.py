@@ -426,6 +426,127 @@ class StartCay(Island):
         along = (vx * ox + vy * oy) / (math.hypot(vx, vy) * math.hypot(ox, oy) + 1e-9)
         return smoothstep(0.5, 0.8, along)
 
+    def props(self):
+        """Everything planted and placed on the cay, worked out from its design with a fixed seed, so it's the same on
+        every machine: a list of dicts {kind, x, y, sink, yaw, scale, tilt}. `yaw` is the compass-style direction
+        (degrees, 0 = north, 90 = east) the thing faces or leans; `sink` how far its foot is set into the ground,
+        metres; `tilt` a slight lean, degrees. Kinds: palm_tall, palm_leaning, palm_sweeping, palm_medium,
+        palm_young, tree, shrub, fern, grass, cliff, outcrop, boulder, rubble, log, branch."""
+        import random
+        rng = random.Random(7411)
+        out = []
+        taken = []          # (x, y, radius) of everything that needs room
+
+        def facing(dx, dy):
+            return math.degrees(math.atan2(dx, dy))
+
+        def seaward(x, y):
+            """The way the nearest shore lies from a point, as a unit vector: downhill on the coast-distance field."""
+            e = 2.0
+            gx = self.coast_distance(x + e, y) - self.coast_distance(x - e, y)
+            gy = self.coast_distance(x, y + e) - self.coast_distance(x, y - e)
+            length = math.hypot(gx, gy) or 1.0
+            return (-gx / length, -gy / length)
+
+        def free(x, y, radius):
+            return all((x - tx) ** 2 + (y - ty) ** 2 > (radius + tr) ** 2 for tx, ty, tr in taken)
+
+        def add(kind, x, y, radius=0.0, **more):
+            item = {"kind": kind, "x": x, "y": y, "sink": 0.0, "yaw": rng.uniform(0.0, 360.0), "scale": 1.0, "tilt": 0.0}
+            item.update(more)
+            out.append(item)
+            if radius > 0.0:
+                taken.append((x, y, radius))
+
+        def scatter(count, accept, radius, tries=400):
+            """Up to `count` points where accept(x, y, d, h, slope) holds, each with `radius` of room."""
+            found = []
+            for _ in range(count * tries):
+                if len(found) >= count:
+                    break
+                x, y = rng.uniform(-135.0, 135.0), rng.uniform(-135.0, 135.0)
+                d = self.coast_distance(x, y)
+                if d < -20.0:
+                    continue
+                h = self.height(x, y)
+                if not accept(x, y, d, h, self.slope_deg(x, y, 1.0)) or not free(x, y, radius):
+                    continue
+                found.append((x, y, d, h))
+                taken.append((x, y, radius))
+            return found
+
+        rocky = lambda x, y: self.rock(x, y) > 0.6
+        on_bluff = lambda x, y: self._knoll(x, y) > 0.12 or self._mound(x, y, self.point, self.POINT_RADIUS) > 0.3
+        in_hollow = lambda x, y: self._mound(x, y, self.hollow, self.HOLLOW_RADIUS) > 0.35
+
+        # --- Rock: a low broken sea cliff along the rock shore, taller round the bluff, with boulders at its foot.
+        gap = 0.0
+        for i in range(self.cn):
+            j = (i + 1) % self.cn
+            gap += math.hypot(self.cx[j] - self.cx[i], self.cy[j] - self.cy[i])
+            if self.crock[i] < 0.75 or gap < 9.0:
+                continue
+            x, y = self.cx[i], self.cy[i]
+            tx, ty = self.cx[j] - self.cx[i - 1], self.cy[j] - self.cy[i - 1]
+            length = math.hypot(tx, ty) or 1.0
+            # The coast runs clockwise, so the sea is on its left.
+            ox, oy = -ty / length, tx / length
+            # It stands just out from the waterline, its foot under the sand and its top level with the ground a few
+            # metres behind it (the scan is 10 m tall and 41 m long at full size).
+            px, py = x + ox * 0.6, y + oy * 0.6
+            behind = min(self.height(x - ox * 4.5, y - oy * 4.5), 5.2) + rng.uniform(-0.1, 0.25)
+            foot = self.height(px, py) - 0.5
+            scale = min(0.6, max(0.24, (behind - foot) / 9.9))
+            gap = -41.0 * scale * 0.4 + 9.0          # the next piece overlaps this one's end a little
+            add("cliff", px, py, yaw=facing(ox, oy) + rng.uniform(-6.0, 6.0), scale=scale, sink=0.5)
+            if rng.random() < 0.7:
+                bx, by = x + ox * rng.uniform(1.5, 6.0) + rng.uniform(-4.0, 4.0), y + oy * rng.uniform(1.5, 6.0) + rng.uniform(-4.0, 4.0)
+                add(rng.choice(("outcrop", "boulder", "boulder")), bx, by, scale=rng.uniform(0.8, 2.2), sink=rng.uniform(0.15, 0.5),
+                    tilt=rng.uniform(0.0, 14.0))
+        # Outcrops breaking through on the bluff and the point, and rubble where the beach meets the rock.
+        for x, y, d, h in scatter(16, lambda x, y, d, h, sl: on_bluff(x, y) and d > 4.0 and 6.0 < sl < 30.0, 2.5):
+            if rng.random() < 0.3:
+                size = rng.uniform(1.2, 2.2)
+                add("outcrop", x, y, scale=size, sink=0.42 * size)
+            else:
+                size = rng.uniform(0.9, 2.6)
+                add("boulder", x, y, scale=size, sink=0.3 * size, tilt=rng.uniform(0.0, 20.0))
+        for x, y, d, h in scatter(16, lambda x, y, d, h, sl: 0.25 < self.rock(x, y) < 0.8 and -3.0 < d < 14.0, 3.5):
+            add(rng.choice(("rubble", "boulder", "boulder")), x, y, scale=rng.uniform(0.7, 1.5), sink=rng.uniform(0.08, 0.25))
+
+        # --- Palms. Along the back of the beach they lean out toward the water; in the grove they stand straighter.
+        def palm_ground(x, y, d, h, sl):
+            return h > 1.5 and sl < 16.0 and not rocky(x, y) and not on_bluff(x, y) and not in_hollow(x, y)
+
+        for x, y, d, h in scatter(13, lambda x, y, d, h, sl: palm_ground(x, y, d, h, sl) and 17.0 < d < 25.0, 4.2):
+            sx, sy = seaward(x, y)
+            add(rng.choice(("palm_sweeping", "palm_leaning", "palm_leaning")), x, y, yaw=facing(sx, sy) + rng.uniform(-28.0, 28.0),
+                scale=rng.uniform(0.88, 1.12), sink=0.1)
+        for x, y, d, h in scatter(24, lambda x, y, d, h, sl: palm_ground(x, y, d, h, sl) and d >= 24.0, 3.6):
+            add(rng.choice(("palm_tall", "palm_tall", "palm_medium", "palm_medium", "palm_leaning", "palm_young")), x, y,
+                scale=rng.uniform(0.85, 1.15), tilt=rng.uniform(0.0, 4.0), sink=0.1)
+        # A few on their own: out along the spit and by the point.
+        for x, y, d, h in scatter(5, lambda x, y, d, h, sl: h > 0.95 and 9.0 < d < 17.0 and sl < 12.0 and not rocky(x, y), 9.0):
+            sx, sy = seaward(x, y)
+            add(rng.choice(("palm_sweeping", "palm_young", "palm_medium")), x, y, yaw=facing(sx, sy) + rng.uniform(-40.0, 40.0),
+                scale=rng.uniform(0.8, 1.0), sink=0.1)
+
+        # --- Scrub trees and shrubs: thickest along the dune behind the beach and on the bench behind the sea cliff.
+        for x, y, d, h in scatter(9, lambda x, y, d, h, sl: h > 1.9 and d > 20.0 and sl < 18.0 and not in_hollow(x, y), 4.5):
+            add("tree", x, y, scale=rng.uniform(0.9, 1.5), sink=0.05)
+        for x, y, d, h in scatter(70, lambda x, y, d, h, sl: h > 1.6 and d > 13.0 and sl < 24.0 and not in_hollow(x, y)
+                                  and (d < 34.0 or rng.random() < 0.3), 1.3):
+            add("shrub", x, y, scale=rng.uniform(0.7, 1.35))
+        # Ferns and low growth in the shade of the grove.
+        for x, y, d, h in scatter(150, lambda x, y, d, h, sl: h > 2.0 and d > 26.0 and sl < 20.0 and not rocky(x, y), 0.6):
+            add("fern", x, y, scale=rng.uniform(0.9, 1.7))
+        # --- Driftwood along the high-tide line and on the spit.
+        for x, y, d, h in scatter(6, lambda x, y, d, h, sl: 1.0 < h < 1.6 and 6.0 < d < 15.0 and not rocky(x, y), 5.0):
+            add("log", x, y, scale=rng.uniform(0.7, 1.15), sink=0.12)
+        for x, y, d, h in scatter(28, lambda x, y, d, h, sl: 0.9 < h < 1.7 and 5.0 < d < 16.0 and not rocky(x, y), 1.0):
+            add("branch", x, y, scale=rng.uniform(0.8, 1.6), sink=0.02)
+        return out
+
     def ground(self, x, y, h=None, slope=None):
         h = self.height(x, y) if h is None else h
         slope = self.slope_deg(x, y) if slope is None else slope

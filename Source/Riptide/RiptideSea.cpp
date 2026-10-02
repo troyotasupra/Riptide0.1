@@ -1,5 +1,6 @@
 #include "RiptideSea.h"
 
+#include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -196,4 +197,53 @@ ARiptideOcean::ARiptideOcean(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
 	WaterBodyOceanComponentClass = URiptideOceanComponent::StaticClass();
+}
+
+// --- Island props ------------------------------------------------------------------------------------------------
+
+ARiptideIslandProps::ARiptideIslandProps()
+{
+	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+	Root->SetMobility(EComponentMobility::Static);
+	SetRootComponent(Root);
+}
+
+void ARiptideIslandProps::AddProp(UStaticMesh* Mesh, const FTransform& WorldTransform, bool bSolid)
+{
+	if (!Mesh)
+	{
+		return;
+	}
+	const FName Profile = bSolid ? FName(TEXT("BlockAll")) : FName(TEXT("NoCollision"));
+	UHierarchicalInstancedStaticMeshComponent* Batch = nullptr;
+	for (UHierarchicalInstancedStaticMeshComponent* Existing : Batches)
+	{
+		if (Existing && Existing->GetStaticMesh() == Mesh && Existing->GetCollisionProfileName() == Profile)
+		{
+			Batch = Existing;
+			break;
+		}
+	}
+	if (!Batch)
+	{
+		Batch = NewObject<UHierarchicalInstancedStaticMeshComponent>(this, NAME_None, RF_Transactional);
+		Batch->SetMobility(EComponentMobility::Static);
+		Batch->SetStaticMesh(Mesh);
+		Batch->SetCollisionProfileName(Profile);
+		Batch->SetupAttachment(Root);
+		AddInstanceComponent(Batch);
+		Batch->RegisterComponent();
+		Batches.Add(Batch);
+	}
+	Batch->AddInstance(WorldTransform, /*bWorldSpace=*/ true);
+}
+
+int32 ARiptideIslandProps::GetPropCount() const
+{
+	int32 Count = 0;
+	for (const UHierarchicalInstancedStaticMeshComponent* Batch : Batches)
+	{
+		Count += Batch ? Batch->GetInstanceCount() : 0;
+	}
+	return Count;
 }

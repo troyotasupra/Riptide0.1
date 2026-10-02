@@ -84,17 +84,10 @@ def check(name, passed, detail=""):
 
 
 def trace_ground(world, x, y, ignore=()):
-    """Height of the solid ground at a design point, metres, or None if nothing is hit."""
-    hit = unreal.SystemLibrary.line_trace_single(world, ue(x, y, 60.0), ue(x, y, -60.0), unreal.TraceTypeQuery.TRACE_TYPE_QUERY1,
-                                                 True, list(ignore), unreal.DrawDebugTrace.NONE, True)
-    if not hit:
-        return None
-    data = hit.to_tuple()
-    for value in data:
-        if isinstance(value, unreal.Vector):
-            # The first vector in a hit result is its location.
-            return value.z / 100.0
-    return None
+    """Height of the island's ground at a design point, metres, or None where there is none. Asked of the sea's
+    own record of the ground, so rocks, trunks and boats standing on it don't count."""
+    z = unreal.RiptideSeaSubsystem.ground_height_at(world, ue(x, y, 0.0))
+    return None if z < -1.0e5 else z / 100.0
 
 
 def ground_check(world, ignore):
@@ -248,8 +241,19 @@ def tick(dt):
             goal = ue(island.summit[0], island.summit[1], 0.0)
             to = unreal.Vector(goal.x - here.x, goal.y - here.y, 0.0)
             far = to.length() / 100.0
-            if far > 2.0 and since < 90.0:
-                walker.add_movement_input(to.normal(), 1.0)
+            if far > 2.0 and since < 120.0:
+                # Blocked by a trunk or a rock: step sideways round it for a moment, as a player would.
+                last = state.get("walk_last")
+                if last is None or since - last[0] > 1.0:
+                    if last is not None and (here - last[1]).length() < 60.0:
+                        state["sidestep_until"] = since + 1.2
+                        state["sidestep_way"] = -state.get("sidestep_way", -1.0)
+                    state["walk_last"] = (since, here)
+                heading = to.normal()
+                if since < state.get("sidestep_until", -1.0):
+                    way = state["sidestep_way"]
+                    heading = unreal.Vector(-heading.y * way + heading.x * 0.3, heading.x * way + heading.y * 0.3, 0.0).normal()
+                walker.add_movement_input(heading, 1.0)
                 pc.set_control_rotation(unreal.Rotator(roll=0.0, pitch=-4.0, yaw=math.degrees(math.atan2(to.y, to.x))))
                 if "half_way" not in state and since > 6.0:
                     state["half_way"] = True

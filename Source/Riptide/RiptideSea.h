@@ -97,3 +97,37 @@ class RIPTIDE_API ARiptideOcean : public AWaterBodyOcean
 public:
 	ARiptideOcean(const FObjectInitializer& ObjectInitializer);
 };
+
+class UHierarchicalInstancedStaticMeshComponent;
+class UStaticMesh;
+
+/**
+ * Everything standing on an island that isn't its ground: palms, trees, shrubs, grass, rocks, driftwood. Placed by
+ * Content/Python/riptide_islands.py from the island's design. Each kind of mesh is drawn as one batch, however many
+ * of it there are.
+ */
+UCLASS()
+class RIPTIDE_API ARiptideIslandProps : public AActor
+{
+	GENERATED_BODY()
+
+public:
+	ARiptideIslandProps();
+
+	/** Adds one of a mesh at a place in the world. `bSolid` makes it block the crew, boats and shots (trunks, rocks);
+	 *  otherwise it's walked through (grass, ferns). Editor-time: the batches are saved with the level. */
+	UFUNCTION(BlueprintCallable, Category = "Riptide|Islands")
+	void AddProp(UStaticMesh* Mesh, const FTransform& WorldTransform, bool bSolid);
+
+	/** How many props have been added, over all kinds. */
+	UFUNCTION(BlueprintPure, Category = "Riptide|Islands")
+	int32 GetPropCount() const;
+
+private:
+	UPROPERTY(VisibleAnywhere, Category = "Riptide")
+	TObjectPtr<USceneComponent> Root;
+
+	/** One batch per mesh and solidity. */
+	UPROPERTY(VisibleAnywhere, Category = "Riptide")
+	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> Batches;
+};
