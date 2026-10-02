@@ -161,6 +161,23 @@ def _cover_waves(ocean):
     return True
 
 
+# How deep the water must be before waves reach full size. The drawn waves shrink with the depth the renderer
+# measures down to the ground, but the height the game reads (buoyancy, swimmers, the underwater view) uses full
+# waves, so wherever the two disagreed the camera could be under the drawn surface yet "above" the read one, or the
+# other way round (the sky tinted as if underwater). A tiny mask depth keeps the drawn waves full size everywhere.
+OCEAN_WAVE_MASK_DEPTH = 1.0
+
+
+def _full_waves(ocean):
+    """Keeps the drawn waves the same size as the ones the game reads. True if it changed."""
+    body = ocean.get_water_body_component()
+    if abs(body.get_editor_property("target_wave_mask_depth") - OCEAN_WAVE_MASK_DEPTH) < 0.01:
+        return False
+    body.set_editor_property("target_wave_mask_depth", OCEAN_WAVE_MASK_DEPTH)
+    unreal.log("Riptide: drawn waves now full size at any depth")
+    return True
+
+
 def _set_swell(ocean):
     # The ocean gets its own waves, saved inside the map, instead of the shared engine wave asset.
     waves = unreal.new_object(unreal.GerstnerWaterWaves, outer=ocean)
@@ -997,6 +1014,7 @@ class _Graph:
             pin = unreal.CustomInput()
             pin.set_editor_property("input_name", name)
             pins.append(pin)
+        output_type = getattr(unreal.CustomMaterialOutputType, output_type)
         e = self.node(unreal.MaterialExpressionCustom, code=code, output_type=output_type, inputs=pins)
         for name, src, out in inputs:
             self.mel.connect_material_expressions(src, out, e, name)
@@ -1006,7 +1024,8 @@ class _Graph:
         self.mel.connect_material_property(node, output, prop)
 
 
-_F1, _F3 = unreal.CustomMaterialOutputType.CMOT_FLOAT1, unreal.CustomMaterialOutputType.CMOT_FLOAT3
+# Names, looked up when a material is built: the enum isn't there in every launch (a packaged game has no editor).
+_F1, _F3 = "CMOT_FLOAT1", "CMOT_FLOAT3"
 
 
 def _new_material(name, skinned=True):
@@ -1337,6 +1356,7 @@ def update_ocean_test_map():
                 unreal.log(f"Riptide: the sea now reaches {SEA_SIZE / 200000.0:.0f} km each way from the start")
                 changed = True
             changed |= _cover_waves(actor)
+            changed |= _full_waves(actor)
         elif isinstance(actor, unreal.ExponentialHeightFog):
             changed |= _fog_for_light_beams(actor)
     if changed:
@@ -1369,6 +1389,7 @@ def build_ocean_test_map():
     _open_up_sea(zone, ocean)
     _set_swell(ocean)
     _cover_waves(ocean)
+    _full_waves(ocean)
     # The wake simulation isn't placed here: each boat creates it at runtime (see ARiptideBoat).
 
     # The sea all around: plays everywhere at the same level, not from a point.
@@ -1386,7 +1407,7 @@ def build_ocean_test_map():
 
 
 # Bump when the main menu map's recipe below changes, so every machine rebuilds it on its next launch.
-MENU_MAP_VERSION = "4"
+MENU_MAP_VERSION = "5"
 
 # The menu's night: a low moon ahead of the camera (which looks across the boat from its starboard side), laying a
 # path of light on the sea behind the boat, so the boat and its crew stand dark against it.
@@ -1437,6 +1458,7 @@ def build_main_menu_map():
     _open_up_sea(zone, ocean)
     _set_swell(ocean)
     _cover_waves(ocean)
+    _full_waves(ocean)
 
     # The sea all around, quieter than in the game: under the menu.
     ambience = _spawn(unreal.AmbientSound)
