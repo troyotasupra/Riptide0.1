@@ -1524,6 +1524,13 @@ def _set_up_project():
     except Exception as err:  # noqa: BLE001 - never block the editor from opening
         unreal.log_error(f"Riptide: could not build the boat model: {err}")
 
+    # The islands and their test map (riptide_islands.py), using the sea and sky built here.
+    try:
+        import riptide_islands
+        riptide_islands.build(globals())
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build the islands: {err}")
+
     # Before the ocean test map, which the editor is left on.
     try:
         build_main_menu_map()
