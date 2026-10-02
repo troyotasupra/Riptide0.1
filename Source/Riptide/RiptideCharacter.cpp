@@ -1116,12 +1116,17 @@ void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
 		return;
 	}
 	// A stumble against the deck's acceleration (a metre or two a second, like a real one): enough to throw you
-	// into the bulwark or the console, not over the side. The worst slams take your legs out from under you.
+	// into the bulwark or the console, not over the side. The worst slams take your legs out from under you. The feet
+	// stay on the deck: thrown into the air instead, the body leaves the boat's frame, and on a deck pitching along at
+	// 30 knots it lands half a metre from where the deck has carried everything else (a violent jump in the view).
 	const bool bKnockedDown = SidewaysG >= KnockdownG || SlamG >= SlamKnockdownG;
 	const FVector Throw = -Sideways.GetSafeNormal() * FMath::Clamp(FMath::Max(0.f, SidewaysG - StaggerG) * 150.f + 80.f, 0.f, 250.f);
-	LaunchCharacter(FVector(Throw.X, Throw.Y, bKnockedDown ? 40.f : 0.f), false, false);
+	if (Move->IsMovingOnGround())
+	{
+		Move->Velocity += FVector(Throw.X, Throw.Y, 0.f);
+	}
 	++StaggerCount;
-	StaggerCooldown = 0.6f;
+	StaggerCooldown = 1.2f;
 	if (bKnockedDown)
 	{
 		KnockdownEndTime = ServerNow() + KnockdownSeconds;
