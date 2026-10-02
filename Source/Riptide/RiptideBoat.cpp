@@ -81,6 +81,9 @@ namespace
 	const FVector BowLightPoint(381.f, 0.f, DeckZ + 102.f);
 
 	// The radar antenna's hub, on its pedestal on the T-top (riptide_boat_mesh.py's RADAR).
+	// The compass card's pivot, in the dome on the console top (riptide_boat_mesh.py's _fittings: the dome at
+	// DeckZ + 112, its base ring up to 113.5).
+	const FVector CompassPivot(-8.f, 0.f, DeckZ + 114.5f);
 	const FVector RadarHub(-70.f, 0.f, DeckZ + 258.f);
 
 	// The steering wheel's hub on the helm's shaft, its face tilted back toward the helmsman (WHEEL_CENTRE and
@@ -174,6 +177,54 @@ ARiptideBoat::ARiptideBoat()
 	DeckCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	DeckCollision->SetCanEverAffectNavigation(false);
 
+	{
+		// The cockpit's inner walls, measured off the model (riptide_boat_mesh.py's HullInside, innermost at deck
+		// level): X along the boat, Y of the wall on the starboard side (port is the mirror). Forward of the last
+		// point the sides close into the bow.
+		const FVector2D WallLine[] = { { -338.f, 116.f }, { -120.f, 115.9f }, { -80.f, 114.7f }, { -40.f, 112.1f }, { 0.f, 108.1f },
+			{ 40.f, 102.7f }, { 80.f, 95.9f }, { 120.f, 87.7f }, { 160.f, 78.2f }, { 200.f, 67.3f }, { 240.f, 54.9f }, { 280.f, 40.9f } };
+		constexpr float Inboard = 1.5f;        // the box's face this far inside the model's wall, so it's met first
+		constexpr float Thick = 30.f;
+		constexpr float Overlap = 3.f;         // each box runs on past its ends, closing the joints
+		const float BottomZ = DeckZ - 10.f;
+		auto MakeWall = [this](const FString& Name, const FVector& Centre, const FVector& Extent, float Yaw)
+		{
+			UBoxComponent* Wall = CreateDefaultSubobject<UBoxComponent>(*Name);
+			Wall->SetupAttachment(HullBody);
+			Wall->SetRelativeLocationAndRotation(Centre, FRotator(0.f, Yaw, 0.f));
+			Wall->SetBoxExtent(Extent);
+			// Crew only, and not part of the hull's physics (it would change how it floats).
+			Wall->BodyInstance.bAutoWeld = false;
+			Wall->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+			Wall->SetCollisionObjectType(ECC_WorldDynamic);
+			Wall->SetCollisionResponseToAllChannels(ECR_Ignore);
+			Wall->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+			Wall->SetCanEverAffectNavigation(false);
+			Wall->SetHiddenInGame(true);
+			BulwarkWalls.Add(Wall);
+		};
+		for (int32 i = 0; i + 1 < UE_ARRAY_COUNT(WallLine); ++i)
+		{
+			const FVector2D A = WallLine[i], B = WallLine[i + 1];
+			for (const float Side : { 1.f, -1.f })
+			{
+				const FVector2D P(A.X, Side * (A.Y - Inboard)), Q(B.X, Side * (B.Y - Inboard));
+				const FVector2D Along = (Q - P).GetSafeNormal();
+				const FVector2D Out = FVector2D(-Along.Y, Along.X) * (FVector2D::DotProduct(FVector2D(-Along.Y, Along.X), FVector2D(0.f, Side)) > 0.f ? 1.f : -1.f);
+				const FVector2D Mid = (P + Q) * 0.5f + Out * (Thick * 0.5f);
+				// Up to the gunwale cap's height there (it rises toward the bow): the cap itself stays the top.
+				const float TopZ = DeckZ + 55.f + 45.f * FMath::Pow(FMath::Clamp((B.X + 395.f) / 790.f, 0.f, 1.f), 2.2f);
+				MakeWall(FString::Printf(TEXT("BulwarkWall%s%d"), Side > 0.f ? TEXT("S") : TEXT("P"), i),
+					FVector(Mid.X, Mid.Y, (BottomZ + TopZ) * 0.5f), FVector((Q - P).Size() * 0.5f + Overlap, Thick * 0.5f, (TopZ - BottomZ) * 0.5f),
+					FMath::RadiansToDegrees(FMath::Atan2(Along.Y, Along.X)));
+			}
+		}
+		// The stern bulkhead across the back of the cockpit, its face at X = -340 (BULKHEAD_X), deck to the stern box top.
+		const float BulkheadTop = DeckZ + 55.f;
+		MakeWall(TEXT("BulwarkWallStern"), FVector(-340.f + Inboard - Thick * 0.5f, 0.f, (BottomZ + BulkheadTop) * 0.5f),
+			FVector(Thick * 0.5f, 118.f, (BulkheadTop - BottomZ) * 0.5f), 0.f);
+	}
+
 	MotorMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorMesh"));
 	MotorMesh->SetupAttachment(HullBody);
 	MotorMeshStarboard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorMeshStarboard"));
@@ -255,7 +306,9 @@ ARiptideBoat::ARiptideBoat()
 		Light->SetInnerConeAngle(45.f);
 		Light->SetOuterConeAngle(56.25f);
 		Light->SetLightColor(Colour);
-		Light->SetCastShadows(false);
+		// Shadowed, so the bow screens the water close under it, as the hull would: unshadowed, a red and a green
+		// glow lit the sea right through the hull.
+		Light->SetCastShadows(true);
 		return Light;
 	};
 	BowLightPort = MakeSidelight(TEXT("BowLightPort"), -1.f, FLinearColor(1.f, 0.05f, 0.03f));
@@ -283,8 +336,12 @@ ARiptideBoat::ARiptideBoat()
 	RadarArray = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RadarArray"));
 	RadarArray->SetupAttachment(HullBody);
 	RadarArray->SetRelativeLocation(RadarHub);
+	CompassCard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CompassCard"));
+	CompassCard->SetupAttachment(HullBody);
+	CompassCard->SetRelativeLocation(CompassPivot);
+	CompassCard->SetCastShadow(false);
 	for (UStaticMeshComponent* Part : { MotorBracket.Get(), MotorBracketStarboard.Get(), MotorSwivel.Get(), MotorSwivelStarboard.Get(),
-			ThrottleLeverPort.Get(), ThrottleLeverStarboard.Get(), RadarArray.Get() })
+			ThrottleLeverPort.Get(), ThrottleLeverStarboard.Get(), RadarArray.Get(), CompassCard.Get() })
 	{
 		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
@@ -316,6 +373,7 @@ ARiptideBoat::ARiptideBoat()
 	SwivelModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_OutboardSwivel.SM_OutboardSwivel")));
 	LeverModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_ThrottleLever.SM_ThrottleLever")));
 	RadarModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_RadarArray.SM_RadarArray")));
+	CompassModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_CompassCard.SM_CompassCard")));
 
 	// Propellers: at each outboard's prop, well below the waterline when the boat is level.
 	Propeller = CreateDefaultSubobject<USceneComponent>(TEXT("Propeller"));
@@ -489,6 +547,10 @@ void ARiptideBoat::ApplyModels()
 	{
 		RadarArray->SetStaticMesh(Radar);
 	}
+	if (UStaticMesh* Compass = CompassModel.LoadSynchronous())
+	{
+		CompassCard->SetStaticMesh(Compass);
+	}
 	if (UStaticMesh* Lever = LeverModel.LoadSynchronous())
 	{
 		ThrottleLeverPort->SetStaticMesh(Lever);
@@ -532,6 +594,9 @@ void ARiptideBoat::BeginPlay()
 	Super::BeginPlay();
 
 	HullBody->SetMassOverrideInKg(NAME_None, HullMassKg, true);
+	// Placed on a sloping wave, the hull settles into it in its first moments: not a slam, so no slap or spray (the
+	// main menu's boat used to splash down as it loaded).
+	SlapCooldownLeft = SettleSeconds;
 	if (HasAuthority())
 	{
 		FuelLiters = FuelCapacityLiters * StartingFuelFraction;
@@ -1816,6 +1881,8 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 	{
 		RadarArray->AddLocalRotation(FRotator(0.f, RadarRpm * 6.f * DeltaSeconds, 0.f));
 	}
+	// The compass card keeps its North to the world's North (+X), whichever way the boat heads.
+	CompassCard->SetRelativeRotation(FRotator(0.f, -GetActorRotation().Yaw, 0.f));
 	// Throttle levers: forward for ahead, back for astern.
 	ThrottleLeverPort->SetRelativeRotation(FRotator(-ThrottleLever * LeverSwingDeg, 0.f, 0.f));
 	ThrottleLeverStarboard->SetRelativeRotation(FRotator(-ThrottleLever * LeverSwingDeg, 0.f, 0.f));
@@ -2521,6 +2588,8 @@ void ARiptideBoat::RescueIfOffTheSea()
 		}
 	}
 	SetActorLocationAndRotation(Target, Upright, false, nullptr, ETeleportType::ResetPhysics);
+	SlapCooldownLeft = SettleSeconds;
+	bHaveBowFreeboard = false;
 	HullBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
 	HullBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 	UE_LOG(LogRiptideBoat, Warning, TEXT("%s went off the edge of the sea at %s: back on the water at %s"), *GetName(), *Here.ToString(), *Target.ToString());

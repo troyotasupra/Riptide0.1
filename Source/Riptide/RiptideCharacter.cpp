@@ -797,7 +797,7 @@ void ARiptideCharacter::OpenInventory(int32 Locker)
 	GEngine->GameViewport->AddViewportWidgetContent(InventoryWidgetContainer.ToSharedRef(), 10);
 	FInputModeUIOnly Mode;
 	Mode.SetWidgetToFocus(InventoryWidget);
-	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::LockAlways);
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);    // free to go to another monitor
 	PC->SetInputMode(Mode);
 	PC->SetShowMouseCursor(true);
 	GetCharacterMovement()->StopMovementImmediately();

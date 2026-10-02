@@ -89,6 +89,8 @@ public:
 private:
 	void BuildInput();
 	void OnMenuKey();
+	/** Holding Left Alt frees the cursor (to reach another monitor) without opening a menu; the view stops turning. */
+	void SetCursorFreed(bool bFree);
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> MenuMapping;
@@ -96,7 +98,12 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> MenuAction;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> FreeCursorAction;
+
 	TSharedPtr<SRiptidePauseMenu> Menu;
 	/** Set while the menu holds the player's movement and look input off. */
 	bool bIgnoringInput = false;
+	/** Set while Left Alt is held and the cursor is free. */
+	bool bCursorFreed = false;
 };
