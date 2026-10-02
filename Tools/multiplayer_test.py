@@ -175,6 +175,9 @@ def run_in_game(role):
                             check("the client's crew member stands on the boat's deck", pawn.is_standing_on_boat())
                     crew = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideCharacter)
                     check("two crew members are aboard", len(crew) == 2, str(len(crew)))
+                    hud = unreal.GameplayStatics.get_player_controller(world, 0).get_hud()
+                    check("the host's keyboard and mouse drive the game, not the menu it came from",
+                          isinstance(hud, unreal.RiptideHUD) and hud.is_game_input_active())
                     go("waiting for the client to leave")
                 elif step == "waiting for the client to leave":
                     if len(unreal.GameplayStatics.get_game_state(world).player_array) == 1:
@@ -246,6 +249,7 @@ def run_in_game(role):
                     hud = pc.get_hud()
                     check("the in-game menu's HUD is there", isinstance(hud, unreal.RiptideHUD), str(hud))
                     if isinstance(hud, unreal.RiptideHUD):
+                        check("its keyboard and mouse drive the game, not the menu it came from", hud.is_game_input_active())
                         hud.set_menu_open(True)
                         check("the in-game menu opens", hud.is_menu_open())
                     go("menu open")
@@ -266,6 +270,7 @@ def run_in_game(role):
                     hud.show_menu_settings(False)
                     hud.set_menu_open(False)
                     check("the in-game menu closes", not hud.is_menu_open())
+                    check("closing it gives the keyboard and mouse back to the game", hud.is_game_input_active())
                     gi.leave_game()
                     go("leaving")
                 elif step == "leaving":

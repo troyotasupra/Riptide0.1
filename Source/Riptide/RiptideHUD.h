@@ -77,6 +77,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Menu")
 	bool IsMenuOpen() const { return Menu.IsValid(); }
 
+	/** True when the keyboard and mouse drive the game (not a menu): the viewport captures the mouse, has the
+	 * keyboard focus and shows no cursor, and the player's movement and look aren't held off. For tests. */
+	UFUNCTION(BlueprintPure, Category = "Menu")
+	bool IsGameInputActive() const;
+
 	/** Shows the settings in the open menu (or back to its buttons). */
 	UFUNCTION(BlueprintCallable, Category = "Menu")
 	void ShowMenuSettings(bool bShow);

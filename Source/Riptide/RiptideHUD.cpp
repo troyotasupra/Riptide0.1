@@ -22,6 +22,7 @@
 #include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
+#include "Widgets/SViewport.h"
 #include "Widgets/Text/STextBlock.h"
 
 #define LOCTEXT_NAMESPACE "RiptideHUD"
@@ -289,6 +290,14 @@ void ARiptideHUD::BeginPlay()
 	{
 		return;
 	}
+	// Into the game, the keyboard and mouse are the game's: the main menu left the viewport in its menu-only input
+	// mode (cursor shown, keys going to the menu's widgets), and that outlives the menu across the map change.
+	Player->SetInputMode(FInputModeGameOnly());
+	Player->SetShowMouseCursor(false);
+	if (FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().SetAllUserFocusToGameViewport();
+	}
 	BuildInput();
 	// Its own input on the player's controller, so it works whatever the player controls (on foot, at the helm, or
 	// the dev mode's camera).
@@ -302,6 +311,31 @@ void ARiptideHUD::BeginPlay()
 		Subsystem->AddMappingContext(MenuMapping, MenuInputPriority);
 	}
 	URiptideSettingsSave::Get()->Apply(this);
+}
+
+bool ARiptideHUD::IsGameInputActive() const
+{
+	const APlayerController* Player = GetOwningPlayerController();
+	const UGameViewportClient* Viewport = GEngine ? GEngine->GameViewport : nullptr;
+	if (!Player || !Viewport || Menu.IsValid() || Player->ShouldShowMouseCursor() || Player->IsMoveInputIgnored() || Player->IsLookInputIgnored())
+	{
+		return false;
+	}
+	if (Viewport->GetMouseCaptureMode() != EMouseCaptureMode::CapturePermanently)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Riptide: the viewport isn't capturing the mouse (%d)"), int32(Viewport->GetMouseCaptureMode()));
+		return false;
+	}
+	if (FSlateApplication::IsInitialized() && Viewport->GetGameViewportWidget().IsValid())
+	{
+		const TSharedPtr<SWidget> Focused = FSlateApplication::Get().GetKeyboardFocusedWidget();
+		if (Focused.Get() != static_cast<const SWidget*>(Viewport->GetGameViewportWidget().Get()))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Riptide: the keyboard focus is on %s, not the game"), Focused.IsValid() ? *Focused->GetTypeAsString() : TEXT("nothing"));
+			return false;
+		}
+	}
+	return true;
 }
 
 void ARiptideHUD::BuildInput()
@@ -375,6 +409,11 @@ void ARiptideHUD::SetMenuOpen(bool bOpen)
 		Menu.Reset();
 		Player->SetInputMode(FInputModeGameOnly());
 		Player->SetShowMouseCursor(false);
+		// The keyboard focus went with the menu's widgets: give it back to the game's viewport.
+		if (FSlateApplication::IsInitialized())
+		{
+			FSlateApplication::Get().SetAllUserFocusToGameViewport();
+		}
 		if (bIgnoringInput)
 		{
 			Player->SetIgnoreMoveInput(false);
