@@ -161,6 +161,23 @@ def _cover_waves(ocean):
     return True
 
 
+# Past the edge of the detailed sea the Water plugin can draw a flat "far" ocean out to the horizon. Without it the
+# water simply stopped at the zone's edge and the boat sailed off into nothing. 500 km is past any horizon.
+FAR_SEA_EXTENT = 50000000.0
+FAR_SEA_MATERIAL = "/Water/Materials/WaterSurface/Water_FarMesh"
+
+
+def _far_sea(zone):
+    """Draws the ocean on past the water zone to the horizon. True if it changed."""
+    mesh = zone.get_component_by_class(unreal.WaterMeshComponent)
+    if mesh.get_editor_property("far_distance_mesh_extent") >= FAR_SEA_EXTENT - 1.0:
+        return False
+    mesh.set_editor_property("far_distance_material", unreal.load_asset(FAR_SEA_MATERIAL))
+    mesh.set_editor_property("far_distance_mesh_extent", FAR_SEA_EXTENT)
+    unreal.log("Riptide: the sea is drawn on to the horizon past the water zone")
+    return True
+
+
 # How deep the water must be before waves reach full size. The drawn waves shrink with the depth the renderer
 # measures down to the ground, but the height the game reads (buoyancy, swimmers, the underwater view) uses full
 # waves, so wherever the two disagreed the camera could be under the drawn surface yet "above" the read one, or the
@@ -1347,6 +1364,8 @@ def update_ocean_test_map():
     changed = False
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
     zone = next((a for a in actors if isinstance(a, unreal.WaterZone)), None)
+    if zone:
+        changed |= _far_sea(zone)
     for actor in actors:
         if isinstance(actor, unreal.WaterBodyOcean):
             # A map built with a smaller sea grows to the current one.
@@ -1387,6 +1406,7 @@ def build_ocean_test_map():
     zone = _spawn(unreal.WaterZone)
     ocean = _spawn_ocean()
     _open_up_sea(zone, ocean)
+    _far_sea(zone)
     _set_swell(ocean)
     _cover_waves(ocean)
     _full_waves(ocean)
@@ -1407,7 +1427,7 @@ def build_ocean_test_map():
 
 
 # Bump when the main menu map's recipe below changes, so every machine rebuilds it on its next launch.
-MENU_MAP_VERSION = "5"
+MENU_MAP_VERSION = "6"
 
 # The menu's night: a low moon ahead of the camera (which looks across the boat from its starboard side), laying a
 # path of light on the sea behind the boat, so the boat and its crew stand dark against it.
@@ -1456,6 +1476,7 @@ def build_main_menu_map():
     zone = _spawn(unreal.WaterZone)
     ocean = _spawn_ocean()
     _open_up_sea(zone, ocean)
+    _far_sea(zone)
     _set_swell(ocean)
     _cover_waves(ocean)
     _full_waves(ocean)
