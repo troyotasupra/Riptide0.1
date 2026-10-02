@@ -13,9 +13,9 @@ ISLANDS_PATH = "/Game/Riptide/Islands"
 MATERIALS_PATH = "/Game/Riptide/Materials"
 ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
-ISLAND_VERSIONS = {"StartCay": "8"}
+ISLAND_VERSIONS = {"StartCay": "9"}
 GREY_VERSION = "3"
-ISLAND_MAP_VERSION = "9"
+ISLAND_MAP_VERSION = "10"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
 # tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in
@@ -671,9 +671,49 @@ PROP_MESHES = {
     "tree": ("model", "island_tree_02", True), "shrub": ("model", "searsia_lucida", False), "fern": ("model", "fern_02", False),
     "grass": ("model", "grass_bermuda_01", False),
     "outcrop": ("model", "coast_rocks_05", True), "boulder": ("model", "boulder_01", True),
-    "rubble": ("model", "sand_rocks_small_01", True), "log": ("model", "dead_tree_trunk_02", True),
-    "branch": ("model", "dry_branches_medium_01", False),
+    "log": ("model", "dead_tree_trunk_02", True), "branch": ("model", "dry_branches_medium_01", False),
 }
+
+# Things that lie on the ground rather than grow from one point: they're laid to the ground's slope, then bedded in
+# until no part of their underside is above it. (kind: how much of its footprint must be bedded, the most of its
+# height that may be buried.) A piece that can't be bedded within that isn't placed.
+LYING = {"outcrop": (0.9, 0.7), "boulder": (0.7, 0.65), "log": (0.9, 0.6), "branch": (0.85, 0.8)}
+
+
+def _bed_into_ground(island, mesh, prop, origin):
+    """The transform that lays a lying prop on the ground and beds it in, or None if it can't be bedded."""
+    x, y, scale = prop["x"], prop["y"], prop["scale"]
+    footprint, most = LYING[prop["kind"]]
+    e = 0.75
+    # The ground's slope here, as its upward normal in Unreal's axes (X north = the design's y, Y east = its x).
+    dx = (island.height(x + e, y) - island.height(x - e, y)) / (2 * e)
+    dy = (island.height(x, y + e) - island.height(x, y - e)) / (2 * e)
+    up = unreal.Vector(-dy, -dx, 1.0).normal()
+    yaw = math.radians(prop["yaw"])
+    rotation = unreal.MathLibrary.make_rot_from_zx(up, unreal.Vector(math.cos(yaw), math.sin(yaw), 0.0))
+    box = mesh.get_bounding_box()
+    height = (box.max.z - box.min.z) * scale / 100.0
+    z = island.height(x, y) - prop["sink"]
+
+    def transform(at_z):
+        return unreal.Transform(location=unreal.Vector(origin[0] + y * 100.0, origin[1] + x * 100.0, origin[2] + at_z * 100.0),
+                                rotation=rotation, scale=unreal.Vector(scale, scale, scale))
+
+    # How far any point low on its sides stands above the ground under it: it's lowered by the worst of them.
+    cx, cy = (box.min.x + box.max.x) / 2.0, (box.min.y + box.max.y) / 2.0
+    hx, hy = (box.max.x - box.min.x) / 2.0 * footprint, (box.max.y - box.min.y) / 2.0 * footprint
+    low = box.min.z + (box.max.z - box.min.z) * 0.18
+    placed = transform(z)
+    worst = 0.0
+    for px, py in ((-1, -1), (1, -1), (-1, 1), (1, 1), (0, -1), (0, 1), (-1, 0), (1, 0), (0, 0)):
+        world = unreal.MathLibrary.transform_location(placed, unreal.Vector(cx + px * hx, cy + py * hy, low))
+        ground = island.height((world.y - origin[1]) / 100.0, (world.x - origin[0]) / 100.0)
+        worst = max(worst, (world.z - origin[2]) / 100.0 - ground)
+    z -= worst + 0.03
+    if island.height(x, y) - z > most * height:
+        return None
+    return transform(z)
+
 
 
 def _place_props(name, island, origin=(0.0, 0.0, 0.0)):
@@ -701,6 +741,14 @@ def _place_props(name, island, origin=(0.0, 0.0, 0.0)):
         mesh = loaded.get(path) or unreal.load_asset(path)
         loaded[path] = mesh
         if not mesh:
+            continue
+        if prop["kind"] in LYING:
+            transform = _bed_into_ground(island, mesh, prop, origin)
+            if transform is None:
+                counts["(not placed: would float)"] = counts.get("(not placed: would float)", 0) + 1
+                continue
+            holder.add_prop(mesh, transform, solid)
+            counts[prop["kind"]] = counts.get(prop["kind"], 0) + 1
             continue
         x, y = prop["x"], prop["y"]
         z = island.height(x, y) - prop["sink"]

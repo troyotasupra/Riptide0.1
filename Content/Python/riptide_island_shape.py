@@ -357,10 +357,10 @@ class StartCay(Island):
         r = smoothstep(0.35, 0.7, self.rock(x, y))
         # Dark weathered rock: anything steep, and the rock shore's cliff from just under the water to its lip.
         steep = smoothstep(24.0, 36.0, slope) if h > -3.0 else 0.0
-        cliff = r * smoothstep(-16.0, -6.0, d) * (1.0 - smoothstep(3.0, 7.0, d))
+        cliff = r * smoothstep(-16.0, -6.0, d) * (1.0 - smoothstep(-1.5, 0.5, d))
         rock = max(steep, cliff)
         # Pale coral rock: the bench behind the cliff, and the tops of the bluff and the point.
-        bench = r * smoothstep(2.0, 5.0, d) * (1.0 - smoothstep(12.0, 20.0, d))
+        bench = r * smoothstep(-0.5, 1.5, d) * (1.0 - smoothstep(12.0, 20.0, d))
         tops = max(smoothstep(0.25, 0.5, self._knoll(x, y)), smoothstep(0.35, 0.6, self._mound(x, y, self.point, self.POINT_RADIUS)))
         coral = max(bench, tops if d > 0.0 else 0.0) * (1.0 - rock)
         grove = smoothstep(19.0, 27.0, d) * smoothstep(1.7, 2.1, h) * (1.0 - rock) * (1.0 - coral)
@@ -431,7 +431,8 @@ class StartCay(Island):
         every machine: a list of dicts {kind, x, y, sink, yaw, scale, tilt}. `yaw` is the compass-style direction
         (degrees, 0 = north, 90 = east) the thing faces or leans; `sink` how far its foot is set into the ground,
         metres; `tilt` a slight lean, degrees. Kinds: palm_tall, palm_leaning, palm_sweeping, palm_medium,
-        palm_young, tree, shrub, fern, grass, cliff, outcrop, boulder, rubble, log, branch."""
+        palm_young, tree, shrub, fern, outcrop, boulder, log, branch. Rocks and driftwood are laid to the slope of
+        the ground and bedded into it when placed (riptide_islands._place_props)."""
         import random
         rng = random.Random(7411)
         out = []
@@ -505,8 +506,9 @@ class StartCay(Island):
             else:
                 size = rng.uniform(0.9, 2.6)
                 add("boulder", x, y, scale=size, sink=0.3 * size, tilt=rng.uniform(0.0, 20.0))
-        for x, y, d, h in scatter(16, lambda x, y, d, h, sl: 0.25 < self.rock(x, y) < 0.8 and -3.0 < d < 14.0, 3.5):
-            add(rng.choice(("rubble", "boulder", "boulder")), x, y, scale=rng.uniform(0.7, 1.5), sink=rng.uniform(0.08, 0.25))
+        for x, y, d, h in scatter(14, lambda x, y, d, h, sl: 0.25 < self.rock(x, y) < 0.8 and -3.0 < d < 14.0, 3.5):
+            size = rng.uniform(0.7, 1.6)
+            add("boulder", x, y, scale=size, sink=0.3 * size)
 
         # --- Palms. Along the back of the beach they lean out toward the water; in the grove they stand straighter.
         def palm_ground(x, y, d, h, sl):
