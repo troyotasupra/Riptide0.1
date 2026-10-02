@@ -115,6 +115,51 @@ def ground_check(world, ignore):
     check("the solid ground is where the design puts it", worst < 0.25, "worst difference %.2f m" % worst)
 
 
+def sea_points():
+    """Where the sea's height is watched: at the wash-up beach's waterline, in the bay's shallows 25 m out, and in
+    open deep water."""
+    bx, by = island.beach
+    ox, oy = island.beach_out[0] - bx, island.beach_out[1] - by
+    length = math.hypot(ox, oy)
+    ox, oy = ox / length, oy / length
+    # Walk out from the beach point to the waterline itself.
+    edge = 0.0
+    while island.height(bx + ox * edge, by + oy * edge) > 0.0 and edge < 40.0:
+        edge += 0.25
+    return {"waterline": (bx + ox * edge, by + oy * edge), "shallows": (bx + ox * (edge + 25.0), by + oy * (edge + 25.0)),
+            "open sea": (bx + ox * 330.0, by + oy * 330.0)}
+
+
+def watch_sea(boat):
+    """Notes the sea's height at each watched point this frame."""
+    seen = state.setdefault("sea", {})
+    for name, (x, y) in sea_points().items():
+        z = boat.get_sea_surface_z(ue(x, y, 0.0)) / 100.0
+        lo, hi = seen.get(name, (z, z))
+        seen[name] = (min(lo, z), max(hi, z))
+
+
+def sea_check(world):
+    seen = state.get("sea", {})
+    swing = {name: hi - lo for name, (lo, hi) in seen.items()}
+    detail = ", ".join("%s %.2f m" % (name, swing.get(name, -1.0)) for name in ("waterline", "shallows", "open sea"))
+    check("the open sea has its swell", swing.get("open sea", 0.0) > 0.4, detail)
+    points = sea_points()
+    scale = {name: unreal.RiptideSeaSubsystem.wave_scale_at(world, ue(x, y, 0.0)) for name, (x, y) in points.items()}
+    sizes = ", ".join("%s %.0f%%" % (name, scale[name] * 100.0) for name in ("waterline", "shallows", "open sea"))
+    check("the waves the game reads are full size in open water", scale["open sea"] > 0.97, sizes)
+    check("they die away toward the beach", scale["waterline"] < 0.15 and scale["waterline"] < scale["shallows"] < 0.5, sizes)
+    check("the sea barely moves at the beach's waterline", swing.get("waterline", 9.0) < 0.3, detail)
+    for name, (x, y) in sea_points().items():
+        log("sea at %s: seabed %.2f m (design %.2f m)" % (name, unreal.RiptideSeaSubsystem.ground_height_at(world, ue(x, y, 0.0)) / 100.0,
+                                                          island.height(x, y)))
+    for ocean in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.WaterBodyOcean):
+        log("ocean %s, water body %s" % (ocean.get_class().get_name(), ocean.get_water_body_component().get_class().get_name()))
+    x, y = sea_points()["shallows"]
+    got = unreal.RiptideSeaSubsystem.ground_height_at(world, ue(x, y, 0.0)) / 100.0
+    check("the sea knows where the seabed is", abs(got - island.height(x, y)) < 0.25, "seabed %.2f m, design %.2f m" % (got, island.height(x, y)))
+
+
 def shot(world, name):
     unreal.SystemLibrary.execute_console_command(world, "HighResShot 1920x1080 filename=island_%s" % name)
     log("shot " + name)
@@ -155,10 +200,15 @@ def tick(dt):
         since = t - state["phase_start"]
         phase = state["phase"]
 
+        boats = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideBoat)
         if phase == "open":
             pc.set_photo_mode(True)
             enter("settle", t)
-        elif phase == "settle" and since > 6.0:
+        elif phase == "settle" and since <= 12.0:
+            if boats:
+                watch_sea(boats[0])
+        elif phase == "settle":
+            sea_check(world)
             shot(world, "01_from_the_boat")
             ground_check(world, list(unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideBoat)) + list(walkers))
             enter("fly", t)

@@ -15,7 +15,19 @@ ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
 ISLAND_VERSIONS = {"StartCay": "3"}
 GREY_VERSION = "2"
-ISLAND_MAP_VERSION = "1"
+ISLAND_MAP_VERSION = "5"
+
+# Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
+# tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in
+# 15 m). Both the drawn waves and the ones the game reads (ARiptideOcean) follow it, so the bay is calm and the
+# beach isn't swamped.
+SHALLOWS_WAVE_DEPTH = 800.0
+
+# The Water plugin's depth map (where the seabed is, for the drawn waves) follows the camera on island maps, covering
+# this far across, in cm, at this many pixels: 1.5 m a pixel. Spread over the whole 24 km sea it would be 47 m a
+# pixel, far too coarse to find a beach.
+DEPTH_MAP_SPAN = 300000.0
+DEPTH_MAP_PIXELS = 2048
 
 # How far off the wash-up beach's waterline the boat starts on the island test map, metres.
 BOAT_START_OFF_BEACH = 45.0
@@ -429,10 +441,37 @@ def _place_island(name, origin=(0.0, 0.0, 0.0)):
     """Puts an island's ground into the open level, its centre at `origin` (cm), sea level at the origin's height."""
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     for path in island_chunk_paths(name):
-        actor = actors.spawn_actor_from_object(unreal.load_asset(path), unreal.Vector(*origin))
+        # ARiptideIslandGround: ground the sea knows the depth over (RiptideSea.h).
+        actor = actors.spawn_actor_from_class(unreal.RiptideIslandGround, unreal.Vector(*origin))
+        actor.static_mesh_component.set_static_mesh(unreal.load_asset(path))
         actor.set_actor_label(path.split("/")[-1])
         actor.set_folder_path(f"Islands/{name}")
         actor.tags = [unreal.Name("RiptideIsland"), unreal.Name(name)]
+
+
+# What the Water plugin's own ocean factory gives a new ocean, and a plain spawn doesn't: its materials.
+OCEAN_MATERIALS = ["water_material", "water_static_mesh_material", "underwater_post_process_material",
+                   "water_info_material"]
+
+
+def _spawn_island_ocean(ns):
+    """The ocean for a map with islands: ARiptideOcean, whose waves die away in the shallows for the game as well
+    as on screen. The plugin's factory only dresses its own ocean class, so a stock ocean is placed first and its
+    materials handed over."""
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    stock = ns["_spawn_ocean"]()
+    stock_body = stock.get_water_body_component()
+    ocean = ns["_spawn"](unreal.RiptideOcean)
+    body = ocean.get_water_body_component()
+    for name in OCEAN_MATERIALS:
+        try:
+            body.set_editor_property(name, stock_body.get_editor_property(name))
+        except Exception as err:  # noqa: BLE001 - report it; the ocean still works without a far or HLOD material
+            unreal.log_warning(f"Riptide: island ocean has no {name} ({err})")
+    actors.destroy_actor(stock)
+    unreal.log(f"Riptide: island ocean {ocean.get_class().get_name()} with {body.get_class().get_name()}, "
+               f"water material {body.get_editor_property('water_material')}")
+    return ocean
 
 
 def build_island_test_map(ns, rebuilt):
@@ -460,12 +499,17 @@ def build_island_test_map(ns, rebuilt):
     spawn(unreal.VolumetricCloud)
 
     zone = spawn(unreal.WaterZone)
-    ocean = ns["_spawn_ocean"]()
+    ocean = _spawn_island_ocean(ns)
     ns["_open_up_sea"](zone, ocean)
     ns["_far_sea"](zone)
     ns["_set_swell"](ocean)
     ns["_cover_waves"](ocean)
-    ns["_full_waves"](ocean)
+    ocean.get_water_body_component().set_editor_property("target_wave_mask_depth", SHALLOWS_WAVE_DEPTH)
+    zone.set_editor_property("render_target_resolution", unreal.IntPoint(DEPTH_MAP_PIXELS, DEPTH_MAP_PIXELS))
+    zone.set_editor_property("local_tessellation_extent", unreal.Vector(DEPTH_MAP_SPAN, DEPTH_MAP_SPAN, 10000.0))
+    zone.set_editor_property("enable_local_only_tessellation", True)
+    # Beyond the window that follows the camera, the sea is drawn as plain meshes (as the plugin's factory sets up).
+    ocean.get_water_body_component().set_water_body_static_mesh_enabled(True)
 
     ambience = spawn(unreal.AmbientSound)
     ambience_audio = ambience.get_component_by_class(unreal.AudioComponent)
