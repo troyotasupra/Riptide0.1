@@ -45,7 +45,8 @@ def _views():
                 views.append((name + "_from_" + label, (cx + dx * away, cy + dy * away, cz + sz * 0.3), (cx, cy, cz)))
             views.append((name + "_from_above", (cx - 10.0, cy, cz + away * 1.2), (cx, cy, cz)))
         elif big < 400.0:
-            views.append((name + "_close", (cx - big * 0.9 - 90.0, cy - big * 0.8 - 60.0, cz + sz * 0.4 + 60.0), (cx, cy, cz)))
+            near = big * 1.6 + 25.0
+            views.append((name + "_close", (cx - near * 0.75, cy - near * 0.66, cz + near * 0.45), (cx, cy, cz)))
     return views
 
 

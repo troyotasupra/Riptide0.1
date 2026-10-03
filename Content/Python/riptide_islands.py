@@ -15,7 +15,7 @@ ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
 ISLAND_VERSIONS = {"StartCay": "9"}
 GREY_VERSION = "3"
-ISLAND_MAP_VERSION = "12"
+ISLAND_MAP_VERSION = "13"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
 # tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in
@@ -668,8 +668,9 @@ PROP_MESHES = {
     "palm_tall": ("palm", "SM_Palm_Tall", True), "palm_leaning": ("palm", "SM_Palm_Leaning", True),
     "palm_sweeping": ("palm", "SM_Palm_Sweeping", True), "palm_medium": ("palm", "SM_Palm_Medium", True),
     "palm_young": ("palm", "SM_Palm_Young", True),
-    "tree": ("model", "island_tree_02", True), "shrub": ("model", "searsia_lucida", False), "fern": ("model", "fern_02", False),
-    "grass": ("model", "grass_bermuda_01", False),
+    "tree": ("model", "island_tree_02", True), "tree_small": ("model", "tree_small_02", True), "tree_big": ("model", "island_tree_01", True),
+    "shrub": ("model", "searsia_lucida", False), "sorrel": ("model", "shrub_sorrel_01", False), "lowshrub": ("model", "shrub_04", False),
+    "fern": ("model", "fern_02", False), "grass": ("model", "grass_medium_01", False), "shell": ("model", "lambis_shell", False),
     "outcrop": ("model", "coast_rocks_05", True), "boulder": ("model", "boulder_01", True),
     "log": ("model", "dead_tree_trunk_02", True), "branch": ("model", "dry_branches_medium_01", False),
 }
@@ -677,7 +678,7 @@ PROP_MESHES = {
 # Things that lie on the ground rather than grow from one point: they're laid to the ground's slope, then bedded in
 # until no part of their underside is above it. (kind: how much of its footprint must be bedded, the most of its
 # height that may be buried.) A piece that can't be bedded within that isn't placed.
-LYING = {"outcrop": (0.9, 0.7), "boulder": (0.7, 0.65), "log": (0.9, 0.6), "branch": (0.85, 0.8)}
+LYING = {"outcrop": (0.9, 0.7), "boulder": (0.7, 0.65), "log": (0.9, 0.6), "branch": (0.85, 0.8), "shell": (0.5, 0.9)}
 
 
 def _bed_into_ground(island, mesh, prop, origin):

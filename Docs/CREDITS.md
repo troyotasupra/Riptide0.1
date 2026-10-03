@@ -66,6 +66,12 @@ All from [Poly Haven](https://polyhaven.com), CC0, photo-scanned. Each folder ho
 | `grass_bermuda_01` | [polyhaven.com/a/grass_bermuda_01](https://polyhaven.com/a/grass_bermuda_01) | grass tufts (imported, not planted yet) |
 | `dead_tree_trunk_02` | [polyhaven.com/a/dead_tree_trunk_02](https://polyhaven.com/a/dead_tree_trunk_02) | driftwood logs |
 | `dry_branches_medium_01` | [polyhaven.com/a/dry_branches_medium_01](https://polyhaven.com/a/dry_branches_medium_01) | driftwood branches |
+| `tree_small_02` | [polyhaven.com/a/tree_small_02](https://polyhaven.com/a/tree_small_02) | scrub trees (second shape) |
+| `island_tree_01` | [polyhaven.com/a/island_tree_01](https://polyhaven.com/a/island_tree_01) | larger coastal trees |
+| `grass_medium_01` | [polyhaven.com/a/grass_medium_01](https://polyhaven.com/a/grass_medium_01) | grass clumps |
+| `shrub_sorrel_01` | [polyhaven.com/a/shrub_sorrel_01](https://polyhaven.com/a/shrub_sorrel_01) | low ground cover under the trees |
+| `shrub_04` | [polyhaven.com/a/shrub_04](https://polyhaven.com/a/shrub_04) | low shrubs |
+| `lambis_shell` | [polyhaven.com/a/lambis_shell](https://polyhaven.com/a/lambis_shell) | shells along the tide line |
 
 The coconut palms are our own, generated in code (`Content/Python/riptide_palm_mesh.py`).
 

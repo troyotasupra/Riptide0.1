@@ -12,14 +12,15 @@ MATERIALS_PATH = "/Game/Riptide/Materials"
 PALMS_PATH = f"{ISLANDS_PATH}/Palms"
 MODELS_PATH = f"{ISLANDS_PATH}/Models"
 REVIEW_MAP_PATH = "/Game/Riptide/Maps/Props_Review"
-PROPS_VERSION = "6"
+PROPS_VERSION = "7"
 
 # The scanned models: name -> how its meshes are treated. "rock": solid, drawn with Nanite. "plant": leaves cut out
 # by their alpha picture, lit from both sides. "wood": solid, plain.
 MODELS = {
     "coastal_cliff_02": "rock", "coast_rocks_05": "rock", "boulder_01": "rock", "sand_rocks_small_01": "rock",
-    "island_tree_02": "plant", "searsia_lucida": "plant", "fern_02": "plant", "grass_bermuda_01": "plant",
-    "dead_tree_trunk_02": "wood", "dry_branches_medium_01": "wood",
+    "island_tree_02": "plant", "tree_small_02": "plant", "island_tree_01": "plant", "searsia_lucida": "plant",
+    "shrub_sorrel_01": "plant", "shrub_04": "plant", "fern_02": "plant", "grass_bermuda_01": "plant", "grass_medium_01": "plant",
+    "dead_tree_trunk_02": "wood", "dry_branches_medium_01": "wood", "lambis_shell": "wood",
 }
 
 
@@ -387,7 +388,7 @@ def make_model_assets():
 
         def material_for(slot, model=model, kind=kind, textures=textures, folder=folder):
             # A slot's pictures are the model's own, or a named part's (island_tree_02_leaves, ..._branches).
-            part = next((p for p in ("leaves", "branches") if p in slot.lower() and f"{model}_{p}_diff" in textures), None)
+            part = next((p for p in ("leaves", "branches", "branch") if p in slot.lower() and f"{model}_{p}_diff" in textures), None)
             stem = f"{model}_{part}" if part else model
             alpha = textures.get(f"{stem}_alpha")
             pictures = {"Diffuse": textures.get(f"{stem}_diff"), "Normal": textures.get(f"{stem}_nor_gl"),
@@ -419,7 +420,7 @@ def make_model_assets():
             # grass and twigs stay ordinary meshes.
             heavy = obj.get_num_triangles(0) > 5000
             _dress(obj, path.split(".")[0], material_for, nanite=(kind == "rock" or heavy), leafy=(kind == "plant"),
-                   solid=(kind != "plant" or model == "island_tree_02"))
+                   solid=(kind not in ("plant",) or model in ("island_tree_02", "tree_small_02", "island_tree_01")))
             box = obj.get_bounding_box()
             entry = {"path": path.split(".")[0], "kind": kind, "slots": slots,
                      "min": [box.min.x, box.min.y, box.min.z], "max": [box.max.x, box.max.y, box.max.z],
@@ -479,12 +480,12 @@ def build_review_map(ns, rebuilt):
 
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     floor = actors.spawn_actor_from_object(unreal.load_asset("/Engine/BasicShapes/Plane"), unreal.Vector(0, 0, 0))
-    floor.set_actor_scale3d(unreal.Vector(400.0, 400.0, 1.0))
     grey = unreal.load_asset(f"{MATERIALS_PATH}/M_IslandGrey")
     if grey:
         floor.static_mesh_component.set_material(0, grey)
 
     layout = []
+    widest = 0.0
     rows = [[f"{PALMS_PATH}/{name}" for name in riptide_palm_mesh.PALMS]]
     catalogue = model_catalogue()
     for model in MODELS:
@@ -507,7 +508,11 @@ def build_review_map(ns, rebuilt):
                            "size": [width, depth, box.max.z - box.min.z]})
             x += width + 1500.0
             deepest = max(deepest, depth)
+        widest = max(widest, x)
         y += deepest + 2500.0
+    # The floor (a 1 m plane) stretched under every row, with 30 m to spare each way.
+    floor.set_actor_location(unreal.Vector(widest / 2.0, y / 2.0, 0.0), False, False)
+    floor.set_actor_scale3d(unreal.Vector(widest / 100.0 + 60.0, y / 100.0 + 60.0, 1.0))
     spawn(unreal.PlayerStart, (-1000.0, -1000.0, 300.0))
     world = unreal.EditorLevelLibrary.get_editor_world()
     world.get_world_settings().set_editor_property("default_game_mode", unreal.GameModeBase)

@@ -48,6 +48,12 @@ def _mark(kind, up):
     return (mark["x"] - up * 0.35, mark["y"] - up * 0.35, island.height(mark["x"], mark["y"]) + up)
 
 
+def _prop(kind, up):
+    """Where the first prop of a kind stands (design metres), `up` metres above it and a little to one side."""
+    prop = next(p for p in island.props() if p["kind"] == kind)
+    return (prop["x"] - up * 0.5, prop["y"] - up * 0.5, island.height(prop["x"], prop["y"]) + up)
+
+
 def _shots():
     bx, by = island.beach
     ox, oy = island.beach_out
@@ -80,7 +86,7 @@ def _shots():
         ("22_low_off_the_spit", island.place(-100.0, 42.0) + (1.3,), island.place(-70.0, 12.0) + (1.0,)),
         ("23_tide_line_close", (bx - out[0] * 3.0 + out[1] * 6.0, by - out[1] * 3.0 - out[0] * 6.0, 1.1), (bx - out[0] * 4.5 - out[1] * 6.0, by - out[1] * 4.5 + out[0] * 6.0, 1.2)),
         ("24_beach_from_the_dune", standing(bx - out[0] * 18.0, by - out[1] * 18.0), (bx + out[0] * 10.0 + out[1] * 20.0, by + out[1] * 10.0 - out[0] * 20.0, 0.8)),
-        ("25_shell_drift_from_above", _mark("shells", 3.5), _mark("shells", 0.0)),
+        ("25_shell_on_the_tide_line", _prop("shell", 0.9), _prop("shell", 0.0)),
         ("26_wrack_line_from_above", _mark("wrack", 3.0), _mark("wrack", 0.0)),
         ("27_damp_patch_from_above", _mark("damp", 4.0), _mark("damp", 0.0)),
         ("16_cliff_edge_from_above", island.place(46.0, -40.0) + (9.0,), island.place(58.0, -44.0) + (0.0,)),
