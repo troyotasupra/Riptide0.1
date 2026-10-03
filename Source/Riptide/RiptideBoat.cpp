@@ -1,4 +1,5 @@
 #include "RiptideBoat.h"
+#include "RiptideHudOverlay.h"
 
 #include "BuoyancyComponent.h"
 #include "Camera/CameraComponent.h"
@@ -2372,31 +2373,24 @@ void ARiptideBoat::SetHelmInput(float Throttle, float Steer)
 
 void ARiptideBoat::DrawDebugHud() const
 {
-	if (!GEngine)
-	{
-		return;
-	}
-	const uint64 KeyBase = 0x52495054ull;
 	if (Helmsman)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, IsHelmViewOnMic()
+		RiptideHud::Prompt(this, RiptideHud::ESlot::Helm, IsHelmViewOnMic()
 			? (MicHolder && MicHolder == Helmsman ? TEXT("E  Hang up the mic      Hold right mouse  Aim the searchlight      H  Tuning readout") : TEXT("E  Take the radio mic      Hold right mouse  Aim the searchlight      H  Tuning readout"))
-			: TEXT("E  Leave the helm      Hold right mouse  Aim the searchlight (L: full, dim, off)      Look at the radio mic + E  Take it      H  Tuning readout"));
+			: TEXT("E  Leave the helm      Hold right mouse  Aim the searchlight      L  Searchlight: full, dim, off      H  Tuning readout"));
 	}
 	if (!bShowDebugHud)
 	{
 		return;
 	}
-	GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
-		FString::Printf(TEXT("Speed %.1f kn   Throttle %+.0f%%   Engine %+.0f%%"),
-			GetSpeedKnots(), ThrottleLever * 100.f, EngineOutput * 100.f));
-	GEngine->AddOnScreenDebugMessage(KeyBase + 1, 0.f, FColor::White,
-		FString::Printf(TEXT("Motors %+.0f deg   Trim %+.0f deg (R/F)   Fuel %.1f L   Engine health %.0f%%"),
-			SteerAngleDeg, TrimDeg, FuelLiters, GetEngineHealth() * 100.f));
+	// The tuning readout (H): speed, controls, motors and props, on one line.
 	const bool bPort = IsPropSubmerged(Propeller);
 	const bool bStarboard = IsPropSubmerged(PropellerStarboard);
-	GEngine->AddOnScreenDebugMessage(KeyBase + 2, 0.f, bPort && bStarboard ? FColor::Green : bPort || bStarboard ? FColor::Yellow : FColor::Red,
-		bPort && bStarboard ? TEXT("Props in water") : bPort || bStarboard ? TEXT("One prop out of water") : TEXT("Props out of water"));
+	RiptideHud::Prompt(this, RiptideHud::ESlot::HelmReadout,
+		FString::Printf(TEXT("%.1f kn   throttle %+.0f%%   engine %+.0f%%   motors %+.0f deg   trim %+.0f deg (R/F)   fuel %.1f L   health %.0f%%   %s"),
+			GetSpeedKnots(), ThrottleLever * 100.f, EngineOutput * 100.f, SteerAngleDeg, TrimDeg, FuelLiters, GetEngineHealth() * 100.f,
+			bPort && bStarboard ? TEXT("props in water") : bPort || bStarboard ? TEXT("ONE PROP OUT") : TEXT("PROPS OUT")),
+		bPort && bStarboard ? FLinearColor::White : FLinearColor(1.f, 0.75f, 0.3f));
 }
 
 // --- Props and wheel ---

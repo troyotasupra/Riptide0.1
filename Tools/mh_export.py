@@ -99,6 +99,9 @@ def reference_orientations():
     return out, pos
 
 
+# How far the first-person body's neck cap is sunk below its rim (metres).
+CAP_SINK = 0.06
+
 # The bones whose flesh keeps MakeHuman's own posture through the repose (see Repose); everything below the neck's base
 # does too.
 POSTURE_BONES = {"pelvis", "spine_01", "spine_02", "spine_03", "spine_04", "spine_05", "neck_01", "neck_02", "head"}
@@ -333,7 +336,9 @@ def mesh_arrays(mesh, weights, drop_bones=(), cap_bone=None, default_bone="head"
                      key=lambda v: math.atan2(positions[v][2] - 0.0, positions[v][0] - 0.0))
         rim = [v for v in rim if positions[v][1] > 1.0]      # the neck's rim, not the soles' (closed anyway)
         if len(rim) >= 3:
-            centre = np.mean([positions[v] for v in rim], axis=0)
+            # Sunk into the chest a little (a shallow funnel), so the collar's shadow falls in it and it doesn't read
+            # as a flat disc of skin inside the shirt.
+            centre = np.mean([positions[v] for v in rim], axis=0) - np.array([0.0, CAP_SINK, 0.0])
             ci = len(positions)
             positions.append(centre.astype(np.float32)); normals.append(np.array([0.0, 1.0, 0.0], np.float32)); uvs.append((0.5, 0.5))
             joints.append([cap_bone, None, None, None]); wts.append([1.0, 0.0, 0.0, 0.0])
@@ -477,9 +482,10 @@ def main():
                  ("Eyelashes", h.getEyelashesProxy().object), ("Teeth", h.getTeethProxy().object)]
         slots = {"Body": "Skin_" + body, "Eyes": "Eyes", "Eyebrows": "Brows_" + body, "Eyelashes": "Lashes", "Teeth": "Teeth"}
         write_gltf(os.path.join(folder, body + "_FullBody.gltf"), h.getSkeleton(), collect(h, parts, slots))
-        # The body seen from one's own eyes: no head, the neck closed, so looking down shows a chest, not a funnel.
+        # The body seen from one's own eyes: no head and no neck (cut at the neck's base, inside the shirt's collar),
+        # closed, so looking down shows a chest, not a funnel or a disc of skin.
         write_gltf(os.path.join(folder, body + "_FullBody_FP.gltf"), h.getSkeleton(),
-                   collect(h, [("Body", h)], slots, drop_bones=("head",), cap_bone="neck_01"))
+                   collect(h, [("Body", h)], slots, drop_bones=("head", "neck_01"), cap_bone="spine_03"))
         for asset, style in HAIR.items():
             h.setHairProxy(load_proxy(h, "hair/%s/%s.mhpxy" % (style, style), "Hair"))
             write_gltf(os.path.join(folder, asset + ".gltf"), h.getSkeleton(), collect(h, [("Hair", h.getHairProxy().object)], {"Hair": "Hair_" + style}))

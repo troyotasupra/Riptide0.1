@@ -30,6 +30,7 @@
 #include "RiptideSprayComponent.h"
 #include "RiptideWorldItem.h"
 #include "RiptideVoice.h"
+#include "RiptideHudOverlay.h"
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
 #include "Widgets/SWeakWidget.h"
@@ -251,7 +252,7 @@ void ARiptidePlayerController::DevNote(const FString& Text, const FColor& Colour
 {
 	if (GEngine && IsLocalController())
 	{
-		GEngine->AddOnScreenDebugMessage(DevNoteKey, Seconds, Colour, Text);
+		RiptideHud::Note(this, Text, Seconds, FLinearColor(Colour), int32(DevNoteKey & 0x7fffffff));
 	}
 	UE_LOG(LogRiptideDev, Log, TEXT("Dev: %s"), *Text);
 }

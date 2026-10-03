@@ -2322,7 +2322,8 @@ def _strap_over(m, surf, fit, side, z, width, thick, material, lift=0.5, span=1.
         path.append(add(p, mul(n, lift)))
         normals.append(n)
     skin_of = lambda q: surf.closest(q, 8.0)[2]
-    m.strap(path, normals, width, thick, material, skin_of)
+    # Vertex colour black: the Boot material's plain leather (white would read as its rubber sole: black).
+    m.strap(path, normals, width, thick, material, skin_of, colour=(0.0, 0.0, 0.0, 1.0))
 
 
 def build_slides(fit):
@@ -2356,7 +2357,7 @@ def build_sandals(fit):
             p, n, _ = surf.closest((x, y, z), 8.0)
             path.append(add(p, mul(n, 0.45)))
             normals.append(n)
-        m.strap(path, normals, 1.8, 0.35, "Boot", lambda q: surf.closest(q, 8.0)[2])
+        m.strap(path, normals, 1.8, 0.35, "Boot", lambda q: surf.closest(q, 8.0)[2], colour=(0.0, 0.0, 0.0, 1.0))
     return m
 
 

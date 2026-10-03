@@ -170,12 +170,6 @@ private:
 
 	bool bPushToTalk = false;
 
-	struct FHeardLine
-	{
-		FString Text;
-		double Until = 0.0;
-	};
-	TArray<FHeardLine> HeardLines;
 	FString LastHeardLine;
 };
 

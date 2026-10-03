@@ -18,6 +18,7 @@
 #include "OnlineSubsystemUtils.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
+#include "RiptideHudOverlay.h"
 #include "RiptidePlayerController.h"
 #include "RiptideSettings.h"
 #include "VoiceEngineImpl.h"
@@ -474,11 +475,7 @@ void URiptideVoiceComponent::HearRadioLine(int32 Channel, ARiptideBoat* FromBoat
 		}
 	}
 	LastHeardLine = Text;
-	HeardLines.Add({ Text, FPlatformTime::Seconds() + LineSeconds });
-	if (HeardLines.Num() > 4)
-	{
-		HeardLines.RemoveAt(0);
-	}
+	RiptideHud::Note(Cast<APlayerController>(GetOwner()), Text, LineSeconds, FLinearColor(1.f, 0.86f, 0.55f));
 	UE_LOG(LogTemp, Log, TEXT("Riptide: heard %s"), *Text);
 }
 
@@ -491,43 +488,31 @@ void URiptideVoiceComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 		BuildInput();
 	}
 	UpdateTalkers();
-	const double Now = FPlatformTime::Seconds();
-	HeardLines.RemoveAll([Now](const FHeardLine& L) { return L.Until < Now; });
 	DrawHud();
 }
 
 void URiptideVoiceComponent::DrawHud() const
 {
-	if (!GEngine)
-	{
-		return;
-	}
-	// Temporary readouts until the real HUD exists (keys above the crew's and the boat's prompts).
-	const uint64 KeyBase = 0x52495054ull + 20;
 	const APlayerController* PC = Cast<APlayerController>(GetOwner());
 	const ARiptideCharacter* Crew = PC ? CrewOf(PC->PlayerState) : nullptr;
 	const ARiptideBoat* Boat = RadioInReach();
 	const bool bHolding = Boat && Boat->GetMicHolder() == Crew;
+	const FLinearColor Live(1.f, 0.35f, 0.27f), Calm(0.47f, 0.84f, 1.f);
 	if (bHolding)
 	{
 		const bool bHailer = Boat->GetMicMode() == ERiptideMicMode::Loudhailer;
-		const FString Mode = bHailer ? TEXT("LOUDHAILER") : FString::Printf(TEXT("CB channel %d"), Boat->GetRadioChannel());
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, bPushToTalk ? FColor(255, 90, 70) : FColor(120, 215, 255),
-			FString::Printf(TEXT("%s%s      Hold V  Talk      [ ]  Channel      B  %s"), bPushToTalk ? TEXT("TRANSMITTING  ") : TEXT(""), *Mode,
-				bHailer ? TEXT("Switch to the CB") : TEXT("Switch to the loudhailer")));
+		const FString Mode = bHailer ? TEXT("Loudhailer") : FString::Printf(TEXT("CB channel %d"), Boat->GetRadioChannel());
+		RiptideHud::Prompt(PC, RiptideHud::ESlot::Radio,
+			FString::Printf(TEXT("%s%s      Hold V  Talk      [ ]  Channel      B  %s"), bPushToTalk ? TEXT("ON AIR  ") : TEXT(""), *Mode,
+				bHailer ? TEXT("Switch to the CB") : TEXT("Switch to the loudhailer")), bPushToTalk ? Live : Calm);
 	}
 	else if (Boat)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor(120, 215, 255),
-			FString::Printf(TEXT("Radio: CB channel %d      [ ]  Channel"), Boat->GetRadioChannel()));
+		RiptideHud::Prompt(PC, RiptideHud::ESlot::Radio, FString::Printf(TEXT("Radio on CB channel %d      [ ]  Channel"), Boat->GetRadioChannel()), Calm);
 	}
 	else if (bPushToTalk)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor(255, 90, 70), TEXT("Talking"));
-	}
-	for (int32 i = 0; i < HeardLines.Num(); ++i)
-	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 1 + i, 0.f, FColor(255, 220, 140), HeardLines[i].Text);
+		RiptideHud::Prompt(PC, RiptideHud::ESlot::Radio, TEXT("Talking"), Live);
 	}
 }
 

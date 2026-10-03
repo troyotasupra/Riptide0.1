@@ -1,4 +1,5 @@
 #include "RiptideCharacter.h"
+#include "RiptideHudOverlay.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -1588,41 +1589,28 @@ void ARiptideCharacter::CloseInventoryIfOutOfReach()
 
 void ARiptideCharacter::DrawHud() const
 {
-	if (!GEngine)
-	{
-		return;
-	}
-	// Temporary prompts until the real HUD exists (same keys as the boat's readout, which is off while walking).
-	const uint64 KeyBase = 0x52495054ull;
+	auto Say = [this](const FColor& Colour, const FString& Text) { RiptideHud::Prompt(this, RiptideHud::ESlot::Context, Text, FLinearColor(Colour)); };
 	if (IsInventoryOpen())
 	{
 		return;
 	}
-	// How the body is doing, until the real HUD exists: bars of ten, red when low.
+	// How the body is doing.
 	if (Survival && IsPlayerControlled())
 	{
 		const FRiptideVitals& V = Survival->GetVitals();
-		auto Bar = [](float Value) { const int32 N = FMath::Clamp(FMath::RoundToInt(Value / 10.f), 0, 10); return FString::ChrN(N, TEXT('#')) + FString::ChrN(10 - N, TEXT('-')); };
-		const bool bLow = V.Health < 30.f || V.Hunger < 20.f || V.Thirst < 20.f;
-		GEngine->AddOnScreenDebugMessage(KeyBase + 8, 0.f, bLow ? FColor::Orange : FColor(200, 200, 200),
-			FString::Printf(TEXT("Health [%s]  Food [%s]  Water [%s]%s"), *Bar(V.Health), *Bar(V.Hunger), *Bar(V.Thirst), V.Sickness > 0.f ? TEXT("  Sick") : TEXT("")));
+		RiptideHud::Vitals(this, V.Health, V.Hunger, V.Thirst, V.Sickness > 0.f);
 	}
 	// The thing under the crosshair: what E does with it, and how far a hold has got.
 	if (Interaction && Interaction->HasFocus())
 	{
 		const FRiptideInteraction& Use = Interaction->GetFocus().Interaction;
-		FString Line = Use.bEnabled ? FString::Printf(TEXT("E  %s"), *Use.Prompt.ToString()) : Use.WhyNot.ToString();
-		if (Use.HoldSeconds > 0.f && Use.bEnabled)
-		{
-			const int32 Done = FMath::RoundToInt(Interaction->GetHoldFraction() * 10.f);
-			Line += FString::Printf(TEXT("  [%s%s]"), *FString::ChrN(Done, TEXT('#')), *FString::ChrN(10 - Done, TEXT('-')));
-		}
-		GEngine->AddOnScreenDebugMessage(KeyBase + 7, 0.f, Use.bEnabled ? FColor::White : FColor(180, 180, 180), Line);
+		RiptideHud::Prompt(this, RiptideHud::ESlot::Focus, Use.bEnabled ? FString::Printf(TEXT("E  %s"), *Use.Prompt.ToString()) : Use.WhyNot.ToString(),
+			Use.bEnabled ? FLinearColor::White : FLinearColor(0.7f, 0.7f, 0.7f), Use.HoldSeconds > 0.f && Use.bEnabled ? Interaction->GetHoldFraction() : -1.f);
 	}
 	if (IsOnLadder() && IsValid(HomeBoat))
 	{
 		const float Top = HomeBoat->GetActorTransform().InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation()).Z + LadderHighestFeet;
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, LadderFeetZ >= Top - 1.f
+		Say(FColor::White, LadderFeetZ >= Top - 1.f
 			? TEXT("On the ladder:  W  Climb aboard    S  Climb down    Space  Let go")
 			: TEXT("On the ladder:  W  Climb    S  Climb down    Space  Let go"));
 	}
@@ -1631,59 +1619,59 @@ void ARiptideCharacter::DrawHud() const
 	}
 	else if (IsAtLadder())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Swim into the ladder to take hold of it"));
+		Say(FColor::White, TEXT("Swim into the ladder to take hold of it"));
 	}
 	else if (IsInSea() && IsValid(HomeBoat) && !IsLadderFree()
 		&& FVector::Dist(GetActorLocation(), HomeBoat->GetLadderFootTransform().GetLocation()) <= LadderReach)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Someone's on the ladder"));
+		Say(FColor::White, TEXT("Someone's on the ladder"));
 	}
 	else if (IsKnockedDown())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::Orange, TEXT("Knocked off your feet!  Hold Shift near a rail at speed"));
+		Say(FColor::Orange, TEXT("Knocked off your feet!  Hold Shift near a rail at speed"));
 	}
 	else if (IsInSea() && HomeBoat)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Swimming: the boarding ladder is on the stern, port side.  Space up, C dive"));
+		Say(FColor::White, TEXT("Swimming: the boarding ladder is on the stern, port side.  Space up, C dive"));
 	}
 	else if (CanGrabMic())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Take the radio mic"));
+		Say(FColor::White, TEXT("E  Take the radio mic"));
 	}
 	else if (IsHoldingMic() && HomeBoat && IsLookingAt(HomeBoat->GetMicHookLocation(), MicReach + 60.f, 25.f))
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Hang up the mic"));
+		Say(FColor::White, TEXT("E  Hang up the mic"));
 	}
 	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+		Say(FColor::White,
 			FString::Printf(TEXT("E  Open the %s"), *HomeBoat->GetLockers()->GetStorage(Locker)->Title.ToString().ToLower()));
 	}
 	else if (IsAtHelm())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+		Say(FColor::White,
 			IsHoldingMic() ? TEXT("E  Take the helm    (holding the radio mic: look at its clip and press E to hang it up)") : TEXT("E  Take the helm"));
 	}
 	else if (IsValid(HomeBoat) && HomeBoat->GetHelmsman() && HomeBoat->GetHelmsman() != this && !bManningHelm
 		&& FVector::Dist(GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight()),
 			HomeBoat->GetHelmStandTransform().GetLocation()) <= HelmReach)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Someone's at the helm"));
+		Say(FColor::White, TEXT("Someone's at the helm"));
 	}
 	else if (CanRefuel())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+		Say(FColor::White,
 			FString::Printf(TEXT("E  Pour the fuel drum in (tank %d%%)"), FMath::RoundToInt(HomeBoat->GetFuelFraction() * 100.f)));
 	}
 	else if (int32 Grid, Uid; IsValid(HomeBoat) && !bManningHelm && !IsInSea() && FindFuelDrum(Grid, Uid) && !HomeBoat->HasRoomForFuel(DrumLiters)
 		&& FVector::Dist(GetActorLocation(), HomeBoat->GetFuelFillerTransform().GetLocation()) < 200.f)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+		Say(FColor::White,
 			FString::Printf(TEXT("The tank's too full for a whole drum (%d%%)"), FMath::RoundToInt(HomeBoat->GetFuelFraction() * 100.f)));
 	}
 	else if (IsValid(HomeBoat) && IsStandingOnBoat() && HomeBoat->GetSpeedKnots() > 12.f)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, IsBraced() ? FColor::Green : FColor::White,
+		Say(IsBraced() ? FColor::Green : FColor::White,
 			IsBraced() ? TEXT("Holding on") : HomeBoat->IsHandholdNear(GetActorLocation(), HandholdReach)
 				? TEXT("Shift  Hold on") : TEXT("Get to a rail: the boat's moving fast"));
 	}

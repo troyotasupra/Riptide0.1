@@ -306,8 +306,12 @@ void URiptideCrewBodyComponent::ColourAll()
 	const FLinearColor Hair = URiptideAppearanceLibrary::GetHairColour(Appearance.Get(ERiptideLook::HairColour));
 	const int32 GearOption = Appearance.Get(ERiptideLook::GearColour);
 	const FLinearColor Gear = URiptideAppearanceLibrary::GetGearColour(GearOption);
-	// Boots: brown leather with the earth-tone gear (coyote, tan), black with the rest.
-	const FLinearColor Boots = GearOption == 0 || GearOption == 4 ? FLinearColor::FromSRGBColor(FColor(66, 45, 30))
+	// Boots: brown leather with the earth-tone gear (coyote, tan), black with the rest. A castaway's sandals and
+	// slides (worn without the gear) are tan leather.
+	const bool bBeachFootwear = Parts.IsValidIndex(int32(EPart::Footwear)) && Parts[int32(EPart::Footwear)]
+		&& Parts[int32(EPart::Footwear)]->GetSkeletalMeshAsset();
+	const FLinearColor Boots = bBeachFootwear ? FLinearColor::FromSRGBColor(FColor(150, 108, 70))
+		: GearOption == 0 || GearOption == 4 ? FLinearColor::FromSRGBColor(FColor(66, 45, 30))
 		: FLinearColor::FromSRGBColor(FColor(24, 23, 22));
 	const FCamo& Pattern = Camo(Appearance.Get(ERiptideLook::Camo));
 	for (const TPair<TObjectPtr<UMaterialInterface>, TObjectPtr<UMaterialInstanceDynamic>>& Pair : Dynamic)

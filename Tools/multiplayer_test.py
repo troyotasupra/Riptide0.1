@@ -25,7 +25,8 @@ import time
 
 ROLE_FLAG = "-RiptideTestRole="
 HOST_NAME, CLIENT_NAME = "Alpha-1", "Bravo-7"
-CLIENT_LOOK = "1.4.3.2.1.2.3.5.2.3.1.0"   # female, brown skin, long dark hair, boonie hat, balaclava, black uniform...
+CLIENT_LOOK = "1.4.3.2.1.2.3.5.2.3.1.0.2.3.1"   # female, brown skin, long dark hair... (gear choices kept but not worn), shirt, shorts, sandals
+GAME_MAP = "Island_Test"     # what hosting loads (URiptideGameInstance::GameMap)
 TIMEOUT_S = 540
 
 
@@ -150,7 +151,7 @@ def run_in_game(role):
                     check("hosting starts from the menu", gi.host_game(False))
                     go("hosting")
                 elif step == "hosting":
-                    if map_name == "Ocean_Test" and gi.is_hosting():
+                    if map_name == GAME_MAP and gi.is_hosting():
                         check("the host is in the game as a listen server", True)
                         go("waiting for the client")
                     elif waited() > 90:
@@ -173,7 +174,7 @@ def run_in_game(role):
                         pawn = client.get_pawn()
                         check("the client has its own crew member", isinstance(pawn, unreal.RiptideCharacter), str(pawn))
                         if isinstance(pawn, unreal.RiptideCharacter):
-                            check("the client's crew member stands on the boat's deck", pawn.is_standing_on_boat())
+                            check("the client's crew member stands on the island", pawn.get_component_by_class(unreal.CharacterMovementComponent).is_moving_on_ground())
                     crew = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideCharacter)
                     check("two crew members are aboard", len(crew) == 2, str(len(crew)))
                     hud = unreal.GameplayStatics.get_player_controller(world, 0).get_hud()
@@ -187,7 +188,11 @@ def run_in_game(role):
                     crew = pc.get_controlled_pawn()
                     boat = crew.get_home_boat() if isinstance(crew, unreal.RiptideCharacter) else None
                     r = st.setdefault("radio", {})
-                    if boat and "took" not in r:
+                    if not boat:
+                        # Castaways start on the beach with no boat: nothing to work but their own voices.
+                        log("no boat in this game: the radio checks wait for one")
+                        go("waiting for the client to leave")
+                    elif "took" not in r:
                         crew.set_actor_location(boat.get_actor_transform().transform_location(unreal.Vector(-95.0, 25.0, 112.0)), False, True)
                         eye = crew.get_component_by_class(unreal.CameraComponent).get_world_location()
                         to = boat.get_mic_hook_location() - unreal.Vector(0, 0, 6) - eye
@@ -210,7 +215,7 @@ def run_in_game(role):
                             go("waiting for the client to leave")
                 elif step == "waiting for the client to leave":
                     if len(unreal.GameplayStatics.get_game_state(world).player_array) == 1:
-                        check("the host sees the client leave, and its game goes on", map_name == "Ocean_Test")
+                        check("the host sees the client leave, and its game goes on", map_name == GAME_MAP)
                         finish()
                     elif waited() > 180:
                         finish("the client never left")
@@ -257,7 +262,7 @@ def run_in_game(role):
                     check("joining the found game starts", index >= 0 and gi.join_game(index))
                     go("joining")
                 elif step == "joining":
-                    if map_name == "Ocean_Test" and not gi.is_hosting():
+                    if map_name == GAME_MAP and not gi.is_hosting():
                         go("joined")
                     elif waited() > 90:
                         finish("the client never got into the host's game")
@@ -271,8 +276,7 @@ def run_in_game(role):
                     pawn = pc.get_controlled_pawn()
                     check("it controls its own crew member", isinstance(pawn, unreal.RiptideCharacter), str(pawn))
                     if isinstance(pawn, unreal.RiptideCharacter):
-                        check("its crew member stands on the boat's deck", pawn.is_standing_on_boat())
-                        check("its crew member belongs to the boat", pawn.get_home_boat() is not None)
+                        check("its crew member stands on the island", pawn.get_component_by_class(unreal.CharacterMovementComponent).is_moving_on_ground())
                     crew = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideCharacter)
                     check("it sees both crew members", len(crew) == 2, str(len(crew)))
                     hud = pc.get_hud()
@@ -286,6 +290,18 @@ def run_in_game(role):
                     host = next((s for s in unreal.GameplayStatics.get_game_state(world).player_array if s.get_player_name() == HOST_NAME), None)
                     route = unreal.RiptideVoiceComponent.route_for(host, pc) if host else None
                     r = st.setdefault("radio", {})
+                    if host and not pc.get_controlled_pawn().get_home_boat() and "no_boat" not in r:
+                        r["no_boat"] = True
+                        check("castaways without a boat hear each other's own voices", route == unreal.RiptideVoiceRoute.PROXIMITY, str(route))
+                        voice = pc.get_component_by_class(unreal.RiptideVoiceComponent)
+                        voice.set_push_to_talk(True)
+                        check("push-to-talk starts and stops", voice.is_pushing_to_talk())
+                        voice.set_push_to_talk(False)
+                        hud = pc.get_hud()
+                        hud.set_menu_open(True)
+                        check("the in-game menu opens", hud.is_menu_open())
+                        go("menu open")
+                        return
                     if route == unreal.RiptideVoiceRoute.LOUDHAILER and "hailer" not in r:
                         r["hailer"] = True
                         check("the host's voice comes out of the loudhailer when it switches the mic to it", True)

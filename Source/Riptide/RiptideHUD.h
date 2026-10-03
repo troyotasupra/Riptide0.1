@@ -3,9 +3,11 @@
 #include "CoreMinimal.h"
 #include "GameFramework/HUD.h"
 #include "Widgets/SCompoundWidget.h"
+#include "RiptideHudOverlay.h"
 #include "RiptideHUD.generated.h"
 
 class SRiptideButton;
+class SRiptideHudOverlay;
 class SRiptideSettingsPanel;
 class SWidgetSwitcher;
 class UInputAction;
@@ -82,6 +84,27 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Menu")
 	bool IsGameInputActive() const;
 
+	// What the in-game overlay shows (SRiptideHudOverlay; posted through the RiptideHud functions).
+	struct FPrompt
+	{
+		FString Text;
+		FLinearColor Colour = FLinearColor::White;
+		float Progress = -1.f;
+		double Time = -1.0;
+	};
+	struct FNote
+	{
+		FString Text;
+		FLinearColor Colour = FLinearColor::White;
+		double Until = 0.0;
+		int32 Key = INDEX_NONE;
+	};
+	FPrompt Prompts[int32(RiptideHud::ESlot::Count)];
+	float VitalHealth = -1.f, VitalFood = -1.f, VitalWater = -1.f;
+	bool bVitalSick = false;
+	double VitalsTime = -1.0;
+	TArray<FNote> Notes;
+
 	/** Shows the settings in the open menu (or back to its buttons). */
 	UFUNCTION(BlueprintCallable, Category = "Menu")
 	void ShowMenuSettings(bool bShow);
@@ -102,6 +125,7 @@ private:
 	TObjectPtr<UInputAction> FreeCursorAction;
 
 	TSharedPtr<SRiptidePauseMenu> Menu;
+	TSharedPtr<SRiptideHudOverlay> Overlay;
 	/** Set while the menu holds the player's movement and look input off. */
 	bool bIgnoringInput = false;
 	/** Set while Left Alt is held and the cursor is free. */
