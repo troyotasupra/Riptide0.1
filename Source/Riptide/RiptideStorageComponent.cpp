@@ -14,11 +14,12 @@ void URiptideStorageComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProper
 	DOREPLIFETIME(URiptideStorageComponent, Storages);
 }
 
-int32 URiptideStorageComponent::AddStorage(const FText& Title, int32 Width, int32 Height, const FVector& Point)
+int32 URiptideStorageComponent::AddStorage(const FText& Title, int32 Width, int32 Height, const FVector& Point, const FVector2D& LidHalfSize)
 {
 	FRiptideStorage& Storage = Storages.AddDefaulted_GetRef();
 	Storage.Title = Title;
 	Storage.Point = Point;
+	Storage.LidHalfSize = LidHalfSize;
 	Storage.Grid.Width = Width;
 	Storage.Grid.Height = Height;
 	return Storages.Num() - 1;
@@ -43,6 +44,40 @@ FVector URiptideStorageComponent::GetWorldPoint(int32 Index) const
 {
 	const AActor* Owner = GetOwner();
 	return Storages.IsValidIndex(Index) && Owner ? Owner->GetActorTransform().TransformPosition(Storages[Index].Point) : FVector::ZeroVector;
+}
+
+int32 URiptideStorageComponent::FindLookedAt(const FVector& Eye, const FVector& Direction, float Reach) const
+{
+	const AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return INDEX_NONE;
+	}
+	// In the owner's frame, where each lid is a level rectangle: where the look crosses the lid's plane, and whether
+	// that's on the lid (a few cm of slack round its edge, for its frame and gasket).
+	const FTransform& Xf = Owner->GetActorTransform();
+	const FVector LocalEye = Xf.InverseTransformPosition(Eye);
+	const FVector LocalDir = Xf.InverseTransformVectorNoScale(Direction.GetSafeNormal());
+	constexpr float Slack = 4.f;
+	int32 Best = INDEX_NONE;
+	float BestDist = Reach;
+	for (int32 i = 0; i < Storages.Num(); ++i)
+	{
+		const FRiptideStorage& S = Storages[i];
+		if (S.LidHalfSize.IsZero() || FMath::Abs(LocalDir.Z) < 1e-3f)
+		{
+			continue;
+		}
+		const float Dist = (S.Point.Z - LocalEye.Z) / LocalDir.Z;
+		const FVector At = LocalEye + LocalDir * Dist;
+		if (Dist > 0.f && Dist <= BestDist && FMath::Abs(At.X - S.Point.X) <= S.LidHalfSize.X + Slack
+			&& FMath::Abs(At.Y - S.Point.Y) <= S.LidHalfSize.Y + Slack)
+		{
+			Best = i;
+			BestDist = Dist;
+		}
+	}
+	return Best;
 }
 
 int32 URiptideStorageComponent::FindNearest(const FVector& World, float Reach) const

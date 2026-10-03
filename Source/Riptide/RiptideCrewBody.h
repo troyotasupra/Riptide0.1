@@ -68,12 +68,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool HasBody() const { return GetSkeletalMeshAsset() != nullptr; }
 
-	// The rifle in the RifleReady pose: its grip sits this far from the right wrist toward the knuckles, it aims
-	// along the body's facing tipped down a little, and its bore is this high above the grip (shared with the
-	// animation, which puts the left hand on the handguard).
-	static constexpr float RifleGripAlongHand = 0.55f;
-	static constexpr float RifleBoreHeight = 8.8f;
+	// The rifle in the RifleReady pose, shouldered: placed from the body (its stock in the right shoulder's pocket,
+	// its sights at the eye), aimed along the body's facing tipped down a little. Shared with the animation, which
+	// puts the hands on it.
 	static FQuat RifleAim() { return FQuat(FVector(1.f, 0.f, 0.f), FMath::DegreesToRadians(-4.f)); }
+
+	/** The rifle model's placement in the body's component space, from the posed right upper arm and head. */
+	static FTransform RifleInComponent(const FVector& UpperArmR, const FVector& Head);
 
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void OnUnregister() override;

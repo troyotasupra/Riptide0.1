@@ -156,7 +156,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	URiptideStorageComponent* GetInventory() const { return Inventory; }
 
-	/** The home boat's locker within reach, or -1. */
+	/** The home boat's locker whose lid the player is looking at, within reach, or -1. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	int32 GetLockerInReach() const;
 
@@ -192,9 +192,9 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Crew")
 	TObjectPtr<URiptideStorageComponent> Inventory;
 
-	/** How close (cm) a locker's lid has to be to open it. */
+	/** How far (cm) from the eyes a locker's lid can be looked at and opened. */
 	UPROPERTY(EditAnywhere, Category = "Crew")
-	float LockerReach = 150.f;
+	float LockerReach = 230.f;
 
 	virtual void BeginPlay() override;
 
