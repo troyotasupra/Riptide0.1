@@ -153,6 +153,13 @@ def checks(island):
     edge = max(abs(island.height(sx * island.extent, t * island.extent) - island.deep)
                for sx in (-1, 1) for t in (-1.0, -0.5, 0.0, 0.5, 1.0))
     report(edge < 0.5, "the seabed reaches its deep level all round the patch's edge")
+
+    # The sea cliffs: every edge of each cliff skin is underground, and no part of a face is turned inland.
+    import riptide_island_cliff as cliff
+    meshes, edges, folds = cliff.build_cliffs(island)
+    checked, exposed, shallowest = cliff.check_sealed(island, edges)
+    report(exposed == 0, f"the {len(meshes)} cliffs are sealed into the ground ({checked} edge points, shallowest {shallowest:.2f} m under)")
+    report(folds == 0, f"no cliff face is turned inside out ({folds} folded quads)")
     return ok
 
 

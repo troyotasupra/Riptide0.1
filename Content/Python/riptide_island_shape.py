@@ -407,11 +407,25 @@ class StartCay(Island):
         return h
 
     def _knoll(self, x, y):
-        """0..1: the bluff's shape. Its edge wanders, its sides are steep and its top nearly flat, tilted a
-        little so the highest ground is on the seaward lip."""
+        """0..1: the bluff's shape: a flat-topped block of bedded limestone, not a dome. The sides that face away
+        from the bay rise in three benches, each a steep broken riser of rock (itself in two or three beds) under a
+        nearly level tread; the back, toward the bay, is a plain slope the crew walks up. The edge wanders, and the
+        top tilts a little so the highest ground is on the seaward lip."""
         kx, ky = x - self.knoll[0], y - self.knoll[1]
         dist = math.hypot(kx, ky) * (1.0 + 0.22 * fbm(x / 18.0, y / 18.0, 13))
         side = 1.0 - smoothstep(self.KNOLL_RADIUS * 0.42, self.KNOLL_RADIUS, dist)
+        # The side facing the wash-up beach is the way up: a plain slope. Everything else is benched.
+        wx, wy = self.beach[0] - self.knoll[0], self.beach[1] - self.knoll[1]
+        way = math.hypot(wx, wy) or 1.0
+        toward_beach = (kx * wx + ky * wy) / (way * (math.hypot(kx, ky) + 1e-9))
+        benched = (1.0 - smoothstep(0.3, 0.75, toward_beach)) * smoothstep(0.0, 0.12, side) * (1.0 - smoothstep(0.88, 1.0, side))
+        if benched > 0.0:
+            t = min(3.0, max(0.0, side * 3.0 + (fbm(x / 7.0, y / 7.0, 17) - 0.5) * 0.5))
+            step = math.floor(t)
+            rise = smoothstep(0.5, 0.92, t - step)
+            beds = rise * 3.0
+            rise = lerp(rise, (math.floor(beds) + smoothstep(0.55, 1.0, beds - math.floor(beds))) / 3.0, 0.5)
+            side = lerp(side, min(1.0, (step + rise) / 3.0), benched)
         return side * (0.86 + 0.14 * smoothstep(-20.0, 20.0, -(kx * self.bay_side[0] + ky * self.bay_side[1])))
 
     @staticmethod
@@ -514,10 +528,13 @@ class StartCay(Island):
         for x, y, d, h in scatter(10, lambda x, y, d, h, sl: wooded(x, y, d, h, sl) and d >= 24.0 and not on_bluff(x, y), 4.2):
             add(rng.choice(("palm_tall", "palm_tall", "palm_medium", "palm_medium", "palm_leaning", "palm_young")), x, y,
                 scale=rng.uniform(0.85, 1.15), tilt=rng.uniform(0.0, 4.0), sink=0.1)
-        for x, y, d, h in scatter(26, lambda x, y, d, h, sl: wooded(x, y, d, h, sl) and d > 15.0, 3.2):
-            kind = rng.choice(("tree", "tree", "tree_small", "tree_small", "tree_big"))
-            add(kind, x, y, scale=rng.uniform(0.75, 1.5) if kind != "tree_big" else rng.uniform(0.7, 1.1), sink=0.05,
-                tilt=rng.uniform(0.0, 6.0))
+        # A canopy of the big coastal trees every 8 m or so, and the scrub trees of both shapes filling in between,
+        # close enough that from the air the grove is a wood, not a few trees on bare ground.
+        for x, y, d, h in scatter(16, lambda x, y, d, h, sl: wooded(x, y, d, h, sl) and d > 18.0, 7.5):
+            add("tree_big", x, y, scale=rng.uniform(0.9, 1.25), sink=0.05, tilt=rng.uniform(0.0, 4.0))
+        for x, y, d, h in scatter(60, lambda x, y, d, h, sl: wooded(x, y, d, h, sl) and d > 14.0, 2.6):
+            kind = rng.choice(("tree", "tree", "tree_small", "tree_small", "tree_small"))
+            add(kind, x, y, scale=rng.uniform(0.75, 1.5), sink=0.05, tilt=rng.uniform(0.0, 6.0))
         for x, y, d, h in scatter(3, lambda x, y, d, h, sl: h > 0.95 and 9.0 < d < 17.0 and sl < 12.0 and not rocky(x, y), 12.0):
             sx, sy = seaward(x, y)
             add(rng.choice(("palm_sweeping", "palm_young", "palm_medium")), x, y, yaw=facing(sx, sy) + rng.uniform(-40.0, 40.0),
@@ -540,9 +557,9 @@ class StartCay(Island):
             add("grass", x, y, scale=rng.uniform(0.8, 1.4))
         # Shells cast up along the tide line, a few further up the beach.
         for x, y, d, h in scatter(70, lambda x, y, d, h, sl: 0.95 < h < 1.6 and 4.0 < d < 15.0 and not rocky(x, y), 0.4, tries=200):
-            add("shell", x, y, scale=rng.uniform(0.7, 1.3), sink=0.015, tilt=rng.uniform(0.0, 30.0))
+            add("shell", x, y, scale=rng.uniform(0.7, 1.3), sink=0.004, tilt=rng.uniform(0.0, 30.0))
         for x, y, d, h in scatter(25, lambda x, y, d, h, sl: 0.3 < h < 2.2 and 1.0 < d < 24.0 and not rocky(x, y), 0.4, tries=200):
-            add("shell", x, y, scale=rng.uniform(0.6, 1.2), sink=0.02, tilt=rng.uniform(0.0, 40.0))
+            add("shell", x, y, scale=rng.uniform(0.6, 1.2), sink=0.006, tilt=rng.uniform(0.0, 40.0))
         # --- Driftwood along the high-tide line and on the spit.
         for x, y, d, h in scatter(6, lambda x, y, d, h, sl: 1.0 < h < 1.6 and 6.0 < d < 15.0 and not rocky(x, y), 5.0):
             add("log", x, y, scale=rng.uniform(0.7, 1.15), sink=0.12)
@@ -551,9 +568,9 @@ class StartCay(Island):
         return out
 
     def decals(self):
-        """Marks laid over the ground: a list of dicts {kind, x, y, yaw, size}. Kinds: 'shells' (drifts of broken
-        shell along the high-tide line and over the beach), 'wrack' (a line of dried weed and litter the last high
-        tide left), 'damp' (darker sand where water sits in a hollow or has just drained)."""
+        """Marks laid over the ground: a list of dicts {kind, x, y, yaw, size}. Kinds: 'wrack' (a line of dried
+        weed and litter the last high tide left, long and narrow along the shore), 'damp' (darker sand where water
+        sits in a hollow or has just drained). Shells are real props, not marks."""
         import random
         rng = random.Random(9152)
         out = []
@@ -571,9 +588,8 @@ class StartCay(Island):
                 gx = self.coast_distance(x + e, y) - self.coast_distance(x - e, y)
                 gy = self.coast_distance(x, y + e) - self.coast_distance(x, y - e)
                 along = math.degrees(math.atan2(gy, gx)) + 90.0
-                kind = "wrack"
-                out.append({"kind": kind, "x": x, "y": y, "yaw": along + rng.uniform(-12.0, 12.0),
-                            "size": (rng.uniform(2.5, 6.0), rng.uniform(0.7, 1.6)) if kind == "wrack" else (rng.uniform(1.2, 3.0), rng.uniform(0.9, 2.0))})
+                out.append({"kind": "wrack", "x": x, "y": y, "yaw": along + rng.uniform(-10.0, 10.0),
+                            "size": (rng.uniform(4.0, 9.0), rng.uniform(0.35, 0.75))})
             elif h < 1.0 and rng.random() < 0.35:
                 out.append({"kind": "damp", "x": x, "y": y, "yaw": rng.uniform(0.0, 360.0), "size": (rng.uniform(2.0, 6.0), rng.uniform(1.5, 4.0))})
         return out

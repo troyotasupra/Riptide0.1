@@ -13,9 +13,9 @@ ISLANDS_PATH = "/Game/Riptide/Islands"
 MATERIALS_PATH = "/Game/Riptide/Materials"
 ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
-ISLAND_VERSIONS = {"StartCay": "9"}
+ISLAND_VERSIONS = {"StartCay": "12"}
 GREY_VERSION = "3"
-ISLAND_MAP_VERSION = "13"
+ISLAND_MAP_VERSION = "15"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
 # tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in
@@ -79,7 +79,7 @@ return float3(shade, shade, shade);""")
 # The ground's photo surfaces (SourceAssets/Textures, credited in Docs/CREDITS.md) and the material that lays them
 # over an island by its surface map. Bump SURFACE_VERSION when the material's recipe changes.
 TEXTURES_PATH = f"{ISLANDS_PATH}/Textures"
-SURFACE_VERSION = "8"
+SURFACE_VERSION = "10"
 GROUND_TEXTURES = ["dense_sand", "aerial_beach_01", "shell_floor_01", "coral_mud_01", "seaside_rock", "forrest_sand_01",
                    "low_tide_rocks"]
 TEXTURE_MAPS = ["diff", "nor_dx", "arm", "disp"]
@@ -102,6 +102,11 @@ float2 dx = ddx(UV), dy = ddy(UV);
 #define RT_TEX(T, sc) T.SampleGrad(Material.Wrap_WorldGroupSettings, UV / (sc), dx / (sc), dy / (sc))
 // A photo's colour pulled toward grey by d, then tinted: the photos are of browner ground than a coral cay's.
 #define RT_TONE(c, d, t) (lerp((c), dot((c), float3(0.3, 0.59, 0.11)).xxx, (d)) * (t))
+// A random number per cell of a grid (an integer hash: the sine trick lines up into a visible lattice), and a
+// smooth noise read from four of them.
+#define RT_MIX(h) ((((h) ^ ((h) >> 13u)) * 1103515245u) ^ ((((h) ^ ((h) >> 13u)) * 1103515245u) >> 16u))
+#define RT_HASH(p) (float(RT_MIX((asuint(int(floor((p).x))) * 374761393u) ^ (asuint(int(floor((p).y))) * 668265263u)) >> 8u) * (1.0 / 16777216.0))
+#define RT_VNOISE(g, q) lerp(lerp(RT_HASH(g), RT_HASH((g) + float2(1, 0)), (q).x), lerp(RT_HASH((g) + float2(0, 1)), RT_HASH((g) + float2(1, 1)), (q).x), (q).y)
 float zm = WorldPos.z / 100.0;
 
 // Broad, soft variation (the far beach photo's height, tens of metres across): breaks up edges and repeats.
@@ -139,26 +144,77 @@ float3 col = 0; float3 nrm = 0; float rough = 0; float ao = 0;
 
 if (aSand > 0.004)
 {
-    // Close up, the fine sand photo; further off, the wind-rippled one, so the beach never looks tiled.
-    float far = saturate((Dist / 100.0 - 6.0) / 30.0);
-    float3 c = RT_TEX(SandD, 1.8).rgb;
-    float3 n = UnpackNormalMap(RT_TEX(SandN, 1.8)).xyz;
-    float3 arm = RT_TEX(SandA, 1.8).rgb;
-    float3 fc = RT_TEX(FarD, 30.0).rgb;
+    // Coral sand, made here rather than read from a photo: the sand photos we have are of coarser, pebbly beaches,
+    // and underfoot they read as gravel. Coral sand is fine, pale and nearly featureless: a grain you only see close
+    // up, flecks of broken shell, wind ripples over the dry upper beach, and smooth packed sand where the sea reaches.
+    // Everything fine fades out before it is small enough to shimmer.
+    float2 fw = fwidth(UV);                                   // metres per pixel
+    float fine = saturate(1.0 - fw.x * 180.0);                // the 2 mm grain: gone by 5 mm a pixel
+    float coarse = saturate(1.0 - fw.x * 45.0);               // the 7 mm grain, flecks and ripples: gone by 2 cm a pixel
+    // The second grain is turned 37 degrees from the first, so neither lines up with the other or the world.
+    float2 UVr = float2(UV.x * 0.7986 - UV.y * 0.6018, UV.x * 0.6018 + UV.y * 0.7986);
+    float2 g1 = UV / 0.002; float2 q1 = frac(g1); q1 = q1 * q1 * (3.0 - 2.0 * q1);
+    float2 g2 = UVr / 0.007; float2 q2 = frac(g2); q2 = q2 * q2 * (3.0 - 2.0 * q2);
+    float2 g2x = (UVr + float2(0.0025, 0.0)) / 0.007; float2 q2x = frac(g2x); q2x = q2x * q2x * (3.0 - 2.0 * q2x);
+    float2 g2y = (UVr + float2(0.0, 0.0025)) / 0.007; float2 q2y = frac(g2y); q2y = q2y * q2y * (3.0 - 2.0 * q2y);
+    float h2 = RT_VNOISE(g2, q2);
+    float grain = (RT_VNOISE(g1, q1) - 0.5) * 0.5 * fine + (h2 - 0.5) * coarse;
+    // The grain's slope, as a bump about half a millimetre high (in the turned frame, turned back).
+    float2 slopeR = float2(RT_VNOISE(g2x, q2x) - h2, RT_VNOISE(g2y, q2y) - h2) / 0.0025 * 0.0006 * coarse;
+    float2 slope = float2(slopeR.x * 0.7986 + slopeR.y * 0.6018, -slopeR.x * 0.6018 + slopeR.y * 0.7986);
+
+    // Patches of broad light and shade over tens of metres, mottling over a metre, and the far beach photo's wind
+    // marks from a distance.
+    float far = saturate((Dist / 100.0 - 8.0) / 40.0);
+    float3 c = float3(0.80, 0.755, 0.64) * (1.0 + grain * 0.22) * lerp(0.93, 1.07, mid) * lerp(0.95, 1.05, RT_TEX(FarH, 0.9).r);
+    float3 fc = RT_TONE(RT_TEX(FarD, 30.0).rgb, 0.6, float3(1.3, 1.28, 1.2));
+    c = lerp(c, fc, far * 0.5);
     float3 fn = UnpackNormalMap(RT_TEX(FarN, 30.0)).xyz;
-    c = lerp(c, fc, far * 0.85);
-    n = normalize(lerp(n, fn, far * 0.7));
-    // Broken shell gathers along the high-tide line.
+    float rgh = 0.86 - grain * 0.08;
+
+    // Wind ripples: ridges across the wind, 8-9 cm apart, steeper on the lee side, wandering with the beach, only
+    // on the dry sand above the wash and only in patches.
+    float dry = smoothstep(1.2, 1.55, zm + (mid - 0.5) * 0.4);
+    float ripples = dry * smoothstep(0.35, 0.6, RT_TEX(FarH, 9.0).r) * coarse;
+    float2 wind = normalize(float2(0.78, 0.62));
+    float spacing = 0.085 * (0.85 + 0.3 * RT_TEX(FarH, 5.0).r);
+    float ph = (dot(UV, wind) + (RT_TEX(FarH, 2.6).r - 0.5) * 0.3) / spacing;
+    float saw = frac(ph);
+    float ridge = saw < 0.68 ? saw / 0.68 : (1.0 - saw) / 0.32;
+    float dridge = (saw < 0.68 ? 1.0 / 0.68 : -1.0 / 0.32) / spacing * 0.0025;    // 2.5 mm high
+    slope += wind * dridge * ripples;
+    c *= 1.0 - ripples * (ridge - 0.5) * 0.06;
+
+    // Flecks of broken shell, one in every dozen 2.5 cm cells: white, pink or grey, a few millimetres across.
+    float2 cell = floor(UV / 0.025);
+    float pick = RT_HASH(cell * 1.37 + 3.1);
+    if (pick > 0.92 && coarse > 0.01)
+    {
+        float2 at = frac(UV / 0.025) - 0.5 - (float2(RT_HASH(cell + 7.3), RT_HASH(cell + 11.9)) - 0.5) * 0.5;
+        float rad = 0.09 + RT_HASH(cell + 5.5) * 0.14;
+        float fleck = (1.0 - smoothstep(0.6, 1.0, length(at) / rad)) * coarse;
+        float tint = RT_HASH(cell + 2.2);
+        float3 fcol = tint < 0.6 ? float3(0.9, 0.88, 0.82) : tint < 0.85 ? float3(0.86, 0.66, 0.6) : float3(0.5, 0.5, 0.47);
+        c = lerp(c, fcol, fleck);
+        rgh = lerp(rgh, 0.55, fleck);
+        slope += at / max(rad, 1e-3) * fleck * 0.25;
+    }
+
+    // Broken shell gathers thicker along the high-tide line.
     float tide = zm + (mid - 0.5) * 0.5;
-    float shell = smoothstep(1.0, 1.2, tide) * (1.0 - smoothstep(1.45, 1.8, tide)) * smoothstep(0.35, 0.6, RT_TEX(FarH, 3.7).r) * 0.85;
+    float shell = smoothstep(1.0, 1.2, tide) * (1.0 - smoothstep(1.45, 1.8, tide)) * smoothstep(0.4, 0.65, RT_TEX(FarH, 3.7).r) * 0.6;
+    float3 n = normalize(float3(-slope.x, -slope.y, 1.0));
+    n = normalize(lerp(n, fn, far * 0.6));
     if (shell > 0.004)
     {
-        c = lerp(c, RT_TEX(ShellD, 3.0).rgb, shell);
+        c = lerp(c, RT_TONE(RT_TEX(ShellD, 3.0).rgb, 0.3, float3(1.1, 1.08, 1.04)), shell);
         n = normalize(lerp(n, UnpackNormalMap(RT_TEX(ShellN, 3.0)).xyz, shell));
-        arm = lerp(arm, RT_TEX(ShellA, 3.0).rgb, shell);
+        rgh = lerp(rgh, RT_TEX(ShellA, 3.0).g, shell);
     }
-    // Pale coral sand.
-    col += aSand * RT_TONE(c, 0.45, float3(1.32, 1.3, 1.24)) * SandTint.rgb; nrm += aSand * n; rough += aSand * arm.g; ao += aSand * arm.r;
+    // Packed smooth where the sea has been: the grain and ripples flatten out.
+    float packed = 1.0 - smoothstep(0.3, 0.9, zm);
+    n = normalize(lerp(n, float3(0.0, 0.0, 1.0), packed * 0.7));
+    col += aSand * c * SandTint.rgb; nrm += aSand * n; rough += aSand * rgh; ao += aSand;
 }
 if (aCoral > 0.004)
 {
@@ -180,9 +236,24 @@ if (aRock > 0.004)
 if (aGrove > 0.004)
 {
     float3 arm = RT_TEX(GroveA, 2.0).rgb;
-    // Darker, browner soil under the trees.
-    col += aGrove * RT_TONE(RT_TEX(GroveD, 2.0).rgb, 0.15, float3(0.66, 0.6, 0.5)); nrm += aGrove * UnpackNormalMap(RT_TEX(GroveN, 2.0)).xyz;
-    rough += aGrove * arm.g; ao += aGrove * arm.r;
+    // Darker, browner soil under the trees, with fallen leaves lying on it: dark brown and tan flakes 2-5 cm
+    // across, thicker where the ground dips.
+    float3 c = RT_TONE(RT_TEX(GroveD, 2.0).rgb, 0.15, float3(0.52, 0.47, 0.37));
+    float3 n = UnpackNormalMap(RT_TEX(GroveN, 2.0)).xyz;
+    float leafy = saturate(1.0 - fwidth(UV).x * 25.0) * smoothstep(0.3, 0.7, RT_TEX(FarH, 6.0).r);
+    if (leafy > 0.01)
+    {
+        float2 cell = floor(UV / 0.045);
+        float pick = RT_HASH(cell * 1.91 + 0.7);
+        float2 at = frac(UV / 0.045) - 0.5 - (float2(RT_HASH(cell + 3.3), RT_HASH(cell + 9.1)) - 0.5) * 0.4;
+        float2 stretch = float2(1.0 + RT_HASH(cell + 1.3), 1.0);
+        float leaf = (1.0 - smoothstep(0.55, 0.9, length(at * stretch) / 0.3)) * step(0.45, pick) * leafy;
+        float tint = RT_HASH(cell + 4.4);
+        float3 lcol = tint < 0.5 ? float3(0.30, 0.19, 0.10) : tint < 0.8 ? float3(0.52, 0.36, 0.18) : float3(0.62, 0.5, 0.3);
+        c = lerp(c, lcol, leaf);
+        n = normalize(lerp(n, float3(at.x, at.y, 1.2), leaf * 0.5));
+    }
+    col += aGrove * c; nrm += aGrove * n; rough += aGrove * lerp(arm.g, 0.75, leafy * 0.5); ao += aGrove * arm.r;
 }
 if (aReef > 0.004)
 {
@@ -204,6 +275,8 @@ Rough = rough;
 AO = ao;
 #undef RT_TEX
 #undef RT_TONE
+#undef RT_HASH
+#undef RT_VNOISE
 return col;
 """
 
@@ -678,7 +751,7 @@ PROP_MESHES = {
 # Things that lie on the ground rather than grow from one point: they're laid to the ground's slope, then bedded in
 # until no part of their underside is above it. (kind: how much of its footprint must be bedded, the most of its
 # height that may be buried.) A piece that can't be bedded within that isn't placed.
-LYING = {"outcrop": (0.9, 0.7), "boulder": (0.7, 0.65), "log": (0.9, 0.6), "branch": (0.85, 0.8), "shell": (0.5, 0.9)}
+LYING = {"outcrop": (0.9, 0.7), "boulder": (0.7, 0.65), "log": (0.9, 0.6), "branch": (0.85, 0.8), "shell": (0.5, 0.35)}
 
 
 def _bed_into_ground(island, mesh, prop, origin):
@@ -710,7 +783,8 @@ def _bed_into_ground(island, mesh, prop, origin):
         world = unreal.MathLibrary.transform_location(placed, unreal.Vector(cx + px * hx, cy + py * hy, low))
         ground = island.height((world.y - origin[1]) / 100.0, (world.x - origin[0]) / 100.0)
         worst = max(worst, (world.z - origin[2]) / 100.0 - ground)
-    z -= worst + 0.03
+    # Settled into the sand a little as well, in proportion for small things like shells.
+    z -= worst + min(0.03, 0.08 * height)
     if island.height(x, y) - z > most * height:
         return None
     return transform(z)
@@ -785,17 +859,27 @@ Rough = 0.5;
 return pic.rgb * float3(1.3, 1.26, 1.18);
 """,
     "wrack": """
+// A line of dried weed and litter the last high tide left: separate pieces strung along the line with sand
+// showing between them, not one brown streak.
 float2 c = UV - 0.5;
-float edge = (1.0 - smoothstep(0.2, 1.0, abs(c.x) * 2.0)) * (1.0 - smoothstep(0.25, 1.0, abs(c.y) * 2.0));
-float4 pic = Picture.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 200.0);
-float4 nrm = Bumps.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 200.0);
+float edge = (1.0 - smoothstep(0.1, 1.0, abs(c.x) * 2.0)) * (1.0 - smoothstep(0.15, 1.0, abs(c.y) * 2.0));
+float4 pic = Picture.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 140.0);
+float4 nrm = Bumps.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 140.0);
 float lum = dot(pic.rgb, float3(0.3, 0.59, 0.11));
 float grain = Grain.Sample(Material.Wrap_WorldGroupSettings, WorldPos.xy / 700.0).r;
-// The dark litter in the photo, not the sand between it.
-Opacity = edge * smoothstep(0.58, 0.3, lum + (grain - 0.5) * 0.25) * 0.9;
+// Pieces: cells 9 cm across, most of them empty; a piece is an uneven blob set anywhere in its cell, of any size,
+// with the photo's dark litter cut out of it, so no two look alike and they never line up.
+float2 cell = floor(WorldPos.xy / 9.0);
+float pick = frac(sin(dot(cell, float2(127.1, 311.7))) * 43758.5453);
+float2 off = float2(frac(sin(dot(cell, float2(269.5, 183.3))) * 43758.5453), frac(sin(dot(cell, float2(419.2, 371.9))) * 43758.5453)) - 0.5;
+float size = 0.18 + 0.32 * frac(sin(dot(cell, float2(97.3, 233.7))) * 43758.5453);
+float2 at = (frac(WorldPos.xy / 9.0) - 0.5 - off * 0.9) * float2(0.7, 1.0);
+float piece = (1.0 - smoothstep(size * 0.5, size, length(at))) * step(0.72, pick + edge * 0.2);
+float litter = smoothstep(0.62, 0.28, lum + (grain - 0.5) * 0.3);
+Opacity = edge * piece * litter * 0.85;
 Normal = UnpackNormalMap(nrm).xyz;
-Rough = 0.8;
-return pic.rgb * float3(0.7, 0.62, 0.48);
+Rough = 0.85;
+return pic.rgb * float3(0.62, 0.52, 0.38);
 """,
     "damp": """
 float2 c = UV - 0.5;
@@ -942,8 +1026,10 @@ def build_island_test_map(ns, rebuilt):
     zone.set_editor_property("render_target_resolution", unreal.IntPoint(DEPTH_MAP_PIXELS, DEPTH_MAP_PIXELS))
     zone.set_editor_property("local_tessellation_extent", unreal.Vector(DEPTH_MAP_SPAN, DEPTH_MAP_SPAN, 10000.0))
     zone.set_editor_property("enable_local_only_tessellation", True)
-    # Beyond the window that follows the camera, the sea is drawn as plain meshes (as the plugin's factory sets up).
-    ocean.get_water_body_component().set_water_body_static_mesh_enabled(True)
+    # Beyond the window that follows the camera the far-distance mesh (_far_sea) carries the sea to the horizon. The
+    # ocean's own static mesh is not drawn as well: it lies on the same plane as the tessellated water and fought it
+    # for every pixel, which showed from the air as a lattice of pale triangles and stripes.
+    ocean.get_water_body_component().set_water_body_static_mesh_enabled(False)
 
     ambience = spawn(unreal.AmbientSound)
     ambience_audio = ambience.get_component_by_class(unreal.AudioComponent)

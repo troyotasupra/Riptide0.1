@@ -12,7 +12,7 @@ MATERIALS_PATH = "/Game/Riptide/Materials"
 PALMS_PATH = f"{ISLANDS_PATH}/Palms"
 MODELS_PATH = f"{ISLANDS_PATH}/Models"
 REVIEW_MAP_PATH = "/Game/Riptide/Maps/Props_Review"
-PROPS_VERSION = "7"
+PROPS_VERSION = "8"
 
 # The scanned models: name -> how its meshes are treated. "rock": solid, drawn with Nanite. "plant": leaves cut out
 # by their alpha picture, lit from both sides. "wood": solid, plain.
@@ -267,9 +267,31 @@ def _palm_materials(bark):
 
 # --- Meshes ------------------------------------------------------------------------------------------------------
 
-def _dress(mesh, path, materials, nanite, solid, leafy=False):
-    """A mesh's slots given their materials, Nanite on or off, and (for solid things) its own triangles to stand on.
-    `leafy` tells Nanite to keep thin leaves from thinning away to nothing with distance."""
+def _trunk_collision(mesh, path):
+    """A tree's collision is a capsule round its trunk, not its million-triangle canopy: the crew walk under the
+    branches and bump into the trunk, and a harvest trace hits the trunk. True if it was set."""
+    try:
+        box = mesh.get_bounding_box()
+        height = box.max.z - box.min.z
+        capsule = unreal.KSphylElem()
+        capsule.set_editor_property("radius", 22.0)
+        capsule.set_editor_property("length", max(height * 0.6 - 44.0, 20.0))
+        capsule.set_editor_property("center", unreal.Vector(0.0, 0.0, box.min.z + height * 0.3))
+        geom = unreal.KAggregateGeom()
+        geom.set_editor_property("sphyl_elems", [capsule])
+        body = mesh.get_editor_property("body_setup")
+        body.set_editor_property("agg_geom", geom)
+        body.set_editor_property("collision_trace_flag", unreal.CollisionTraceFlag.CTF_USE_SIMPLE_AS_COMPLEX)
+        return True
+    except Exception as err:  # noqa: BLE001 - fall back to the canopy's own triangles
+        unreal.log_warning(f"Riptide: no trunk capsule for {path.split('/')[-1]} ({err})")
+        return False
+
+
+def _dress(mesh, path, materials, nanite, solid, leafy=False, trunk=False):
+    """A mesh's slots given their materials, Nanite on or off, and (for solid things) its own triangles to stand on,
+    or for a tree (`trunk`) a capsule round its trunk. `leafy` tells Nanite to keep thin leaves from thinning away
+    to nothing with distance."""
     slots = mesh.get_editor_property("static_materials")
     for i, slot in enumerate(slots):
         name = str(slot.get_editor_property("material_slot_name"))
@@ -289,7 +311,7 @@ def _dress(mesh, path, materials, nanite, solid, leafy=False):
         except Exception as err:  # noqa: BLE001 - an engine without the setting still draws the leaves
             unreal.log_warning(f"Riptide: no leaf preservation for {path.split('/')[-1]} ({err})")
     tools.set_nanite_settings(mesh, settings, True)
-    if solid:
+    if solid and not (trunk and _trunk_collision(mesh, path)):
         body = mesh.get_editor_property("body_setup")
         body.set_editor_property("collision_trace_flag", unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE)
     unreal.EditorAssetLibrary.set_metadata_tag(mesh, "RiptideVersion", PROPS_VERSION)
@@ -419,8 +441,9 @@ def make_model_assets():
             # Nanite for everything with weight to it (the tree alone is a million triangles); the small ferns,
             # grass and twigs stay ordinary meshes.
             heavy = obj.get_num_triangles(0) > 5000
+            tree = model in ("island_tree_02", "tree_small_02", "island_tree_01")
             _dress(obj, path.split(".")[0], material_for, nanite=(kind == "rock" or heavy), leafy=(kind == "plant"),
-                   solid=(kind not in ("plant",) or model in ("island_tree_02", "tree_small_02", "island_tree_01")))
+                   solid=(kind not in ("plant",) or tree), trunk=tree)
             box = obj.get_bounding_box()
             entry = {"path": path.split(".")[0], "kind": kind, "slots": slots,
                      "min": [box.min.x, box.min.y, box.min.z], "max": [box.max.x, box.max.y, box.max.z],
