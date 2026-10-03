@@ -301,13 +301,27 @@ void URiptideCrewBodyComponent::TickComponent(float DeltaTime, ELevelTick TickTy
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	if (Rifle && Rifle->IsVisible())
 	{
-		// The rifle's grip in the right hand (between the wrist and the knuckles), aimed along the body's facing:
-		// placed from the posed hand each frame, so it moves with the hands' sway. Its model's origin is 5 cm above
-		// and 1.5 cm ahead of where the hand closes on its grip.
-		const FVector Grip = FMath::Lerp(GetSocketLocation(TEXT("hand_r")), GetSocketLocation(TEXT("middle_01_r")), RifleGripAlongHand);
-		const FQuat Frame = GetComponentQuat() * RifleAim() * FRotationMatrix::MakeFromXZ(FVector(0.f, 1.f, 0.f), FVector::UpVector).ToQuat();
-		Rifle->SetWorldLocationAndRotation(Grip + Frame.RotateVector(FVector(-1.5f, 0.f, 5.f)), Frame);
+		// Shouldered, from the posed body each frame (it moves with the breathing and sway); the animation puts the
+		// hands on it.
+		const FTransform InComponent = RifleInComponent(GetSocketTransform(TEXT("upperarm_r"), RTS_Component).GetLocation(),
+			GetSocketTransform(TEXT("Head"), RTS_Component).GetLocation());
+		Rifle->SetWorldTransform(InComponent * GetComponentTransform());
 	}
+}
+
+FTransform URiptideCrewBodyComponent::RifleInComponent(const FVector& UpperArmR, const FVector& Head)
+{
+	// The body faces +Y with its left at +X. The model's origin is where the right hand holds its pistol grip; its
+	// butt plate is 28.5 cm behind that, its sight line 10.4 cm above (riptide_crew_mesh.py's build_rifle).
+	const FVector Forward(0.f, 1.f, 0.f), Left(1.f, 0.f, 0.f);
+	const FQuat Frame = RifleAim() * FRotationMatrix::MakeFromXZ(Forward, FVector::UpVector).ToQuat();
+	// The butt in the pocket inside the right shoulder joint, a little forward of it; the sight line at the eye, the
+	// head being tipped down onto the stock by the pose (about 6 cm above the head bone, in front of the face).
+	const FVector Pocket = UpperArmR + Left * 12.f + Forward * 3.f;
+	const float SightZ = Head.Z + 6.f;
+	FVector Origin = Pocket + Frame.RotateVector(FVector(28.5f, 0.f, 0.f));
+	Origin.Z = SightZ - 10.4f;
+	return FTransform(Frame, Origin);
 }
 
 void URiptideCrewBodyComponent::OnUnregister()

@@ -36,20 +36,24 @@ namespace
 	constexpr float KnockdownAnimEnd = KnockbackEnd + 1.53f / GetUpRate;
 
 	// The boarding ladder, in its own frame from ARiptideBoat::GetLadderFootTransform (riptide_boat_mesh.py's
-	// LADDER_RUNGS): treads every 16 cm from 40 cm below the foot, nine of them, 2 cm toward the boat from it; the
+	// LADDER_RUNGS): treads every 16 cm from 8 cm below the foot, seven of them, 2 cm toward the boat from it; the
 	// rails' grab handle 110 cm above it. Hands grip near the rails, feet stand toward the middle.
-	constexpr float RungBelowFoot = -40.f;
+	constexpr float RungBelowFoot = -8.f;
 	constexpr float RungPitch = 16.f;
-	constexpr int32 RungCount = 9;
+	constexpr int32 RungCount = 7;
 	constexpr float RungIn = 2.f;
 	constexpr float HandleHeight = 110.f;
 	constexpr float HandReach = 140.f;     // hands grip this far above the feet (chest to head height)
 	constexpr float HandSpread = 7.5f;
 	constexpr float FootSpread = 6.5f;
 
-	// The menu pose's rifle: its grip is in the right hand, and the left hand holds the handguard this far along
-	// the barrel from it (see URiptideCrewBodyComponent's rifle).
-	constexpr float HandguardReach = 25.f;
+	// The menu pose's rifle (in its own frame: X along the barrel, Z up, from the pistol grip; riptide_crew_mesh.py's
+	// build_rifle): where the right hand closes on the grip, and where the left hand holds the handguard.
+	const FVector RifleGripCentre(0.f, 0.f, -5.f);
+	const FVector RifleHandguardHold(22.f, 0.f, 3.6f);
+	constexpr float RifleGripHalfWidth = 1.35f;
+	constexpr float RifleHandguardRadius = 2.25f;
+	constexpr float PalmThickness = 1.5f;
 
 	// The body's own frame (the skeletal mesh component's): it faces +Y, its left is +X, up is +Z.
 	const FVector BodyForward(0.f, 1.f, 0.f);
@@ -141,15 +145,11 @@ void URiptideCrewAnimInstance::GatherCharacter(ARiptideCharacter* Crew, float De
 	FRiptideCrewAnimInputs N;
 	const UCharacterMovementComponent* Move = Crew->GetCharacterMovement();
 	ARiptideBoat* Boat = Crew->GetHomeBoat();
-	const FVector Feet = Crew->GetActorLocation() - FVector(0.f, 0.f, Crew->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
 
-	// Walking speed relative to what the feet stand on: on the boat's deck its own speed is taken off (at 30 knots
-	// the crew member stands still on it).
-	FVector Velocity = Crew->GetVelocity();
-	if (Boat && Crew->IsStandingOnBoat())
-	{
-		Velocity -= Boat->GetDeckPointVelocity(Feet);
-	}
+	// Walking speed relative to what the feet stand on. Character movement already keeps its velocity relative to
+	// the deck it stands on (the deck's own motion is applied separately), so standing still at 30 knots reads 0:
+	// taking the deck's speed off again made the crew run on the spot whenever the boat moved.
+	const FVector Velocity = Crew->GetVelocity();
 	const float Blend = DeltaSeconds > 0.f ? 1.f - FMath::Exp(-DeltaSeconds / 0.08f) : 1.f;
 	SmoothedVelocity = FMath::Lerp(SmoothedVelocity, Velocity, Blend);
 	const FVector Local = Crew->GetActorTransform().InverseTransformVectorNoScale(SmoothedVelocity);
@@ -277,7 +277,16 @@ void FRiptideCrewAnimProxy::CacheBoneIndices(const FBoneContainer& Bones)
 	static const TCHAR* Names[] = { TEXT("root"), TEXT("pelvis"), TEXT("spine_01"), TEXT("spine_02"), TEXT("spine_03"),
 		TEXT("neck_01"), TEXT("Head"), TEXT("clavicle_l"), TEXT("clavicle_r"), TEXT("upperarm_l"), TEXT("lowerarm_l"), TEXT("hand_l"),
 		TEXT("upperarm_r"), TEXT("lowerarm_r"), TEXT("hand_r"), TEXT("middle_01_r"), TEXT("thigh_l"), TEXT("calf_l"), TEXT("foot_l"),
-		TEXT("thigh_r"), TEXT("calf_r"), TEXT("foot_r") };
+		TEXT("thigh_r"), TEXT("calf_r"), TEXT("foot_r"),
+		// The fingers, for the hands closing on the rifle.
+		TEXT("index_01_l"), TEXT("index_02_l"), TEXT("index_03_l"), TEXT("middle_01_l"), TEXT("middle_02_l"), TEXT("middle_03_l"),
+		TEXT("ring_01_l"), TEXT("ring_02_l"), TEXT("ring_03_l"), TEXT("pinky_01_l"), TEXT("pinky_02_l"), TEXT("pinky_03_l"),
+		TEXT("thumb_01_l"), TEXT("thumb_02_l"), TEXT("thumb_03_l"),
+		TEXT("index_01_r"), TEXT("index_02_r"), TEXT("index_03_r"), TEXT("middle_02_r"), TEXT("middle_03_r"),
+		TEXT("ring_01_r"), TEXT("ring_02_r"), TEXT("ring_03_r"), TEXT("pinky_01_r"), TEXT("pinky_02_r"), TEXT("pinky_03_r"),
+		TEXT("thumb_01_r"), TEXT("thumb_02_r"), TEXT("thumb_03_r"),
+		TEXT("index_04_leaf_l"), TEXT("middle_04_leaf_l"), TEXT("ring_04_leaf_l"), TEXT("pinky_04_leaf_l"), TEXT("thumb_04_leaf_l"),
+		TEXT("index_04_leaf_r"), TEXT("middle_04_leaf_r"), TEXT("ring_04_leaf_r"), TEXT("pinky_04_leaf_r"), TEXT("thumb_04_leaf_r") };
 	for (const TCHAR* Name : Names)
 	{
 		const int32 MeshIndex = Bones.GetPoseBoneIndexForBoneName(FName(Name));
@@ -490,26 +499,118 @@ void FRiptideCrewAnimProxy::Knockdown(FPoseContext& Out) const
 	}
 }
 
+namespace
+{
+	/** Where a hand's bones put it: its fingers' direction (wrist to middle knuckle), and the way its palm faces. */
+	void HandFrame(const FCSPose<FCompactPose>& CS, FCompactPoseBoneIndex Hand, FCompactPoseBoneIndex Middle, FCompactPoseBoneIndex Index,
+		FCompactPoseBoneIndex Pinky, bool bLeft, FVector& OutFingers, FVector& OutPalm)
+	{
+		FCSPose<FCompactPose>& Pose = const_cast<FCSPose<FCompactPose>&>(CS);
+		const FVector W = Pose.GetComponentSpaceTransform(Hand).GetLocation();
+		OutFingers = (Pose.GetComponentSpaceTransform(Middle).GetLocation() - W).GetSafeNormal();
+		const FVector Across = Pose.GetComponentSpaceTransform(Index).GetLocation() - Pose.GetComponentSpaceTransform(Pinky).GetLocation();
+		// The palm is the side the fingers close toward: under a right hand held palm down with its index to the left,
+		// and the mirror of that for a left hand.
+		OutPalm = (FVector::CrossProduct(OutFingers, Across) * (bLeft ? 1.f : -1.f)).GetSafeNormal();
+	}
+}
+
 void FRiptideCrewAnimProxy::MenuRifle(FPoseContext& Out) const
 {
-	// Shouldered: the two-handed aim, the rifle's grip in the right hand (URiptideCrewBodyComponent places it), and
-	// the left hand moved forward onto its handguard.
+	// Shouldered: the stance and breathing from the pistol aim, then the head tipped down onto the stock, the rifle
+	// placed from the body (URiptideCrewBodyComponent::RifleInComponent), the right hand on its pistol grip and the
+	// left under its handguard, each turned to fit what it holds, and the fingers closed round it.
 	Sample(RifleReady, LoopTime, true, Out);
 	FCSPose<FCompactPose> CS;
 	CS.InitPose(Out.Pose);
-	const FCompactPoseBoneIndex HandR = B(TEXT("hand_r"));
-	const FCompactPoseBoneIndex Knuckle = B(TEXT("middle_01_r"));
-	if (!HandR.IsValid() || !Knuckle.IsValid())
+	const FCompactPoseBoneIndex HandR = B(TEXT("hand_r")), HandL = B(TEXT("hand_l")), Head = B(TEXT("Head"));
+	if (!HandR.IsValid() || !HandL.IsValid() || !Head.IsValid() || !B(TEXT("middle_01_l")).IsValid())
 	{
 		return;
 	}
-	const FVector Grip = FMath::Lerp(CS.GetComponentSpaceTransform(HandR).GetLocation(), CS.GetComponentSpaceTransform(Knuckle).GetLocation(),
-		URiptideCrewBodyComponent::RifleGripAlongHand);
-	const FVector Barrel = URiptideCrewBodyComponent::RifleAim().RotateVector(BodyForward);
-	const FVector Handguard = Grip + Barrel * HandguardReach + FVector(0.f, 0.f, URiptideCrewBodyComponent::RifleBoreHeight - 4.f) + BodyLeft * 1.5f;
-	const FVector Shoulder = CS.GetComponentSpaceTransform(B(TEXT("upperarm_l"))).GetLocation();
-	Reach(CS, B(TEXT("upperarm_l")), B(TEXT("lowerarm_l")), B(TEXT("hand_l")),
-		Handguard - Barrel * 7.f, Shoulder + BodyLeft * 20.f - FVector(0.f, 0.f, 40.f), true);
+	// Cheek to the stock.
+	TurnBone(CS, B(TEXT("neck_01")), FQuat(BodyLeft, FMath::DegreesToRadians(-14.f)));
+	TurnBone(CS, Head, FQuat(BodyLeft, FMath::DegreesToRadians(-10.f)));
+
+	const FTransform Rifle = URiptideCrewBodyComponent::RifleInComponent(CS.GetComponentSpaceTransform(B(TEXT("upperarm_r"))).GetLocation(),
+		CS.GetComponentSpaceTransform(Head).GetLocation());
+	const FVector Barrel = Rifle.GetRotation().GetForwardVector();
+	const FVector RifleUp = Rifle.GetRotation().GetUpVector();
+	const FVector RifleLeft = -Rifle.GetRotation().GetRightVector();
+
+	struct FGrip
+	{
+		bool bLeft = false;
+		FVector Fingers, Palm, Knuckles, Pole;     // where the hand points, faces and has its middle knuckle; the elbow's way
+		float Curl[3] = {};
+		float IndexCurl[3] = {};
+		float ThumbCurl[3] = {};
+	};
+	auto SetCurl = [](float (&Dest)[3], float A, float B, float C) { Dest[0] = A; Dest[1] = B; Dest[2] = C; };
+
+	// Right: on the pistol grip, palm against its right side, fingers round its front (the index lighter, along the
+	// trigger guard), the elbow out and down. The grip rakes back, so the fingers point square across it.
+	const FVector GripAxis = (-Barrel * 0.28f - RifleUp * 0.96f).GetSafeNormal();
+	FGrip Right;
+	Right.Fingers = (Barrel - GripAxis * FVector::DotProduct(Barrel, GripAxis)).GetSafeNormal();
+	Right.Palm = RifleLeft;
+	Right.Knuckles = Rifle.TransformPosition(RifleGripCentre) - RifleLeft * (RifleGripHalfWidth + PalmThickness) + Right.Fingers * 1.5f;
+	Right.Pole = CS.GetComponentSpaceTransform(B(TEXT("upperarm_r"))).GetLocation() - BodyLeft * 30.f - FVector(0.f, 0.f, 35.f);
+	SetCurl(Right.Curl, 70.f, 80.f, 45.f);
+	SetCurl(Right.IndexCurl, 25.f, 45.f, 30.f);
+	SetCurl(Right.ThumbCurl, 20.f, 25.f, 30.f);
+	// Left: under the handguard, palm up, fingers across to its right side and closing up round it; the elbow down.
+	FGrip LeftHand;
+	LeftHand.bLeft = true;
+	LeftHand.Fingers = -RifleLeft;
+	LeftHand.Palm = RifleUp;
+	LeftHand.Knuckles = Rifle.TransformPosition(RifleHandguardHold) - RifleUp * (RifleHandguardRadius + PalmThickness) - RifleLeft * 1.f;
+	LeftHand.Pole = CS.GetComponentSpaceTransform(B(TEXT("upperarm_l"))).GetLocation() + BodyLeft * 10.f - FVector(0.f, 0.f, 45.f);
+	SetCurl(LeftHand.Curl, 50.f, 65.f, 40.f);
+	SetCurl(LeftHand.IndexCurl, 50.f, 65.f, 40.f);
+	SetCurl(LeftHand.ThumbCurl, 25.f, 20.f, 25.f);
+
+	for (const FGrip* G : { &Right, &LeftHand })
+	{
+		const FString Side = G->bLeft ? TEXT("_l") : TEXT("_r");
+		auto SideBone = [&](const TCHAR* Name) { return B(*(FString(Name) + Side)); };
+		const FCompactPoseBoneIndex Hand = SideBone(TEXT("hand")), Middle = SideBone(TEXT("middle_01")), Index = SideBone(TEXT("index_01")), Pinky = SideBone(TEXT("pinky_01"));
+		if (!Hand.IsValid() || !Middle.IsValid() || !Index.IsValid() || !Pinky.IsValid())
+		{
+			continue;
+		}
+		const float HandLength = FVector::Dist(CS.GetComponentSpaceTransform(Hand).GetLocation(), CS.GetComponentSpaceTransform(Middle).GetLocation());
+		// The wrist where the knuckles land in place, then the hand turned to point and face as it should.
+		Reach(CS, SideBone(TEXT("upperarm")), SideBone(TEXT("lowerarm")), Hand, G->Knuckles - G->Fingers * HandLength, G->Pole, true);
+		FVector Fingers, Palm;
+		HandFrame(CS, Hand, Middle, Index, Pinky, G->bLeft, Fingers, Palm);
+		const FQuat From = FRotationMatrix::MakeFromXZ(Fingers, Palm).ToQuat();
+		const FQuat To = FRotationMatrix::MakeFromXZ(G->Fingers, G->Palm).ToQuat();
+		TurnBone(CS, Hand, To * From.Inverse());
+		// The fingers close toward the palm, joint by joint (each about the axis across its own bone).
+		HandFrame(CS, Hand, Middle, Index, Pinky, G->bLeft, Fingers, Palm);
+		for (const TCHAR* Finger : { TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky"), TEXT("thumb") })
+		{
+			const FString Name(Finger);
+			const float* Angles = Name == TEXT("thumb") ? G->ThumbCurl : Name == TEXT("index") ? G->IndexCurl : G->Curl;
+			for (int32 Joint = 1; Joint <= 3; ++Joint)
+			{
+				const FCompactPoseBoneIndex J = B(*FString::Printf(TEXT("%s_%02d%s"), Finger, Joint, *Side));
+				const FCompactPoseBoneIndex Next = B(*(Joint < 3 ? FString::Printf(TEXT("%s_%02d%s"), Finger, Joint + 1, *Side)
+					: FString::Printf(TEXT("%s_04_leaf%s"), Finger, *Side)));
+				if (!J.IsValid() || !Next.IsValid())
+				{
+					continue;
+				}
+				const FVector Along = (CS.GetComponentSpaceTransform(Next).GetLocation() - CS.GetComponentSpaceTransform(J).GetLocation()).GetSafeNormal();
+				const FVector Axis = FVector::CrossProduct(Along, Palm).GetSafeNormal();
+				if (!Axis.IsNearlyZero())
+				{
+					TurnBone(CS, J, FQuat(Axis, FMath::DegreesToRadians(Angles[Joint - 1])));
+				}
+			}
+		}
+	}
 	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CS), Out.Pose);
 }
 

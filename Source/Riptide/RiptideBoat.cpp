@@ -81,6 +81,9 @@ namespace
 	const FVector BowLightPoint(381.f, 0.f, DeckZ + 102.f);
 
 	// The radar antenna's hub, on its pedestal on the T-top (riptide_boat_mesh.py's RADAR).
+	// The compass card's pivot, in the dome on the console top (riptide_boat_mesh.py's _fittings: the dome at
+	// DeckZ + 112, its base ring up to 113.5).
+	const FVector CompassPivot(-8.f, 0.f, DeckZ + 114.5f);
 	const FVector RadarHub(-70.f, 0.f, DeckZ + 258.f);
 
 	// The steering wheel's hub on the helm's shaft, its face tilted back toward the helmsman (WHEEL_CENTRE and
@@ -174,6 +177,54 @@ ARiptideBoat::ARiptideBoat()
 	DeckCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	DeckCollision->SetCanEverAffectNavigation(false);
 
+	{
+		// The cockpit's inner walls, measured off the model (riptide_boat_mesh.py's HullInside, innermost at deck
+		// level): X along the boat, Y of the wall on the starboard side (port is the mirror). Forward of the last
+		// point the sides close into the bow.
+		const FVector2D WallLine[] = { { -338.f, 116.f }, { -120.f, 115.9f }, { -80.f, 114.7f }, { -40.f, 112.1f }, { 0.f, 108.1f },
+			{ 40.f, 102.7f }, { 80.f, 95.9f }, { 120.f, 87.7f }, { 160.f, 78.2f }, { 200.f, 67.3f }, { 240.f, 54.9f }, { 280.f, 40.9f } };
+		constexpr float Inboard = 1.5f;        // the box's face this far inside the model's wall, so it's met first
+		constexpr float Thick = 30.f;
+		constexpr float Overlap = 3.f;         // each box runs on past its ends, closing the joints
+		const float BottomZ = DeckZ - 10.f;
+		auto MakeWall = [this](const FString& Name, const FVector& Centre, const FVector& Extent, float Yaw)
+		{
+			UBoxComponent* Wall = CreateDefaultSubobject<UBoxComponent>(*Name);
+			Wall->SetupAttachment(HullBody);
+			Wall->SetRelativeLocationAndRotation(Centre, FRotator(0.f, Yaw, 0.f));
+			Wall->SetBoxExtent(Extent);
+			// Crew only, and not part of the hull's physics (it would change how it floats).
+			Wall->BodyInstance.bAutoWeld = false;
+			Wall->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+			Wall->SetCollisionObjectType(ECC_WorldDynamic);
+			Wall->SetCollisionResponseToAllChannels(ECR_Ignore);
+			Wall->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+			Wall->SetCanEverAffectNavigation(false);
+			Wall->SetHiddenInGame(true);
+			BulwarkWalls.Add(Wall);
+		};
+		for (int32 i = 0; i + 1 < UE_ARRAY_COUNT(WallLine); ++i)
+		{
+			const FVector2D A = WallLine[i], B = WallLine[i + 1];
+			for (const float Side : { 1.f, -1.f })
+			{
+				const FVector2D P(A.X, Side * (A.Y - Inboard)), Q(B.X, Side * (B.Y - Inboard));
+				const FVector2D Along = (Q - P).GetSafeNormal();
+				const FVector2D Out = FVector2D(-Along.Y, Along.X) * (FVector2D::DotProduct(FVector2D(-Along.Y, Along.X), FVector2D(0.f, Side)) > 0.f ? 1.f : -1.f);
+				const FVector2D Mid = (P + Q) * 0.5f + Out * (Thick * 0.5f);
+				// Up to the gunwale cap's height there (it rises toward the bow): the cap itself stays the top.
+				const float TopZ = DeckZ + 55.f + 45.f * FMath::Pow(FMath::Clamp((B.X + 395.f) / 790.f, 0.f, 1.f), 2.2f);
+				MakeWall(FString::Printf(TEXT("BulwarkWall%s%d"), Side > 0.f ? TEXT("S") : TEXT("P"), i),
+					FVector(Mid.X, Mid.Y, (BottomZ + TopZ) * 0.5f), FVector((Q - P).Size() * 0.5f + Overlap, Thick * 0.5f, (TopZ - BottomZ) * 0.5f),
+					FMath::RadiansToDegrees(FMath::Atan2(Along.Y, Along.X)));
+			}
+		}
+		// The stern bulkhead across the back of the cockpit, its face at X = -340 (BULKHEAD_X), deck to the stern box top.
+		const float BulkheadTop = DeckZ + 55.f;
+		MakeWall(TEXT("BulwarkWallStern"), FVector(-340.f + Inboard - Thick * 0.5f, 0.f, (BottomZ + BulkheadTop) * 0.5f),
+			FVector(Thick * 0.5f, 118.f, (BulkheadTop - BottomZ) * 0.5f), 0.f);
+	}
+
 	MotorMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorMesh"));
 	MotorMesh->SetupAttachment(HullBody);
 	MotorMeshStarboard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorMeshStarboard"));
@@ -255,7 +306,9 @@ ARiptideBoat::ARiptideBoat()
 		Light->SetInnerConeAngle(45.f);
 		Light->SetOuterConeAngle(56.25f);
 		Light->SetLightColor(Colour);
-		Light->SetCastShadows(false);
+		// Shadowed, so the bow screens the water close under it, as the hull would: unshadowed, a red and a green
+		// glow lit the sea right through the hull.
+		Light->SetCastShadows(true);
 		return Light;
 	};
 	BowLightPort = MakeSidelight(TEXT("BowLightPort"), -1.f, FLinearColor(1.f, 0.05f, 0.03f));
@@ -283,8 +336,12 @@ ARiptideBoat::ARiptideBoat()
 	RadarArray = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RadarArray"));
 	RadarArray->SetupAttachment(HullBody);
 	RadarArray->SetRelativeLocation(RadarHub);
+	CompassCard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CompassCard"));
+	CompassCard->SetupAttachment(HullBody);
+	CompassCard->SetRelativeLocation(CompassPivot);
+	CompassCard->SetCastShadow(false);
 	for (UStaticMeshComponent* Part : { MotorBracket.Get(), MotorBracketStarboard.Get(), MotorSwivel.Get(), MotorSwivelStarboard.Get(),
-			ThrottleLeverPort.Get(), ThrottleLeverStarboard.Get(), RadarArray.Get() })
+			ThrottleLeverPort.Get(), ThrottleLeverStarboard.Get(), RadarArray.Get(), CompassCard.Get() })
 	{
 		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
@@ -316,6 +373,7 @@ ARiptideBoat::ARiptideBoat()
 	SwivelModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_OutboardSwivel.SM_OutboardSwivel")));
 	LeverModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_ThrottleLever.SM_ThrottleLever")));
 	RadarModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_RadarArray.SM_RadarArray")));
+	CompassModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_CompassCard.SM_CompassCard")));
 
 	// Propellers: at each outboard's prop, well below the waterline when the boat is level.
 	Propeller = CreateDefaultSubobject<USceneComponent>(TEXT("Propeller"));
@@ -334,6 +392,15 @@ ARiptideBoat::ARiptideBoat()
 	WheelMesh->SetupAttachment(HullBody);
 	WheelMesh->SetRelativeLocationAndRotation(WheelCentre, FRotator(WheelTiltDeg, 180.f, 0.f));
 	// The radio's hand mic on its clip, and its cord.
+	// Where voices come out: the VHF's speaker in the face of the overhead box, and the loudhailer horn under the
+	// T-top's front edge (riptide_boat_mesh.py's _electronics_box and _t_top).
+	RadioSpeaker = CreateDefaultSubobject<USceneComponent>(TEXT("RadioSpeaker"));
+	RadioSpeaker->SetupAttachment(HullBody);
+	RadioSpeaker->SetRelativeLocation(FVector(-78.f, 0.f, DeckZ + 205.f));
+	LoudhailerHorn = CreateDefaultSubobject<USceneComponent>(TEXT("LoudhailerHorn"));
+	LoudhailerHorn->SetupAttachment(HullBody);
+	LoudhailerHorn->SetRelativeLocationAndRotation(FVector(46.f, 0.f, DeckZ + 215.f), FRotator::ZeroRotator);
+
 	MicMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MicMesh"));
 	MicMesh->SetupAttachment(HullBody);
 	MicMesh->SetRelativeLocation(MicHook);
@@ -489,6 +556,10 @@ void ARiptideBoat::ApplyModels()
 	{
 		RadarArray->SetStaticMesh(Radar);
 	}
+	if (UStaticMesh* Compass = CompassModel.LoadSynchronous())
+	{
+		CompassCard->SetStaticMesh(Compass);
+	}
 	if (UStaticMesh* Lever = LeverModel.LoadSynchronous())
 	{
 		ThrottleLeverPort->SetStaticMesh(Lever);
@@ -532,6 +603,9 @@ void ARiptideBoat::BeginPlay()
 	Super::BeginPlay();
 
 	HullBody->SetMassOverrideInKg(NAME_None, HullMassKg, true);
+	// Placed on a sloping wave, the hull settles into it in its first moments: not a slam, so no slap or spray (the
+	// main menu's boat used to splash down as it loaded).
+	SlapCooldownLeft = SettleSeconds;
 	if (HasAuthority())
 	{
 		FuelLiters = FuelCapacityLiters * StartingFuelFraction;
@@ -636,11 +710,12 @@ void ARiptideBoat::SetUpLockers()
 	}
 	// Each opens from its lid (riptide_boat_mesh.py's _fittings and _stern_box). Stocked the way a crew running this
 	// boat keeps it: whoever takes the boat takes what's aboard.
-	const int32 Forward = Lockers->AddStorage(NSLOCTEXT("Riptide", "ForwardLocker", "Forward locker"), 8, 5, FVector(102.f, 0.f, DeckZ));
-	const int32 Bow = Lockers->AddStorage(NSLOCTEXT("Riptide", "BowLocker", "Bow locker"), 6, 4, FVector(205.f, 0.f, DeckZ + 4.f));
-	const int32 SternPort = Lockers->AddStorage(NSLOCTEXT("Riptide", "SternPort", "Stern locker (port)"), 5, 3, FVector(-367.f, -97.f, DeckZ + 55.f));
-	const int32 SternStarboard = Lockers->AddStorage(NSLOCTEXT("Riptide", "SternStarboard", "Stern locker (starboard)"), 5, 3, FVector(-367.f, 97.f, DeckZ + 55.f));
-	const int32 Anchor = Lockers->AddStorage(NSLOCTEXT("Riptide", "AnchorLocker", "Anchor locker"), 3, 3, FVector(372.f, 0.f, DeckZ + 95.f));
+	// Each opened by looking at its lid (riptide_boat_mesh.py's hatches): the point is the lid's centre, then its half size.
+	const int32 Forward = Lockers->AddStorage(NSLOCTEXT("Riptide", "ForwardLocker", "Forward locker"), 8, 5, FVector(102.5f, 0.f, DeckZ), FVector2D(47.5f, 40.f));
+	const int32 Bow = Lockers->AddStorage(NSLOCTEXT("Riptide", "BowLocker", "Bow locker"), 6, 4, FVector(205.f, 0.f, DeckZ + 3.f), FVector2D(35.f, 28.f));
+	const int32 SternPort = Lockers->AddStorage(NSLOCTEXT("Riptide", "SternPort", "Stern locker (port)"), 5, 3, FVector(-366.f, -99.f, DeckZ + 55.f), FVector2D(18.f, 13.f));
+	const int32 SternStarboard = Lockers->AddStorage(NSLOCTEXT("Riptide", "SternStarboard", "Stern locker (starboard)"), 5, 3, FVector(-366.f, 99.f, DeckZ + 55.f), FVector2D(18.f, 13.f));
+	const int32 Anchor = Lockers->AddStorage(NSLOCTEXT("Riptide", "AnchorLocker", "Anchor locker"), 3, 3, FVector(375.f, 0.f, DeckZ + 95.f), FVector2D(12.f, 10.f));
 	auto Stock = [this](int32 Locker, const TCHAR* Id, int32 Count) { Lockers->GetStorage(Locker)->Grid.Add(FName(Id), Count); };
 	Stock(Forward, TEXT("first_aid_kit"), 1);
 	Stock(Forward, TEXT("flare_gun"), 1);
@@ -1271,6 +1346,8 @@ void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ARiptideBoat, EngineOutput);
 	DOREPLIFETIME(ARiptideBoat, SteerAngleDeg);
 	DOREPLIFETIME(ARiptideBoat, MicHolder);
+	DOREPLIFETIME(ARiptideBoat, RadioChannel);
+	DOREPLIFETIME(ARiptideBoat, MicMode);
 	DOREPLIFETIME(ARiptideBoat, LadderUser);
 	DOREPLIFETIME(ARiptideBoat, TrimDeg);
 	DOREPLIFETIME(ARiptideBoat, FuelLiters);
@@ -1345,6 +1422,10 @@ void ARiptideBoat::BuildInput()
 	SearchlightAction->ValueType = EInputActionValueType::Boolean;
 	HelmMapping->MapKey(SearchlightAction, EKeys::L);
 	HelmMapping->MapKey(SearchlightAction, EKeys::Gamepad_DPad_Left);
+	AimSearchlightAction = NewObject<UInputAction>(this, TEXT("IA_AimSearchlight"));
+	AimSearchlightAction->ValueType = EInputActionValueType::Boolean;
+	HelmMapping->MapKey(AimSearchlightAction, EKeys::RightMouseButton);
+	HelmMapping->MapKey(AimSearchlightAction, EKeys::Gamepad_LeftShoulder);
 	NavLightsAction = NewObject<UInputAction>(this, TEXT("IA_NavLights"));
 	NavLightsAction->ValueType = EInputActionValueType::Boolean;
 	HelmMapping->MapKey(NavLightsAction, EKeys::N);
@@ -1353,7 +1434,6 @@ void ARiptideBoat::BuildInput()
 	HelmMapping->MapKey(DeckLightsAction, EKeys::K);
 	MicAction = NewObject<UInputAction>(this, TEXT("IA_Mic"));
 	MicAction->ValueType = EInputActionValueType::Boolean;
-	HelmMapping->MapKey(MicAction, EKeys::M);
 	HelmMapping->MapKey(MicAction, EKeys::Gamepad_RightThumbstick);
 	HelmMapping->MapKey(DeckLightsAction, EKeys::Gamepad_DPad_Right);
 
@@ -1380,6 +1460,8 @@ void ARiptideBoat::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindAction(TrimAction, ETriggerEvent::Canceled, this, &ARiptideBoat::OnTrimReleased);
 		Input->BindActionValueLambda(DebugHudAction, ETriggerEvent::Started, [this](const FInputActionValue&) { bShowDebugHud = !bShowDebugHud; });
 		Input->BindActionValueLambda(SearchlightAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(0); });
+		Input->BindActionValueLambda(AimSearchlightAction, ETriggerEvent::Started, [this](const FInputActionValue&) { bAimingSearchlight = true; });
+		Input->BindActionValueLambda(AimSearchlightAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { bAimingSearchlight = false; });
 		Input->BindActionValueLambda(NavLightsAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(1); });
 		Input->BindActionValueLambda(DeckLightsAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleLight(2); });
 		Input->BindActionValueLambda(MicAction, ETriggerEvent::Started, [this](const FInputActionValue&) { ServerToggleMic(); });
@@ -1493,8 +1575,23 @@ void ARiptideBoat::OnLook(const FInputActionValue& Value)
 	HelmCamera->SetRelativeRotation(FRotator(LookPitch, LookYaw, 0.f));
 }
 
+bool ARiptideBoat::IsHelmViewOnMic() const
+{
+	const FVector Eye = HelmCamera->GetComponentLocation();
+	const FVector View = HelmCamera->GetForwardVector();
+	const FVector To = (GetMicHookLocation() - FVector(0.f, 0.f, 6.f)) - Eye;
+	const float Along = FVector::DotProduct(To, View);
+	return Along > 0.f && Along <= 170.f && (To - View * Along).Size() <= 22.f;
+}
+
 void ARiptideBoat::OnLeaveHelm(const FInputActionValue& Value)
 {
+	// Looking at the mic, E takes it off its clip (or hangs it back up) rather than leaving the helm.
+	if (IsHelmViewOnMic())
+	{
+		ServerToggleMic();
+		return;
+	}
 	if (HasAuthority())
 	{
 		LeaveHelm();
@@ -1619,8 +1716,13 @@ void ARiptideBoat::ApplyLights()
 
 void ARiptideBoat::UpdateSearchlight(float DeltaSeconds)
 {
-	// The helmsman aims it by looking: it follows the helm camera's direction.
-	if (IsLocallyControlled() && Helmsman)
+	// The helmsman aims it by holding the aim key (right mouse) and looking: it follows the helm camera's direction
+	// while held, and stays where it was left when let go, so you can look about with it trained on something.
+	if (!IsLocallyControlled() || !Helmsman)
+	{
+		bAimingSearchlight = false;
+	}
+	else if (bAimingSearchlight && (!FMath::IsNearlyEqual(LookYaw, SearchlightYaw, 0.2f) || !FMath::IsNearlyEqual(LookPitch, SearchlightPitch, 0.2f)))
 	{
 		if (HasAuthority())
 		{
@@ -1816,6 +1918,8 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 	{
 		RadarArray->AddLocalRotation(FRotator(0.f, RadarRpm * 6.f * DeltaSeconds, 0.f));
 	}
+	// The compass card keeps its North to the world's North (+X), whichever way the boat heads.
+	CompassCard->SetRelativeRotation(FRotator(0.f, -GetActorRotation().Yaw, 0.f));
 	// Throttle levers: forward for ahead, back for astern.
 	ThrottleLeverPort->SetRelativeRotation(FRotator(-ThrottleLever * LeverSwingDeg, 0.f, 0.f));
 	ThrottleLeverStarboard->SetRelativeRotation(FRotator(-ThrottleLever * LeverSwingDeg, 0.f, 0.f));
@@ -2251,8 +2355,9 @@ void ARiptideBoat::DrawDebugHud() const
 	const uint64 KeyBase = 0x52495054ull;
 	if (Helmsman)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, MicHolder && MicHolder == Helmsman ? TEXT("E  Leave the helm      M  Hang up the mic      H  Tuning readout")
-			: TEXT("E  Leave the helm      M  Radio mic      H  Tuning readout"));
+		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, IsHelmViewOnMic()
+			? (MicHolder && MicHolder == Helmsman ? TEXT("E  Hang up the mic      Hold right mouse  Aim the searchlight      H  Tuning readout") : TEXT("E  Take the radio mic      Hold right mouse  Aim the searchlight      H  Tuning readout"))
+			: TEXT("E  Leave the helm      Hold right mouse  Aim the searchlight (L on/off)      Look at the radio mic + E  Take it      H  Tuning readout"));
 	}
 	if (!bShowDebugHud)
 	{
@@ -2337,6 +2442,15 @@ void ARiptideBoat::ServerToggleMic_Implementation()
 	else
 	{
 		GrabMic(Helmsman);
+	}
+}
+
+void ARiptideBoat::SetRadio(int32 Channel, ERiptideMicMode Mode)
+{
+	if (HasAuthority())
+	{
+		RadioChannel = FMath::Clamp(Channel, 1, URiptideVoiceComponent::MaxChannel);
+		MicMode = Mode;
 	}
 }
 
@@ -2521,6 +2635,8 @@ void ARiptideBoat::RescueIfOffTheSea()
 		}
 	}
 	SetActorLocationAndRotation(Target, Upright, false, nullptr, ETeleportType::ResetPhysics);
+	SlapCooldownLeft = SettleSeconds;
+	bHaveBowFreeboard = false;
 	HullBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
 	HullBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 	UE_LOG(LogRiptideBoat, Warning, TEXT("%s went off the edge of the sea at %s: back on the water at %s"), *GetName(), *Here.ToString(), *Target.ToString());

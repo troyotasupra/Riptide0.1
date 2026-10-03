@@ -20,6 +20,7 @@ log start with "RiptideMPTest".
 import os
 import subprocess
 import sys
+import math
 import time
 
 ROLE_FLAG = "-RiptideTestRole="
@@ -178,7 +179,35 @@ def run_in_game(role):
                     hud = unreal.GameplayStatics.get_player_controller(world, 0).get_hud()
                     check("the host's keyboard and mouse drive the game, not the menu it came from",
                           isinstance(hud, unreal.RiptideHUD) and hud.is_game_input_active())
-                    go("waiting for the client to leave")
+                    go("radio")
+                elif step == "radio":
+                    # The host takes the boat's radio mic, switches it to the loudhailer, then back to the CB, and an
+                    # NPC calls on the boat's channel: the client checks where the host's voice would come out.
+                    pc = unreal.GameplayStatics.get_player_controller(world, 0)
+                    crew = pc.get_controlled_pawn()
+                    boat = crew.get_home_boat() if isinstance(crew, unreal.RiptideCharacter) else None
+                    r = st.setdefault("radio", {})
+                    if boat and "took" not in r:
+                        crew.set_actor_location(boat.get_actor_transform().transform_location(unreal.Vector(-95.0, 25.0, 112.0)), False, True)
+                        eye = crew.get_component_by_class(unreal.CameraComponent).get_world_location()
+                        to = boat.get_mic_hook_location() - unreal.Vector(0, 0, 6) - eye
+                        pc.set_control_rotation(unreal.Rotator(roll=0.0, pitch=math.degrees(math.atan2(to.z, math.hypot(to.x, to.y))),
+                                                               yaw=math.degrees(math.atan2(to.y, to.x))))
+                        crew.try_toggle_mic()
+                        r["took"] = crew.is_holding_mic()
+                        check("the host takes the radio mic", r["took"])
+                        pc.get_component_by_class(unreal.RiptideVoiceComponent).toggle_mic_mode()
+                        r["at"] = time.time()
+                    elif boat and "back" not in r and time.time() - r["at"] > 8:
+                        pc.get_component_by_class(unreal.RiptideVoiceComponent).toggle_mic_mode()
+                        r["back"] = time.time()
+                    elif boat and "back" in r and time.time() - r["back"] > 2 and time.time() - r.get("called", 0) > 2:
+                        unreal.RiptideRadioSubsystem.radio_call(world, boat.get_radio_channel(), "Coast Guard", "Radio check, over")
+                        r["called"] = time.time()
+                        r["calls"] = r.get("calls", 0) + 1
+                        if r["calls"] >= 6:
+                            crew.try_toggle_mic()
+                            go("waiting for the client to leave")
                 elif step == "waiting for the client to leave":
                     if len(unreal.GameplayStatics.get_game_state(world).player_array) == 1:
                         check("the host sees the client leave, and its game goes on", map_name == "Ocean_Test")
@@ -250,9 +279,31 @@ def run_in_game(role):
                     check("the in-game menu's HUD is there", isinstance(hud, unreal.RiptideHUD), str(hud))
                     if isinstance(hud, unreal.RiptideHUD):
                         check("its keyboard and mouse drive the game, not the menu it came from", hud.is_game_input_active())
+                    go("radio")
+                elif step == "radio":
+                    # Where the host's voice comes out here, as the host works the boat's radio mic (see the host's side).
+                    pc = unreal.GameplayStatics.get_player_controller(world, 0)
+                    host = next((s for s in unreal.GameplayStatics.get_game_state(world).player_array if s.get_player_name() == HOST_NAME), None)
+                    route = unreal.RiptideVoiceComponent.route_for(host, pc) if host else None
+                    r = st.setdefault("radio", {})
+                    if route == unreal.RiptideVoiceRoute.LOUDHAILER and "hailer" not in r:
+                        r["hailer"] = True
+                        check("the host's voice comes out of the loudhailer when it switches the mic to it", True)
+                    if "hailer" in r and route == unreal.RiptideVoiceRoute.PROXIMITY and "cb" not in r:
+                        r["cb"] = True
+                        check("on the CB, aboard the same boat, the host is heard speaking (not over the radio)", True)
+                    heard = pc.get_component_by_class(unreal.RiptideVoiceComponent).get_last_heard_line()
+                    if "cb" in r and "Radio check" in heard:
+                        check("an NPC's call on the boat's channel is heard on its radio", True, heard)
+                        pc.get_component_by_class(unreal.RiptideVoiceComponent).set_push_to_talk(True)
+                        check("push-to-talk starts and stops", pc.get_component_by_class(unreal.RiptideVoiceComponent).is_pushing_to_talk())
+                        pc.get_component_by_class(unreal.RiptideVoiceComponent).set_push_to_talk(False)
+                        hud = pc.get_hud()
                         hud.set_menu_open(True)
                         check("the in-game menu opens", hud.is_menu_open())
-                    go("menu open")
+                        go("menu open")
+                    elif waited() > 45:
+                        finish(f"the radio checks didn't all happen: {r}, last heard '{heard}'")
                 elif step == "menu open" and waited() > 2:
                     # (A screenshot is taken at the end of the frame, so each change waits for the one before.)
                     if shots:

@@ -670,7 +670,7 @@ bool ARiptideCharacter::IsHoldingMic() const
 bool ARiptideCharacter::CanGrabMic() const
 {
 	return HomeBoat && !HomeBoat->GetMicHolder() && !bManningHelm && !IsInSea() && !IsClimbing()
-		&& IsLookingAt(HomeBoat->GetMicHookLocation() - FVector(0.f, 0.f, 6.f), MicReach, 14.f);
+		&& IsLookingAt(HomeBoat->GetMicHookLocation() - FVector(0.f, 0.f, 6.f), MicReach, 18.f);
 }
 
 void ARiptideCharacter::TryToggleMic()
@@ -734,6 +734,10 @@ void ARiptideCharacter::OnInteract(const FInputActionValue& Value)
 	{
 		TryToggleMic();          // take the mic off its clip, or hang it back on it
 	}
+	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
+	{
+		OpenInventory(Locker);   // looking right at a locker's lid: that's what you mean, even standing by the helm
+	}
 	else if (IsAtHelm())
 	{
 		TryTakeHelm();
@@ -741,10 +745,6 @@ void ARiptideCharacter::OnInteract(const FInputActionValue& Value)
 	else if (CanRefuel())
 	{
 		TryRefuel();
-	}
-	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
-	{
-		OpenInventory(Locker);
 	}
 }
 
@@ -761,8 +761,9 @@ int32 ARiptideCharacter::GetLockerInReach() const
 	{
 		return INDEX_NONE;
 	}
-	const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
-	return HomeBoat->GetLockers()->FindNearest(Feet + FVector(0.f, 0.f, 40.f), LockerReach);
+	// The one whose lid you're looking at: with lockers side by side (the stern pair, the two in the foredeck) it's
+	// the one you mean, not whichever happens to be nearest your feet.
+	return HomeBoat->GetLockers()->FindLookedAt(FirstPersonCamera->GetComponentLocation(), GetControlRotation().Vector(), LockerReach);
 }
 
 void ARiptideCharacter::OpenInventory(int32 Locker)
@@ -797,7 +798,7 @@ void ARiptideCharacter::OpenInventory(int32 Locker)
 	GEngine->GameViewport->AddViewportWidgetContent(InventoryWidgetContainer.ToSharedRef(), 10);
 	FInputModeUIOnly Mode;
 	Mode.SetWidgetToFocus(InventoryWidget);
-	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::LockAlways);
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);    // free to go to another monitor
 	PC->SetInputMode(Mode);
 	PC->SetShowMouseCursor(true);
 	GetCharacterMovement()->StopMovementImmediately();
@@ -920,8 +921,8 @@ bool ARiptideCharacter::CanReach(const URiptideStorageComponent* Storage, int32 
 	// A locker on the home boat, within reach (with some slack for the boat moving under a lagging client).
 	if (IsValid(HomeBoat) && Storage == HomeBoat->GetLockers() && Storage->GetStorage(Index) && !IsInSea() && !IsClimbing())
 	{
-		const FVector Feet = GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
-		return FVector::Dist(Storage->GetWorldPoint(Index), Feet + FVector(0.f, 0.f, 40.f)) <= LockerReach * 1.6f;
+		// By distance from the eyes (the server doesn't know exactly where a client is looking).
+		return FVector::Dist(Storage->GetWorldPoint(Index), FirstPersonCamera->GetComponentLocation()) <= LockerReach * 1.4f;
 	}
 	return false;
 }
@@ -1237,6 +1238,11 @@ void ARiptideCharacter::DrawHud() const
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Hang up the mic"));
 	}
+	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
+	{
+		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+			FString::Printf(TEXT("E  Open the %s"), *HomeBoat->GetLockers()->GetStorage(Locker)->Title.ToString().ToLower()));
+	}
 	else if (IsAtHelm())
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
@@ -1258,11 +1264,6 @@ void ARiptideCharacter::DrawHud() const
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
 			FString::Printf(TEXT("The tank's too full for a whole drum (%d%%)"), FMath::RoundToInt(HomeBoat->GetFuelFraction() * 100.f)));
-	}
-	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
-	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
-			FString::Printf(TEXT("E  Open the %s"), *HomeBoat->GetLockers()->GetStorage(Locker)->Title.ToString().ToLower()));
 	}
 	else if (IsValid(HomeBoat) && IsStandingOnBoat() && HomeBoat->GetSpeedKnots() > 12.f)
 	{

@@ -383,8 +383,8 @@ GRAB_RAIL_X = (-290.0, -40.0)
 GRAB_RAIL_STANCHIONS = (-200.0, -120.0)
 GRAB_RAIL_H = 25.0
 # The boarding ladder: its rails reach this far down, and its treads (ARiptideBoat's ladder foot is among them).
-LADDER_BOTTOM_Z = -75.0
-LADDER_RUNGS = (-70.0, -54.0, -38.0, -22.0, -6.0, 10.0, 26.0, 42.0, 58.0)
+LADDER_BOTTOM_Z = -45.0
+LADDER_RUNGS = (-38.0, -22.0, -6.0, 10.0, 26.0, 42.0, 58.0)
 
 
 def _ball(m, c, r, material, rows=8, cols=16):
@@ -549,12 +549,6 @@ def _fittings(m):
     s0 = station(0.0)
     for side in (1.0, -1.0):
         _cleat(m, _frame((STERN_X + 33.0, side * (s0["sheer_b"] - GUNWALE_MID), s0["sheer_z"]), (1.0, 0.0, 0.0)))
-    # Towing bitts: a short post with a cross-pin on each stern box top, behind its hatch, to tow from or be towed.
-    for side in (1.0, -1.0):
-        bx, by, bz = STERN_X + 6.0, side * 98.0, s0["sheer_z"]
-        m.box((bx - 4.5, by - 4.5, bz - 0.2), (bx + 4.5, by + 4.5, bz + 1.2), "Frame")
-        m.tube([(bx, by, bz + 1.0), (bx, by, bz + 18.0)], 3.0, "Frame", sides=12, caps=True)
-        m.tube([(bx, by - 7.0, bz + 13.0), (bx, by + 7.0, bz + 13.0)], 1.2, "Frame", sides=8, caps=True)
     # Tow post (samson post) on the foredeck, just aft of the anchor locker.
     tx = 345.0
     tz = _deck_z_at(tx)
@@ -659,7 +653,7 @@ def _fittings(m):
     # the motors' lower units at full lock and trim, and of the ladder.
     for side in (1.0, -1.0):
         _trim_tab(m, s0, side, 60.0, 88.0)
-    # The boarding ladder reaches well into the water, so a swimmer can climb out (ARiptideBoat's ladder foot): two
+    # The boarding ladder reaches a couple of treads into the water, enough for a swimmer to climb out (ARiptideBoat's ladder foot): two
     # stainless rails on standoffs off the transom's port corner, flat treads, and a grab handle over the top that
     # comes down onto the stern box, aft of its hatch.
     lx = STERN_X - 4.0
@@ -729,6 +723,22 @@ def _quad(m, a, b, c, d, material, facing):
             outward_hint=lambda p: (2 * p[0] - facing[0], 2 * p[1] - facing[1], 2 * p[2] - facing[2]))
 
 
+BULKHEAD_THICK = 8.0     # the stern bulkhead's wall, cockpit face to splashwell face
+
+
+def _rigging_boot(m, c, r=6.0, length=4.0, wall=0.8):
+    """A rigging boot on the splashwell face of the bulkhead at c, sticking out aft: an open collar the cables come out
+    of, with a dark recess inside it, so they plainly pass through the wall."""
+    x0, x1 = c[0], c[0] - length
+    outer = [_circle((x, c[1], c[2]), r, 16, "x") for x in (x0, x1)]
+    inner = [_circle((x, c[1], c[2]), r - wall, 16, "x") for x in (x1, x0 + 2.0)]
+    m.grid(outer, "Trim", outward_hint=lambda p: (p[0], c[1], c[2]), close_rows=True)
+    m.grid(inner, "Trim", outward_hint=lambda p: (p[0], c[1] + 100.0 * (p[1] - c[1]), c[2] + 100.0 * (p[2] - c[2])),
+           close_rows=True)
+    m.grid([outer[1], inner[0]], "Trim", outward_hint=lambda p: (p[0] + 10.0, p[1], p[2]), close_rows=True)   # the lip
+    m.fan(inner[1], "Cowling", outward_hint=lambda p: (p[0] + 10.0, p[1], p[2]))                                # the dark inside
+
+
 def _stern_box(m, s0):
     """The bulkhead across the stern, its flat top with hatches, and the splashwell behind it in front of the motors."""
     top = s0["sheer_z"]
@@ -743,24 +753,29 @@ def _stern_box(m, s0):
               (x0 - TRANSOM_THICK, side * inner, top), "Deck", (-360.0, side * 90.0, top + 100.0))
         hy0, hy1 = side * (WELL_HALF + 6.0), side * (inner - 4.0)       # outboard of it, the stern cleat
         m.box((x0 + 6.0, min(hy0, hy1), top), (x1 - 8.0, max(hy0, hy1), top + 0.8), "Trim")
-    # Splashwell: floor, sides, the bulkhead's back, and the inside of the transom up to the sill.
-    well_centre = ((x0 + x1) / 2, 0.0, (WELL_FLOOR_Z + top) / 2)
-    _quad(m, (x0, -WELL_HALF, WELL_FLOOR_Z), (x1, -WELL_HALF, WELL_FLOOR_Z), (x1, WELL_HALF, WELL_FLOOR_Z),
+    # Splashwell: floor, sides, the bulkhead's back, and the inside of the transom up to the sill. The bulkhead is a
+    # real wall, BULKHEAD_THICK through (its back face is set aft of the cockpit face), so the cables have something
+    # to pass through.
+    wx = x1 - BULKHEAD_THICK
+    well_centre = ((x0 + wx) / 2, 0.0, (WELL_FLOOR_Z + top) / 2)
+    _quad(m, (x0, -WELL_HALF, WELL_FLOOR_Z), (wx, -WELL_HALF, WELL_FLOOR_Z), (wx, WELL_HALF, WELL_FLOOR_Z),
           (x0, WELL_HALF, WELL_FLOOR_Z), "Deck", (well_centre[0], 0.0, top + 100.0))
     for side in (1.0, -1.0):
-        _quad(m, (STERN_X, side * WELL_HALF, WELL_FLOOR_Z), (x1, side * WELL_HALF, WELL_FLOOR_Z),
-              (x1, side * WELL_HALF, top), (STERN_X, side * WELL_HALF, top), "HullInside", well_centre)
-    _quad(m, (x1, -WELL_HALF, WELL_FLOOR_Z), (x1, WELL_HALF, WELL_FLOOR_Z), (x1, WELL_HALF, top), (x1, -WELL_HALF, top),
+        _quad(m, (STERN_X, side * WELL_HALF, WELL_FLOOR_Z), (wx, side * WELL_HALF, WELL_FLOOR_Z),
+              (wx, side * WELL_HALF, top), (STERN_X, side * WELL_HALF, top), "HullInside", well_centre)
+    _quad(m, (wx, -WELL_HALF, WELL_FLOOR_Z), (wx, WELL_HALF, WELL_FLOOR_Z), (wx, WELL_HALF, top), (wx, -WELL_HALF, top),
           "HullInside", well_centre)
     _quad(m, (x0, -WELL_HALF, WELL_FLOOR_Z), (x0, WELL_HALF, WELL_FLOOR_Z), (x0, WELL_HALF, SILL_Z), (x0, -WELL_HALF, SILL_Z),
           "HullInside", well_centre)
     _quad(m, (STERN_X, -WELL_HALF, SILL_Z), (x0, -WELL_HALF, SILL_Z), (x0, WELL_HALF, SILL_Z), (STERN_X, WELL_HALF, SILL_Z),
           "Aluminium", (well_centre[0], 0.0, top + 100.0))
-    # Control cables and fuel hoses from the bulkhead, down through the well and over the sill to each motor.
+    # Control cables and fuel hoses come through the bulkhead in a rigging boot for each motor (a short hollow collar,
+    # dark inside), then down through the well and over the sill to each motor.
     for my in (-38.0, 38.0):
+        _rigging_boot(m, (wx, my * 0.82, top - 12.0))
         for dy, r in ((-4.0, 1.6), (3.0, 1.2)):
             y = my + dy
-            m.tube([(x1 - 0.5, y * 0.8, top - 12.0), (x1 - 12.0, y * 0.85, WELL_FLOOR_Z + 4.0),
+            m.tube([(x1 - 2.0, y * 0.8, top - 12.0), (wx - 3.0, y * 0.8, top - 12.0), (x1 - 12.0, y * 0.85, WELL_FLOOR_Z + 4.0),
                     (x0 + 8.0, y, WELL_FLOOR_Z + 3.0), (x0 + 1.0, y, SILL_Z + 6.0), (STERN_X - 12.0, y, SILL_Z + 5.0)],
                    r, "Trim", sides=6, caps=True)  # over the bracket's hook and into the cowling's front
 
@@ -992,6 +1007,33 @@ def build_searchlight():
         m.box((-2.0, y - 1.0, -8.0), (4.0, y + 1.0, 1.0), "Trim")
     m.box((-2.0, -10.5, -9.0), (4.0, 10.5, -7.0), "Trim")
     m.tube([(-6.0, 0.0, 5.0), (-10.0, 0.0, 9.0)], 1.0, "Trim", sides=6, caps=True)   # handle
+    return m
+
+
+def build_compass_card():
+    """The compass's card, floating in its dome on the console top: origin at its pivot, North along +X. A white
+    disc with the cardinal marks, North's in red, which the boat turns against its heading so North stays north."""
+    m = Mesh()
+    r = 4.6
+    m.tube([(0.0, 0.0, -0.3), (0.0, 0.0, 0.0)], r, "White", sides=32, caps=True)
+    m.tube([(0.0, 0.0, -1.6), (0.0, 0.0, -0.3)], r * 0.97, "Trim", sides=32)            # the card's skirt
+    for i in range(36):                                                                     # ticks every 10 degrees
+        a = 2 * math.pi * i / 36
+        long = i % 9 == 0
+        r0 = r - (1.1 if long else 0.6)
+        ca, sa = math.cos(a), math.sin(a)
+        w = 0.12
+        pts = [(r0 * ca - w * sa, r0 * sa + w * ca, 0.02), ((r - 0.15) * ca - w * sa, (r - 0.15) * sa + w * ca, 0.02),
+               ((r - 0.15) * ca + w * sa, (r - 0.15) * sa - w * ca, 0.02), (r0 * ca + w * sa, r0 * sa - w * ca, 0.02)]
+        m.fan(pts, "Trim", outward_hint=lambda p: (p[0], p[1], p[2] - 10.0))
+    # The cardinal points: a long red arrowhead to North, short dark ones to East, South and West.
+    for i, (length, mat) in enumerate(((3.2, "Red"), (2.2, "Trim"), (2.2, "Trim"), (2.2, "Trim"))):
+        a = math.pi / 2 * i
+        ca, sa = math.cos(a), math.sin(a)
+        tip = (length * ca, length * sa, 0.04)
+        left = (0.55 * -sa, 0.55 * ca, 0.04)
+        right = (0.55 * sa, 0.55 * -ca, 0.04)
+        m.fan([right, tip, left], mat, outward_hint=lambda p: (p[0], p[1], p[2] - 10.0))
     return m
 
 

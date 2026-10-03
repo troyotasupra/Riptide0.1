@@ -305,6 +305,8 @@ void ARiptideHUD::BeginPlay()
 	if (UEnhancedInputComponent* Input = Cast<UEnhancedInputComponent>(InputComponent))
 	{
 		Input->BindAction(MenuAction, ETriggerEvent::Started, this, &ARiptideHUD::OnMenuKey);
+		Input->BindActionValueLambda(FreeCursorAction, ETriggerEvent::Started, [this](const FInputActionValue&) { SetCursorFreed(true); });
+		Input->BindActionValueLambda(FreeCursorAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetCursorFreed(false); });
 	}
 	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(Player->GetLocalPlayer()))
 	{
@@ -350,6 +352,41 @@ void ARiptideHUD::BuildInput()
 	MenuMapping->MapKey(MenuAction, EKeys::Escape);
 	MenuMapping->MapKey(MenuAction, EKeys::P);              // in the editor, where Esc stops play
 	MenuMapping->MapKey(MenuAction, EKeys::Gamepad_Special_Right);
+	FreeCursorAction = NewObject<UInputAction>(this, TEXT("IA_FreeCursor"));
+	FreeCursorAction->ValueType = EInputActionValueType::Boolean;
+	MenuMapping->MapKey(FreeCursorAction, EKeys::LeftAlt);
+}
+
+void ARiptideHUD::SetCursorFreed(bool bFree)
+{
+	APlayerController* Player = GetOwningPlayerController();
+	// A menu already frees the cursor, and looks after the input itself.
+	if (bFree == bCursorFreed || !Player || (bFree && Menu.IsValid()))
+	{
+		return;
+	}
+	bCursorFreed = bFree;
+	if (bFree)
+	{
+		// The game still gets the keyboard (so letting go of Alt is seen, and the boat can still be driven), but
+		// the mouse is a plain cursor that can leave the window.
+		FInputModeGameAndUI Mode;
+		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		Mode.SetHideCursorDuringCapture(false);
+		Player->SetInputMode(Mode);
+		Player->SetShowMouseCursor(true);
+		Player->SetIgnoreLookInput(true);
+	}
+	else if (!Menu.IsValid())
+	{
+		Player->SetInputMode(FInputModeGameOnly());
+		Player->SetShowMouseCursor(false);
+		if (FSlateApplication::IsInitialized())
+		{
+			FSlateApplication::Get().SetAllUserFocusToGameViewport();
+		}
+		Player->SetIgnoreLookInput(false);
+	}
 }
 
 void ARiptideHUD::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -393,9 +430,14 @@ void ARiptideHUD::SetMenuOpen(bool bOpen)
 		// Keys held as it opens are let go (the boat's throttle, a run, holding on), then nothing reaches the
 		// player's crew member until it closes.
 		Player->FlushPressedKeys();
+		if (bCursorFreed)
+		{
+			bCursorFreed = false;
+			Player->SetIgnoreLookInput(false);
+		}
 		FInputModeUIOnly Mode;
 		Mode.SetWidgetToFocus(Menu);
-		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::LockAlways);
+		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);    // free to go to another monitor
 		Player->SetInputMode(Mode);
 		Player->SetShowMouseCursor(true);
 		Player->SetIgnoreMoveInput(true);

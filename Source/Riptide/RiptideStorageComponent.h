@@ -18,6 +18,11 @@ struct RIPTIDE_API FRiptideStorage
 	UPROPERTY(BlueprintReadOnly, Category = "Storage")
 	FVector Point = FVector::ZeroVector;
 
+	/** Half the size of its lid (a flat, level hatch centred on Point, in the owner's frame), for looking at it to
+	 * open it; zero for things you carry. */
+	UPROPERTY(BlueprintReadOnly, Category = "Storage")
+	FVector2D LidHalfSize = FVector2D::ZeroVector;
+
 	UPROPERTY(BlueprintReadOnly, Category = "Storage")
 	FRiptideItemGrid Grid;
 };
@@ -36,7 +41,8 @@ public:
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	int32 AddStorage(const FText& Title, int32 Width, int32 Height, const FVector& Point = FVector::ZeroVector);
+	int32 AddStorage(const FText& Title, int32 Width, int32 Height, const FVector& Point = FVector::ZeroVector,
+		const FVector2D& LidHalfSize = FVector2D::ZeroVector);
 
 	UFUNCTION(BlueprintPure, Category = "Storage")
 	int32 Num() const { return Storages.Num(); }
@@ -52,6 +58,9 @@ public:
 
 	/** The storage whose opening point is nearest World (within Reach cm), or INDEX_NONE. */
 	int32 FindNearest(const FVector& World, float Reach) const;
+
+	/** The storage whose lid a look from Eye along Direction lands on first, within Reach cm, or INDEX_NONE. */
+	int32 FindLookedAt(const FVector& Eye, const FVector& Direction, float Reach) const;
 
 	/** A storage's opening point in the world. */
 	FVector GetWorldPoint(int32 Index) const;

@@ -212,6 +212,17 @@ def helm_swap(world, boat, walker, t):
         walker.try_take_helm()
         h["took"] = pc.get_controlled_pawn() == boat and boat.get_helmsman() == walker
         log("t=%5.1f take the helm: standing at it %s, now driving %s" % (t, h["at_helm"], h["took"]))
+    if t >= HELM_TAKE_T + 1.0 and h.get("took") and "mic_look" not in h:
+        # From the helm, E takes the radio mic when the view is on it (and leaves the helm otherwise).
+        cam = boat.get_component_by_class(unreal.CameraComponent)
+        ahead = cam.get_editor_property("relative_rotation")
+        h["ahead_on_mic"] = boat.is_helm_view_on_mic()
+        to = boat.get_mic_hook_location() - unreal.Vector(0, 0, 6) - cam.get_world_location()
+        cam.set_world_rotation(unreal.Rotator(roll=0.0, pitch=math.degrees(math.atan2(to.z, math.hypot(to.x, to.y))),
+                                              yaw=math.degrees(math.atan2(to.y, to.x))), False, False)
+        h["mic_look"] = boat.is_helm_view_on_mic()
+        cam.set_relative_rotation(ahead, False, False)
+        log("t=%5.1f at the helm: looking ahead, on the mic %s; looking up at it, on the mic %s" % (t, h["ahead_on_mic"], h["mic_look"]))
     if t >= HELM_LEAVE_T and h.get("took") and "left" not in h:
         boat.leave_helm()
         h["left"] = pc.get_controlled_pawn() == walker and boat.get_helmsman() is None
@@ -297,6 +308,15 @@ def mic_check(world, boat, walker, t):
         log("t=%5.1f walked to the aft deck with the mic: pulled back onto its clip %s" % (t, mc["pulled_back"]))
 
 
+def look_at(world, walker, target):
+    """Turns the player's view onto a point in the world (lockers open by looking at their lids)."""
+    pc = unreal.GameplayStatics.get_player_controller(world, 0)
+    eye = walker.get_component_by_class(unreal.CameraComponent).get_world_location()
+    d = target - eye
+    pc.set_control_rotation(unreal.Rotator(roll=0.0, pitch=math.degrees(math.atan2(d.z, math.hypot(d.x, d.y))),
+                                           yaw=math.degrees(math.atan2(d.y, d.x))))
+
+
 def storage_check(world, boat, walker, t):
     """Stands by the forward locker, checks it's in reach and stocked, and takes what's in it."""
     st = state.setdefault("storage", {})
@@ -307,6 +327,8 @@ def storage_check(world, boat, walker, t):
         walker.set_actor_location(spot, False, True)
         st["placed"] = t
         return
+    # Looking down at the forward locker's lid (riptide_boat_mesh.py's hatch in front of the console).
+    look_at(world, walker, boat.get_actor_transform().transform_location(unreal.Vector(102.5, 0.0, 20.0)))
     if t < st["placed"] + 0.5:
         return
     st["reach"] = walker.get_locker_in_reach()
@@ -488,11 +510,21 @@ def fuel_and_engine_check(world, boat, walker, t):
     if t >= 123.0 and "drum" not in fe:
         walker.set_actor_location(xf.transform_location(unreal.Vector(-318.0, -90.0, 20.0 + 92.0)), False, True)
         fe["drum"] = t
+    if t >= 123.0 and "taken" not in fe:
+        look_at(unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world(), walker,
+                xf.transform_location(unreal.Vector(-366.0, -99.0, 75.0)))     # the port stern locker's lid
     if t >= 123.6 and "taken" not in fe:
         lockers, inv = boat.get_lockers(), walker.get_inventory()
         log("t=%5.1f at the stern locker: in reach %d; lockers hold %s stacks; pockets/pack %s stacks, %s cells free"
             % (t, walker.get_locker_in_reach(), [lockers.count_stacks(i) for i in range(lockers.num())],
                [inv.count_stacks(i) for i in range(inv.num())], [inv.count_free_cells(i) for i in range(inv.num())]))
+        # The stern lockers sit side by side: the one looked at is the one that opens.
+        world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
+        look_at(world, walker, xf.transform_location(unreal.Vector(-366.0, 99.0, 75.0)))
+        fe["looked_starboard"] = walker.get_locker_in_reach()
+        look_at(world, walker, xf.transform_location(unreal.Vector(-366.0, -99.0, 75.0)))
+        fe["looked_port"] = walker.get_locker_in_reach()
+        log("t=%5.1f looking at the stern lockers: starboard lid -> %d, port lid -> %d" % (t, fe["looked_starboard"], fe["looked_port"]))
         fe["taken"] = walker.take_from_locker(2)
         walker.set_actor_location(xf.transform_location(unreal.Vector(-237.0, 100.0, 20.0 + 92.0)), False, True)
     if t >= 124.3 and "poured" not in fe:
@@ -735,7 +767,11 @@ def verdict():
                        "head out %s of %s frames" % (sw.get("head_out"), sw.get("frames"))))
         checks.append(("swims into the ladder, climbs, hangs on when W is let go, and climbs back aboard",
                        bool(sw.get("at_ladder")) and bool(sw.get("hung")) and bool(sw.get("aboard")), ""))
+        checks.append(("at the helm, E is on the radio mic only when looking at it", h.get("mic_look") is True and h.get("ahead_on_mic") is False,
+                       "ahead %s, at it %s" % (h.get("ahead_on_mic"), h.get("mic_look"))))
         fe = state.get("fuel", {})
+        checks.append(("of two lockers side by side, the one looked at opens", fe.get("looked_port") == 2 and fe.get("looked_starboard") == 3,
+                       "port lid -> %s, starboard lid -> %s" % (fe.get("looked_port"), fe.get("looked_starboard"))))
         checks.append(("fetches the fuel drum and pours it in at the filler", bool(fe.get("can")) and fe.get("poured", 0.0) > 19.0,
                        "%.1f L" % fe.get("poured", 0.0)))
         one = in_phase("one engine run")
