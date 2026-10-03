@@ -79,7 +79,7 @@ return float3(shade, shade, shade);""")
 # The ground's photo surfaces (SourceAssets/Textures, credited in Docs/CREDITS.md) and the material that lays them
 # over an island by its surface map. Bump SURFACE_VERSION when the material's recipe changes.
 TEXTURES_PATH = f"{ISLANDS_PATH}/Textures"
-SURFACE_VERSION = "11"
+SURFACE_VERSION = "12"
 GROUND_TEXTURES = ["dense_sand", "aerial_beach_01", "shell_floor_01", "coral_mud_01", "seaside_rock", "forrest_sand_01",
                    "low_tide_rocks"]
 TEXTURE_MAPS = ["diff", "nor_dx", "arm", "disp"]
@@ -231,6 +231,8 @@ if (aRock > 0.004)
     float3 n = normalize(lerp(UnpackNormalMap(RT_TEX(RockN, 2.0)).xyz, UnpackNormalMap(RT_TEX(RockN, 7.3)).xyz, 0.45));
     c = RT_TONE(c, 0.4, float3(1.5, 1.46, 1.36));
     c = lerp(c, RT_TONE(RT_TEX(CoralD, 2.0).rgb, 0.7, float3(0.62, 0.62, 0.58)), 0.5);
+    // Under the sea the rock shore's foot is pale too: dark rock under clear water shows as a black fringe.
+    c = lerp(c, float3(0.66, 0.63, 0.52), saturate(-zm * 0.6));
     n = normalize(n * float3(1.6, 1.6, 1.0));
     col += aRock * c; nrm += aRock * n; rough += aRock * arm.g; ao += aRock * arm.r;
 }
@@ -260,9 +262,13 @@ if (aGrove > 0.004)
 }
 if (aReef > 0.004)
 {
+    // Coral heads on pale sand, not the photo's dark wet rock: seen down through the water the reef read as dark
+    // blotches round the island.
     float3 arm = RT_TEX(ReefA, 2.17).rgb;
-    col += aReef * RT_TEX(ReefD, 2.17).rgb; nrm += aReef * UnpackNormalMap(RT_TEX(ReefN, 2.17)).xyz;
-    rough += aReef * arm.g; ao += aReef * arm.r;
+    float3 c = RT_TONE(RT_TEX(ReefD, 2.17).rgb, 0.5, float3(1.55, 1.5, 1.35));
+    c = lerp(c, float3(0.72, 0.68, 0.56), 0.45);
+    col += aReef * c; nrm += aReef * normalize(lerp(UnpackNormalMap(RT_TEX(ReefN, 2.17)).xyz, float3(0, 0, 1), 0.4));
+    rough += aReef * arm.g; ao += aReef * lerp(arm.r, 1.0, 0.5);
 }
 
 // Lighter and darker over tens of metres, as real ground is.
