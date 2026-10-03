@@ -12,7 +12,7 @@ MATERIALS_PATH = "/Game/Riptide/Materials"
 PALMS_PATH = f"{ISLANDS_PATH}/Palms"
 MODELS_PATH = f"{ISLANDS_PATH}/Models"
 REVIEW_MAP_PATH = "/Game/Riptide/Maps/Props_Review"
-PROPS_VERSION = "8"
+PROPS_VERSION = "9"
 
 # The scanned models: name -> how its meshes are treated. "rock": solid, drawn with Nanite. "plant": leaves cut out
 # by their alpha picture, lit from both sides. "wood": solid, plain.
@@ -310,6 +310,12 @@ def _dress(mesh, path, materials, nanite, solid, leafy=False, trunk=False):
             settings.set_editor_property("shape_preservation", unreal.NaniteShapePreservation.PRESERVE_AREA)
         except Exception as err:  # noqa: BLE001 - an engine without the setting still draws the leaves
             unreal.log_warning(f"Riptide: no leaf preservation for {path.split('/')[-1]} ({err})")
+    if nanite:
+        # The scanned trees are one to two million triangles each: kept whole they thrash Nanite's streaming
+        # (the geometry glitches as you look round) and building them ran the editor out of memory. A quarter is
+        # more than any screen shows.
+        triangles = mesh.get_num_triangles(0)
+        settings.set_editor_property("keep_percent_triangles", 0.2 if triangles > 500000 else 0.5 if triangles > 100000 else 1.0)
     tools.set_nanite_settings(mesh, settings, True)
     if solid and not (trunk and _trunk_collision(mesh, path)):
         body = mesh.get_editor_property("body_setup")

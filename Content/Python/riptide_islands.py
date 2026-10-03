@@ -15,7 +15,7 @@ ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
 ISLAND_VERSIONS = {"StartCay": "12"}
 GREY_VERSION = "3"
-ISLAND_MAP_VERSION = "15"
+ISLAND_MAP_VERSION = "16"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
 # tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in
@@ -992,6 +992,53 @@ def _spawn_island_ocean(ns):
     return ocean
 
 
+def _shore_attenuation(ns):
+    """SA_Shore: how the sea's sound falls off inland from an emitter at the waterline."""
+    path = f"{ns['AUDIO_PATH']}/SA_Shore"
+    assets = unreal.EditorAssetLibrary
+    if not assets.does_asset_exist(path):
+        unreal.AssetToolsHelpers.get_asset_tools().create_asset("SA_Shore", ns["AUDIO_PATH"], unreal.SoundAttenuation,
+                                                                unreal.SoundAttenuationFactory())
+    asset = unreal.load_asset(path)
+    settings = asset.get_editor_property("attenuation")
+    settings.set_editor_property("attenuation_shape_extents", unreal.Vector(2500.0, 0.0, 0.0))
+    settings.set_editor_property("falloff_distance", 9000.0)
+    try:
+        settings.set_editor_property("distance_algorithm", unreal.AttenuationDistanceModel.NATURAL_SOUND)
+    except Exception as err:  # noqa: BLE001 - the default falloff curve will do
+        unreal.log_warning(f"Riptide: shore sound keeps the default falloff curve ({err})")
+    asset.set_editor_property("attenuation", settings)
+    assets.save_asset(path, only_if_is_dirty=False)
+    return asset
+
+
+def _place_shore_sound(ns, island, origin=(0.0, 0.0, 0.0)):
+    """The sea's sound comes from the shore: emitters every 35 m or so along the coast, each heard for a hundred
+    metres and fading inland, instead of one sound everywhere (which the water under the island never let fade)."""
+    spawn = ns["_spawn"]
+    sound = unreal.load_asset(f"{ns['AUDIO_PATH']}/S_Ocean_Ambience")
+    attenuation = _shore_attenuation(ns)
+    along, placed = 0.0, 0
+    for i in range(island.cn):
+        j = (i + 1) % island.cn
+        along += math.hypot(island.cx[j] - island.cx[i], island.cy[j] - island.cy[i])
+        if along < 35.0:
+            continue
+        along = 0.0
+        x, y = island.cx[i], island.cy[i]
+        emitter = spawn(unreal.AmbientSound, (origin[0] + y * 100.0, origin[1] + x * 100.0, origin[2] + 60.0))
+        audio = emitter.get_component_by_class(unreal.AudioComponent)
+        audio.set_editor_property("sound", sound)
+        audio.set_editor_property("allow_spatialization", True)
+        audio.set_editor_property("override_attenuation", False)
+        audio.set_editor_property("attenuation_settings", attenuation)
+        audio.set_editor_property("volume_multiplier", 0.5)
+        emitter.set_actor_label(f"{island.name}_Shore_{placed}")
+        emitter.set_folder_path(f"Islands/{island.name}/Sound")
+        placed += 1
+    unreal.log(f"Riptide: {island.name} shore sound from {placed} points along the coast")
+
+
 def build_island_test_map(ns, rebuilt):
     """Island_Test: the start cay in the same sea, sky and swell as Ocean_Test, with the boat starting just off the
     wash-up beach, facing it. `ns` is init_unreal's namespace, for the sea and sky it already knows how to build."""
@@ -1031,13 +1078,16 @@ def build_island_test_map(ns, rebuilt):
     # for every pixel, which showed from the air as a lattice of pale triangles and stripes.
     ocean.get_water_body_component().set_water_body_static_mesh_enabled(False)
 
-    ambience = spawn(unreal.AmbientSound)
-    ambience_audio = ambience.get_component_by_class(unreal.AudioComponent)
-    ambience_audio.set_editor_property("sound", unreal.load_asset(f"{ns['AUDIO_PATH']}/S_Ocean_Ambience"))
-    ambience_audio.set_editor_property("allow_spatialization", False)
+    # The water's mesh never casts a shadow: it lies under the island too, and its tiles cover the whole shadow map.
+    for part in zone.get_components_by_class(unreal.WaterMeshComponent):
+        part.set_editor_property("cast_shadow", False)
 
     _place_island("StartCay")
     island = _load_island("StartCay")
+    try:
+        _place_shore_sound(ns, island)
+    except Exception as err:  # noqa: BLE001 - a silent shore is better than no island
+        unreal.log_error(f"Riptide: could not place the shore sound: {err}")
     _place_props("StartCay", island)
     _place_decals("StartCay", island)
 

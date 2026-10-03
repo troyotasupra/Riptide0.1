@@ -232,6 +232,9 @@ void ARiptideIslandProps::AddProp(UStaticMesh* Mesh, const FTransform& WorldTran
 		Batch->SetCollisionProfileName(Profile);
 		// Small things (ferns, twigs) cast no shadow: hundreds of little shadow casters cost more than they show.
 		Batch->SetCastShadow(Mesh->GetBounds().SphereRadius > 75.f);
+		// Their shadows are drawn once and kept: a palm's fronds sway in the wind through its material, and without
+		// this every swaying frond would have the shadow maps redrawn under it every frame.
+		Batch->ShadowCacheInvalidationBehavior = EShadowCacheInvalidationBehavior::Static;
 		Batch->SetupAttachment(Root);
 		AddInstanceComponent(Batch);
 		Batch->RegisterComponent();
