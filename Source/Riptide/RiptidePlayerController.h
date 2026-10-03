@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "RiptideVoice.h"
 #include "RiptideDevCamera.h"
 #include "RiptidePlayerController.generated.h"
 
@@ -15,6 +16,7 @@ class UInputMappingContext;
 class UWaterWavesBase;
 class SRiptideDevPanel;
 class SWidget;
+class URiptideVoiceComponent;
 struct FRiptideDevPanelRow;
 
 /** Dev mode is for building and playtesting: Shipping builds leave it out. */
@@ -58,6 +60,23 @@ UCLASS()
 class RIPTIDE_API ARiptidePlayerController : public APlayerController
 {
 	GENERATED_BODY()
+
+public:
+	/** This player's voice chat and radio (push-to-talk, CB channels, the loudhailer). */
+	UFUNCTION(BlueprintPure, Category = "Voice")
+	URiptideVoiceComponent* GetVoice() const { return Voice; }
+
+	/** A line from an NPC on the radio or over a loudhailer, for this player's voice component to play and show. */
+	/** Tunes a boat's radio and switches its mic (for this player's voice component). */
+	UFUNCTION(Server, Reliable)
+	void ServerSetRadio(ARiptideBoat* Boat, int32 Channel, ERiptideMicMode Mode);
+
+	UFUNCTION(Client, Reliable)
+	void ClientRadioLine(int32 Channel, ARiptideBoat* FromBoat, const FString& Speaker, const FString& Line, bool bLoudhailer);
+
+private:
+	UPROPERTY(VisibleAnywhere, Category = "Voice")
+	TObjectPtr<URiptideVoiceComponent> Voice;
 
 public:
 	ARiptidePlayerController();

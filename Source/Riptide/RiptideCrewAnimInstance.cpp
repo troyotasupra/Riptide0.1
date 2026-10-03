@@ -36,11 +36,11 @@ namespace
 	constexpr float KnockdownAnimEnd = KnockbackEnd + 1.53f / GetUpRate;
 
 	// The boarding ladder, in its own frame from ARiptideBoat::GetLadderFootTransform (riptide_boat_mesh.py's
-	// LADDER_RUNGS): treads every 16 cm from 40 cm below the foot, nine of them, 2 cm toward the boat from it; the
+	// LADDER_RUNGS): treads every 16 cm from 8 cm below the foot, seven of them, 2 cm toward the boat from it; the
 	// rails' grab handle 110 cm above it. Hands grip near the rails, feet stand toward the middle.
-	constexpr float RungBelowFoot = -40.f;
+	constexpr float RungBelowFoot = -8.f;
 	constexpr float RungPitch = 16.f;
-	constexpr int32 RungCount = 9;
+	constexpr int32 RungCount = 7;
 	constexpr float RungIn = 2.f;
 	constexpr float HandleHeight = 110.f;
 	constexpr float HandReach = 140.f;     // hands grip this far above the feet (chest to head height)
@@ -141,15 +141,11 @@ void URiptideCrewAnimInstance::GatherCharacter(ARiptideCharacter* Crew, float De
 	FRiptideCrewAnimInputs N;
 	const UCharacterMovementComponent* Move = Crew->GetCharacterMovement();
 	ARiptideBoat* Boat = Crew->GetHomeBoat();
-	const FVector Feet = Crew->GetActorLocation() - FVector(0.f, 0.f, Crew->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
 
-	// Walking speed relative to what the feet stand on: on the boat's deck its own speed is taken off (at 30 knots
-	// the crew member stands still on it).
-	FVector Velocity = Crew->GetVelocity();
-	if (Boat && Crew->IsStandingOnBoat())
-	{
-		Velocity -= Boat->GetDeckPointVelocity(Feet);
-	}
+	// Walking speed relative to what the feet stand on. Character movement already keeps its velocity relative to
+	// the deck it stands on (the deck's own motion is applied separately), so standing still at 30 knots reads 0:
+	// taking the deck's speed off again made the crew run on the spot whenever the boat moved.
+	const FVector Velocity = Crew->GetVelocity();
 	const float Blend = DeltaSeconds > 0.f ? 1.f - FMath::Exp(-DeltaSeconds / 0.08f) : 1.f;
 	SmoothedVelocity = FMath::Lerp(SmoothedVelocity, Velocity, Blend);
 	const FVector Local = Crew->GetActorTransform().InverseTransformVectorNoScale(SmoothedVelocity);

@@ -27,6 +27,7 @@
 #include "RiptideCharacter.h"
 #include "RiptideDevPanel.h"
 #include "RiptideSprayComponent.h"
+#include "RiptideVoice.h"
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
 #include "Widgets/SWeakWidget.h"
@@ -78,6 +79,22 @@ ARiptidePlayerController::ARiptidePlayerController()
 {
 	// Ticks while the world is frozen (as every player controller does), to keep the panel and overlay up to date.
 	PrimaryActorTick.bTickEvenWhenPaused = true;
+	// Push-to-talk, and the boats' radios and loudhailers.
+	Voice = CreateDefaultSubobject<URiptideVoiceComponent>(TEXT("Voice"));
+}
+
+void ARiptidePlayerController::ClientRadioLine_Implementation(int32 Channel, ARiptideBoat* FromBoat, const FString& Speaker,
+	const FString& Line, bool bLoudhailer)
+{
+	if (Voice)
+	{
+		Voice->HearRadioLine(Channel, FromBoat, Speaker, Line, bLoudhailer);
+	}
+}
+
+void ARiptidePlayerController::ServerSetRadio_Implementation(ARiptideBoat* Boat, int32 Channel, ERiptideMicMode Mode)
+{
+	URiptideVoiceComponent::SetRadioFor(this, Boat, Channel, Mode);
 }
 
 // --- Input ---
