@@ -912,7 +912,7 @@ def make_boat_assets():
 # skeleton under /Game/Riptide/Characters. URiptideCrewBodyComponent loads them by path. Bump CREW_VERSION when
 # riptide_crew_mesh.py or the recipe here changes, so every machine rebuilds them on its next launch.
 CHARACTERS_PATH = "/Game/Riptide/Characters"
-CREW_VERSION = "12"
+CREW_VERSION = "13"
 CREW_MATERIALS = f"{CHARACTERS_PATH}/Materials"
 
 # Textures: (asset name, file under SourceAssets/Characters, kind). The bodies' are MakeHuman's (CC0, see

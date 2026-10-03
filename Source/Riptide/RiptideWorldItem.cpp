@@ -22,7 +22,7 @@ ARiptideWorldItem::ARiptideWorldItem()
 	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true;
 	SetReplicatingMovement(true);
-	NetUpdateFrequency = 10.f;
+	SetNetUpdateFrequency(10.f);
 
 	Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Mesh"));
 	SetRootComponent(Mesh);

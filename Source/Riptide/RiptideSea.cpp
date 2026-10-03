@@ -230,7 +230,7 @@ ARiptideIslandProps::ARiptideIslandProps()
 	// Placed in the level, so every machine has the same batches; only what's been harvested travels.
 	bReplicates = true;
 	bAlwaysRelevant = true;
-	NetUpdateFrequency = 2.f;
+	SetNetUpdateFrequency(2.f);
 	PrimaryActorTick.bCanEverTick = true;
 }
 

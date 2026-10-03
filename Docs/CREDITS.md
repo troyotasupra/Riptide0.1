@@ -85,7 +85,7 @@ The ocean, the wake simulation and its boat force (`BP_FluidSim_01`, `M_Fluid_Si
 
 ## Characters (`SourceAssets/Characters/MakeHuman/`)
 
-Bodies made with [MakeHuman Community 1.2.0](http://www.makehumancommunity.org) and written out by `C:\Claude	ools\makehuman\mh_export.py` (a headless script over MakeHuman's own libraries). Everything MakeHuman ships or produces is CC0: the base mesh, the game-engine rig, the skin, eye, eyebrow, eyelash, teeth and hair meshes and their textures.
+Bodies made with [MakeHuman Community 1.2.0](http://www.makehumancommunity.org) and written out by `Tools/mh_export.py`, run with MakeHuman's own Python (a headless script over MakeHuman's own libraries). Everything MakeHuman ships or produces is CC0: the base mesh, the game-engine rig, the skin, eye, eyebrow, eyelash, teeth and hair meshes and their textures.
 
 | Folder in the repo | What | Source |
 |---|---|---|

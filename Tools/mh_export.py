@@ -99,6 +99,11 @@ def reference_orientations():
     return out, pos
 
 
+# The bones whose flesh keeps MakeHuman's own posture through the repose (see Repose); everything below the neck's base
+# does too.
+POSTURE_BONES = {"pelvis", "spine_01", "spine_02", "spine_03", "spine_04", "spine_05", "neck_01", "neck_02", "head"}
+
+
 class Repose(object):
     """The skeleton stood in the reference rig's bind pose: for each bone its new global matrix (metres) and the
     matrix that carries a point skinned to it from the MakeHuman rest pose into the new one."""
@@ -122,6 +127,19 @@ class Repose(object):
             order.append(b)
         for b in bones:
             visit(b)
+        # The hips, spine, neck and head (and all the head carries) keep the body's own natural shape: their bones
+        # take the reference rig's orientation, so the animations turn them as they were made to, but stay where
+        # MakeHuman put them, and the flesh on them isn't turned. Straightening them to the reference's directions
+        # rotated the torso and head with them: the chest stuck out and the head was pushed back.
+        def keeps_shape(b):
+            if b.name in POSTURE_BONES:
+                return True
+            k = b.parent
+            while k is not None:               # anything the neck carries (the head's eyes, jaw and so on)
+                if k.name == "neck_01":
+                    return True
+                k = k.parent
+            return False
         for b in order:
             g = np.array(b.matRestGlobal, dtype=np.float64)
             g[:3, 3] *= 0.1
@@ -129,6 +147,19 @@ class Repose(object):
             r_old, p_old = g[:3, :3], g[:3, 3]
             if b.parent is None:
                 r_new, p_new = ref.get(b.name, r_old), p_old
+            elif keeps_shape(b):
+                pg_old = np.array(b.parent.matRestGlobal, dtype=np.float64)
+                pg_old[:3, 3] *= 0.1
+                pg_old[1, 3] += ground
+                p_new = self.new_global[b.parent.name][:3, 3] + (p_old - pg_old[:3, 3])
+                r_new = ref.get(b.name, r_old)
+                n = np.identity(4)
+                n[:3, :3], n[:3, 3] = r_new, p_new
+                self.new_global[b.name] = n
+                carry = np.identity(4)
+                carry[:3, 3] = p_new - p_old           # moved with its parent, never turned
+                self.carry[b.name] = carry
+                continue
             else:
                 pg_old = np.array(b.parent.matRestGlobal, dtype=np.float64)
                 pg_old[:3, 3] *= 0.1
