@@ -95,6 +95,8 @@ def _shots():
         # Straight down at the sand from head height, and the cliff face from a few metres off it in the water.
         ("30_sand_underfoot", (bx - out[0] * 9.0 + 0.6, by - out[1] * 9.0, 1.7), (bx - out[0] * 9.0, by - out[1] * 9.0, 0.0)),
         ("14_cliff_face_close", island.place(44.0, -52.0) + (1.4,), island.place(54.0, -46.0) + (1.8,)),
+        ("31_the_pool", standing(island.hollow[0] + 9.0, island.hollow[1] + 6.0), (island.hollow[0], island.hollow[1], island.pool()[2])),
+        ("32_rock_shore_edge", standing(*island.place(70.0, -30.0)), island.place(60.0, -44.0) + (1.0,)),
         ("16_cliff_edge_from_above", island.place(46.0, -40.0) + (9.0,), island.place(58.0, -44.0) + (0.0,)),
         ("17_cliff_edge_looking_along", island.place(20.0, -45.5) + (4.6,), island.place(60.0, -41.0) + (0.5,)),
         ("18_cliff_under_the_bluff", island.place(118.0, -30.0) + (2.2,), island.place(96.0, -8.0) + (3.0,)),

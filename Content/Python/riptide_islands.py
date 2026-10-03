@@ -13,9 +13,9 @@ ISLANDS_PATH = "/Game/Riptide/Islands"
 MATERIALS_PATH = "/Game/Riptide/Materials"
 ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
-ISLAND_VERSIONS = {"StartCay": "12"}
+ISLAND_VERSIONS = {"StartCay": "13"}
 GREY_VERSION = "3"
-ISLAND_MAP_VERSION = "16"
+ISLAND_MAP_VERSION = "17"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
 # tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in
@@ -79,7 +79,7 @@ return float3(shade, shade, shade);""")
 # The ground's photo surfaces (SourceAssets/Textures, credited in Docs/CREDITS.md) and the material that lays them
 # over an island by its surface map. Bump SURFACE_VERSION when the material's recipe changes.
 TEXTURES_PATH = f"{ISLANDS_PATH}/Textures"
-SURFACE_VERSION = "10"
+SURFACE_VERSION = "11"
 GROUND_TEXTURES = ["dense_sand", "aerial_beach_01", "shell_floor_01", "coral_mud_01", "seaside_rock", "forrest_sand_01",
                    "low_tide_rocks"]
 TEXTURE_MAPS = ["diff", "nor_dx", "arm", "disp"]
@@ -117,10 +117,9 @@ float mid = RT_TEX(FarH, 11.0).r;
 float2 suv = (WorldPos.yx / 100.0 + SurfaceHalf + (float2(mid, broad) - 0.5) * 3.0) / (2.0 * SurfaceHalf);
 float4 sm = Surface.SampleLevel(Material.Clamp_WorldGroupSettings, suv, 0);
 float wRock = sm.r, wCoral = sm.g, wGrove = sm.b, wReef = sm.a;
-// Any face too steep to hold sand is bare rock, read from the ground's own slope (finer than the map).
-float steep = 1.0 - smoothstep(0.72, 0.84, Up.z);
-wRock = max(wRock, steep);
-wCoral *= 1.0 - steep; wGrove *= 1.0 - steep; wReef *= 1.0 - steep;
+// Rock is where the island's map says (it reads the slope smoothly); reading it from the mesh's own facets
+// made the rock's edge follow the triangles in a zig-zag.
+float steep = 0.0;
 float wSand = saturate(1.0 - wRock - wCoral - wGrove - wReef);
 
 // Where two surfaces meet, the one standing higher in its photo wins: sand lies in the rock's hollows.
@@ -225,20 +224,24 @@ if (aCoral > 0.004)
 }
 if (aRock > 0.004)
 {
-    // Two sizes of the same rock mixed, so cliffs don't show the photo repeating.
+    // Two sizes of the same rock mixed, so cliffs don't show the photo repeating; lightened toward the pale
+    // coral rock, since a coral cay's rock is weathered limestone, not black basalt.
     float3 arm = RT_TEX(RockA, 2.0).rgb;
     float3 c = lerp(RT_TEX(RockD, 2.0).rgb, RT_TEX(RockD, 7.3).rgb, 0.45);
     float3 n = normalize(lerp(UnpackNormalMap(RT_TEX(RockN, 2.0)).xyz, UnpackNormalMap(RT_TEX(RockN, 7.3)).xyz, 0.45));
-    c = RT_TONE(c, 0.3, float3(1.25, 1.22, 1.15));
+    c = RT_TONE(c, 0.4, float3(1.5, 1.46, 1.36));
+    c = lerp(c, RT_TONE(RT_TEX(CoralD, 2.0).rgb, 0.7, float3(0.62, 0.62, 0.58)), 0.5);
     n = normalize(n * float3(1.6, 1.6, 1.0));
     col += aRock * c; nrm += aRock * n; rough += aRock * arm.g; ao += aRock * arm.r;
 }
 if (aGrove > 0.004)
 {
     float3 arm = RT_TEX(GroveA, 2.0).rgb;
-    // Darker, browner soil under the trees, with fallen leaves lying on it: dark brown and tan flakes 2-5 cm
-    // across, thicker where the ground dips.
+    // Soil under the trees, greened over with short grass and moss in patches, with fallen leaves lying on it:
+    // dark brown and tan flakes 2-5 cm across, thicker where the ground dips.
     float3 c = RT_TONE(RT_TEX(GroveD, 2.0).rgb, 0.15, float3(0.52, 0.47, 0.37));
+    float sward = smoothstep(0.35, 0.65, RT_TEX(FarH, 2.3).r * 0.6 + RT_TEX(FarH, 13.0).r * 0.4);
+    c = lerp(c, float3(0.21, 0.3, 0.1) * (0.8 + 0.4 * RT_TEX(GroveH, 0.5).r), sward * 0.8);
     float3 n = UnpackNormalMap(RT_TEX(GroveN, 2.0)).xyz;
     float leafy = saturate(1.0 - fwidth(UV).x * 25.0) * smoothstep(0.3, 0.7, RT_TEX(FarH, 6.0).r);
     if (leafy > 0.01)
@@ -1039,6 +1042,108 @@ def _place_shore_sound(ns, island, origin=(0.0, 0.0, 0.0)):
     unreal.log(f"Riptide: {island.name} shore sound from {placed} points along the coast")
 
 
+POND_VERSION = "1"
+
+
+def _pond_material():
+    """M_Pond: still fresh water, seen into: dark green-brown over the bottom, the sky off its surface."""
+    path = f"{MATERIALS_PATH}/M_Pond"
+    assets = unreal.EditorAssetLibrary
+    if assets.does_asset_exist(path):
+        if assets.get_metadata_tag(unreal.load_asset(path), "RiptideVersion") == POND_VERSION:
+            return unreal.load_asset(path)
+        assets.delete_asset(path)
+    mel = unreal.MaterialEditingLibrary
+    mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset("M_Pond", MATERIALS_PATH, unreal.Material, unreal.MaterialFactoryNew())
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    mat.set_editor_property("translucency_lighting_mode", unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
+    node = mel.create_material_expression(mat, unreal.MaterialExpressionCustom, -300, 0)
+    world = mel.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, -800, 0)
+    time = mel.create_material_expression(mat, unreal.MaterialExpressionTime, -800, 150)
+    pins = []
+    for name in ("P", "T"):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", name)
+        pins.append(pin)
+    node.set_editor_property("inputs", pins)
+    outs = []
+    for name, kind in (("Normal", unreal.CustomMaterialOutputType.CMOT_FLOAT3), ("Opacity", unreal.CustomMaterialOutputType.CMOT_FLOAT1)):
+        out = unreal.CustomOutput()
+        out.set_editor_property("output_name", name)
+        out.set_editor_property("output_type", kind)
+        outs.append(out)
+    node.set_editor_property("additional_outputs", outs)
+    node.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    node.set_editor_property("code", """
+// Small slow ripples from the breeze, two sets crossing.
+float2 q = P.xy / 100.0;
+float a = sin(dot(q, float2(0.9, 0.4)) * 6.0 + T * 1.1) + sin(dot(q, float2(-0.3, 1.0)) * 9.0 + T * 1.7);
+float b = cos(dot(q, float2(0.5, -0.8)) * 7.0 + T * 1.3) + cos(dot(q, float2(1.0, 0.2)) * 11.0 + T * 0.9);
+Normal = normalize(float3(a * 0.02, b * 0.02, 1.0));
+Opacity = 0.72;
+return float3(0.02, 0.045, 0.03);
+""")
+    mel.connect_material_expressions(world, "", node, "P")
+    mel.connect_material_expressions(time, "", node, "T")
+    mel.connect_material_property(node, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    mel.connect_material_property(node, "Normal", unreal.MaterialProperty.MP_NORMAL)
+    mel.connect_material_property(node, "Opacity", unreal.MaterialProperty.MP_OPACITY)
+    rough = mel.create_material_expression(mat, unreal.MaterialExpressionConstant, -300, 300)
+    rough.set_editor_property("r", 0.04)
+    mel.connect_material_property(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    spec = mel.create_material_expression(mat, unreal.MaterialExpressionConstant, -300, 400)
+    spec.set_editor_property("r", 1.0)
+    mel.connect_material_property(spec, "", unreal.MaterialProperty.MP_SPECULAR)
+    mel.recompile_material(mat)
+    assets.set_metadata_tag(mat, "RiptideVersion", POND_VERSION)
+    assets.save_asset(path, only_if_is_dirty=False)
+    return mat
+
+
+def _place_pond(name, island, origin=(0.0, 0.0, 0.0)):
+    """The island's fresh-water pool: a still sheet of water lying in its basin (Island.pool)."""
+    import riptide_palm_mesh
+    x, y, z, radius = island.pool()
+    mesh = riptide_palm_mesh.Mesh()
+    centre = mesh.vert((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.5, 0.5))
+    ring = [mesh.vert((math.cos(a) * radius, math.sin(a) * radius, 0.0), (0.0, 0.0, 1.0), (0.5 + 0.5 * math.cos(a), 0.5 + 0.5 * math.sin(a)))
+            for a in (2.0 * math.pi * k / 32 for k in range(33))]
+    for k in range(32):
+        mesh.tri("Pond", ring[k], ring[k + 1], centre)
+    out_dir = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()), "Generated", "Islands", name)
+    os.makedirs(out_dir, exist_ok=True)
+    obj = os.path.join(out_dir, f"SM_{name}_Pond.obj")
+    mesh.write_obj(obj, comment=f"Riptide {name} pool, generated by riptide_islands.py")
+    task = unreal.AssetImportTask()
+    task.filename = obj
+    task.destination_path = f"{ISLANDS_PATH}/{name}"
+    task.destination_name = f"SM_{name}_Pond"
+    task.automated = True
+    task.replace_existing = True
+    task.save = True
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    asset = unreal.load_asset(f"{ISLANDS_PATH}/{name}/SM_{name}_Pond")
+    if not asset:
+        unreal.log_error(f"Riptide: {name}'s pool failed to import")
+        return
+    slots = asset.get_editor_property("static_materials")
+    for i, slot in enumerate(slots):
+        slot.set_editor_property("material_interface", _pond_material())
+        slots[i] = slot
+    asset.set_editor_property("static_materials", slots)
+    tools = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+    nanite = tools.get_nanite_settings(asset)
+    nanite.set_editor_property("enabled", False)
+    tools.set_nanite_settings(asset, nanite, True)
+    unreal.EditorAssetLibrary.save_asset(f"{ISLANDS_PATH}/{name}/SM_{name}_Pond", only_if_is_dirty=False)
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    actor = actors.spawn_actor_from_object(asset, unreal.Vector(origin[0] + y * 100.0, origin[1] + x * 100.0, origin[2] + z * 100.0))
+    actor.set_actor_label(f"{name}_Pool")
+    actor.set_folder_path(f"Islands/{name}")
+    actor.static_mesh_component.set_collision_profile_name("NoCollision")
+    unreal.log(f"Riptide: {name}'s pool lies at {z:.2f} m in the hollow")
+
+
 def build_island_test_map(ns, rebuilt):
     """Island_Test: the start cay in the same sea, sky and swell as Ocean_Test, with the boat starting just off the
     wash-up beach, facing it. `ns` is init_unreal's namespace, for the sea and sky it already knows how to build."""
@@ -1084,6 +1189,10 @@ def build_island_test_map(ns, rebuilt):
 
     _place_island("StartCay")
     island = _load_island("StartCay")
+    try:
+        _place_pond("StartCay", island)
+    except Exception as err:  # noqa: BLE001 - a dry hollow is better than no island
+        unreal.log_error(f"Riptide: could not place the pool: {err}")
     try:
         _place_shore_sound(ns, island)
     except Exception as err:  # noqa: BLE001 - a silent shore is better than no island

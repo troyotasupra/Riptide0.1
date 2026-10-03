@@ -328,6 +328,14 @@ class StartCay(Island):
     HOLLOW = (8.0, -8.0)        # a shallow pan in the middle of the grove, where rain collects
     HOLLOW_DEPTH = 1.0
     HOLLOW_RADIUS = 16.0
+    POOL_RADIUS = 4.0           # the pool of rainwater in the hollow's bottom: its basin's radius and depth
+    POOL_DEPTH = 0.7
+
+    def pool(self):
+        """The fresh-water pool: (x, y, water level z, radius) in design metres, the water a little below the
+        basin's rim so it has a muddy edge."""
+        rim = self.height(self.hollow[0] + self.POOL_RADIUS * 1.4, self.hollow[1])
+        return self.hollow[0], self.hollow[1], rim - 0.12, self.POOL_RADIUS * 1.15
 
     def __init__(self):
         super().__init__()
@@ -378,6 +386,8 @@ class StartCay(Island):
             point = self._mound(x, y, self.point, self.POINT_RADIUS)
             h += inland * (self.KNOLL_HEIGHT * knoll + self.POINT_HEIGHT * point)
             h -= self.HOLLOW_DEPTH * self._mound(x, y, self.hollow, self.HOLLOW_RADIUS)
+            # A basin in the bottom of the hollow where rain gathers: the cay's fresh-water pool (see pool()).
+            h -= self.POOL_DEPTH * smoothstep(self.POOL_RADIUS * 1.4, self.POOL_RADIUS * 0.4, math.hypot(x - self.hollow[0], y - self.hollow[1]))
             # The grove floor rolls a little; the bluff and the point break into rock outcrop.
             h += smoothstep(4.0, 22.0, d) * 0.35 * fbm(x / 28.0, y / 28.0, 5)
             h += inland * (knoll * 1.3 + point * 0.6) * (ridged(x / 8.0, y / 8.0, 9) - 0.5)
@@ -555,6 +565,10 @@ class StartCay(Island):
         for x, y, d, h in scatter(900, lambda x, y, d, h, sl: h > 1.6 and d > 13.0 and sl < 28.0 and not in_hollow(x, y)
                                   and fbm(x / 8.0, y / 8.0, 61) > -0.1, 0.3, tries=40):
             add("grass", x, y, scale=rng.uniform(0.8, 1.4))
+        # The grove floor is grassed over, thickly, between the trees.
+        for x, y, d, h in scatter(1200, lambda x, y, d, h, sl: h > 2.0 and d > 22.0 and sl < 24.0 and not rocky(x, y)
+                                  and not in_hollow(x, y), 0.25, tries=40):
+            add("grass", x, y, scale=rng.uniform(0.9, 1.5))
         # Shells cast up along the tide line, a few further up the beach.
         for x, y, d, h in scatter(70, lambda x, y, d, h, sl: 0.95 < h < 1.6 and 4.0 < d < 15.0 and not rocky(x, y), 0.4, tries=200):
             add("shell", x, y, scale=rng.uniform(0.7, 1.3), sink=0.004, tilt=rng.uniform(0.0, 30.0))
