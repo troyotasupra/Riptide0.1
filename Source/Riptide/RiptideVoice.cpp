@@ -173,7 +173,7 @@ void URiptideVoiceComponent::BuildInput()
 	UInputAction* Talk = Make(TEXT("IA_PushToTalk"), { EKeys::V, EKeys::Gamepad_LeftThumbstick });
 	UInputAction* ChannelDown = Make(TEXT("IA_RadioChannelDown"), { EKeys::LeftBracket });
 	UInputAction* ChannelUp = Make(TEXT("IA_RadioChannelUp"), { EKeys::RightBracket });
-	UInputAction* Mode = Make(TEXT("IA_MicMode"), { EKeys::B });
+	UInputAction* Mode = Make(TEXT("IA_MicMode"), { EKeys::T });     // (B is the crafting book)
 	Input->BindActionValueLambda(Talk, ETriggerEvent::Started, [this](const FInputActionValue&) { SetPushToTalk(true); });
 	Input->BindActionValueLambda(Talk, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetPushToTalk(false); });
 	Input->BindActionValueLambda(ChannelDown, ETriggerEvent::Started, [this](const FInputActionValue&) { ChangeChannel(-1); });
@@ -503,7 +503,7 @@ void URiptideVoiceComponent::DrawHud() const
 		const bool bHailer = Boat->GetMicMode() == ERiptideMicMode::Loudhailer;
 		const FString Mode = bHailer ? TEXT("Loudhailer") : FString::Printf(TEXT("CB channel %d"), Boat->GetRadioChannel());
 		RiptideHud::Prompt(PC, RiptideHud::ESlot::Radio,
-			FString::Printf(TEXT("%s%s      Hold V  Talk      [ ]  Channel      B  %s"), bPushToTalk ? TEXT("ON AIR  ") : TEXT(""), *Mode,
+			FString::Printf(TEXT("%s%s      Hold V  Talk      [ ]  Channel      T  %s"), bPushToTalk ? TEXT("ON AIR  ") : TEXT(""), *Mode,
 				bHailer ? TEXT("Switch to the CB") : TEXT("Switch to the loudhailer")), bPushToTalk ? Live : Calm);
 	}
 	else if (Boat)

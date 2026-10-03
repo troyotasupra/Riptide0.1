@@ -100,8 +100,10 @@ public:
 		int32 Key = INDEX_NONE;
 	};
 	FPrompt Prompts[int32(RiptideHud::ESlot::Count)];
-	float VitalHealth = -1.f, VitalFood = -1.f, VitalWater = -1.f;
-	bool bVitalSick = false;
+	float VitalHealth = -1.f, VitalFood = -1.f, VitalWater = -1.f, VitalCold = 0.f;
+	bool bVitalSick = false, bVitalWarm = false;
+	float FadeAlpha = 0.f;
+	double FadeTime = -1.0;
 	double VitalsTime = -1.0;
 	TArray<FNote> Notes;
 

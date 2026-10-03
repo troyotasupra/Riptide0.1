@@ -255,6 +255,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	class URiptideSurvivalComponent* GetSurvival() const { return Survival; }
 
+	/** Asleep in a shelter: the night passes when everyone is (ARiptideSkyClock). Moving or E gets up. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsSleeping() const { return bSleeping; }
+
+	/** Lies down to sleep, or gets up (server; a client asks with ServerWake). */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetSleeping(bool bSleep);
+
+	/** Wakes after a night skipped while asleep: SkippedSeconds of time passed (hungrier, thirstier, rested). Server. */
+	void WakeAfterNight(float SkippedSeconds);
+
 	/** The crafting book (B). Local player only. */
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void OpenCraftBook();
@@ -285,6 +296,12 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Crew")
 	TObjectPtr<class URiptideSurvivalComponent> Survival;
+
+	UPROPERTY(Replicated)
+	bool bSleeping = false;
+
+	UFUNCTION(Server, Reliable)
+	void ServerWake();
 
 	TSharedPtr<class SRiptideCraftBook> CraftBook;
 	TSharedPtr<class SWidget> CraftBookContainer;

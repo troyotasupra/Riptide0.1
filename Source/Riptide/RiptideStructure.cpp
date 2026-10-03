@@ -7,6 +7,7 @@
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
 #include "RiptideCharacter.h"
+#include "RiptideSkyClock.h"
 #include "RiptideStorageComponent.h"
 #include "RiptideWorldItem.h"
 
@@ -484,9 +485,15 @@ bool ARiptideStructure::GetInteraction(const ARiptideCharacter* Who, const FHitR
 	}
 	if (Def->bBed)
 	{
-		Out.Prompt = LOCTEXT("Bed", "Tent (sleeping comes later)");
-		Out.WhyNot = Out.Prompt;
-		Out.bEnabled = false;
+		// A shelter to sleep in, after dark: the night passes once everyone's asleep.
+		const ARiptideSkyClock* Clock = ARiptideSkyClock::Get(this);
+		Out.Prompt = FText::Format(LOCTEXT("Sleep", "Sleep in the {0}"), Def->Name);
+		Out.Verb = VerbSleep;
+		if (Clock && !Clock->IsNight())
+		{
+			Out.WhyNot = FText::Format(LOCTEXT("SleepLater", "{0}: sleep here after dark"), Def->Name);
+			Out.bEnabled = false;
+		}
 		return true;
 	}
 	Out.Prompt = FText::Format(LOCTEXT("Dismantle", "Hold to dismantle {0}"), Def->Name);
@@ -532,6 +539,12 @@ void ARiptideStructure::Interact(ARiptideCharacter* Who, const FHitResult& Hit, 
 	case VerbOpen: Who->ClientOpenContainer(Storage, 0); break;
 	case VerbDismantle: Dismantle(Who); break;
 	case VerbLaunch: Launch(Who); break;
+	case VerbSleep:
+		if (const ARiptideSkyClock* Clock = ARiptideSkyClock::Get(this); !Clock || Clock->IsNight())
+		{
+			Who->SetSleeping(true);
+		}
+		break;
 	default: break;
 	}
 }

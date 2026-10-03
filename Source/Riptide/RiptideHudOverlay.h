@@ -26,8 +26,11 @@ namespace RiptideHud
 	/** Shows Text in Slot this frame, for the player controlling (or riding as) For. Progress 0-1 draws a bar under it. */
 	RIPTIDE_API void Prompt(const AActor* For, ESlot Slot, const FString& Text, const FLinearColor& Colour = FLinearColor::White, float Progress = -1.f);
 
-	/** The body's state this frame (each 0-100). */
-	RIPTIDE_API void Vitals(const AActor* For, float Health, float Food, float Water, bool bSick);
+	/** The body's state this frame (each 0-100; Cold 0 warm to 100 freezing, bWarm by a fire or in a shelter). */
+	RIPTIDE_API void Vitals(const AActor* For, float Health, float Food, float Water, bool bSick, float Cold = 0.f, bool bWarm = false);
+
+	/** Darkens the whole screen this frame (asleep): 0 clear, 1 black. */
+	RIPTIDE_API void Fade(const AActor* For, float Alpha);
 
 	/** A note for Seconds (radio lines, dev messages), newest at the bottom; Key replaces an earlier note with it. */
 	RIPTIDE_API void Note(const APlayerController* Player, const FString& Text, float Seconds, const FLinearColor& Colour = FLinearColor::White,

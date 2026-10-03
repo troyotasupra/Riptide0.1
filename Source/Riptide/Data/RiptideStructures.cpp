@@ -28,6 +28,7 @@ namespace
 			FRiptideStructureDef& LeanTo = Add(TEXT("lean_to"), LOCTEXT("lean_to", "Lean-to"), {}, 80.f);
 			LeanTo.Warmth = 5.f;
 			LeanTo.WarmRadius = 200.f;
+			LeanTo.bBed = true;
 			LeanTo.FootprintRadius = 160.f;
 			FRiptideStructureDef& Tent = Add(TEXT("tent"), LOCTEXT("tent", "Tent"), { { { TEXT("tarp"), 1 } }, { { TEXT("rope"), 3 } } }, 70.f);
 			Tent.Warmth = 8.f;

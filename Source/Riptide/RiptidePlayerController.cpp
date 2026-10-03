@@ -31,6 +31,7 @@
 #include "RiptideWorldItem.h"
 #include "RiptideVoice.h"
 #include "RiptideHudOverlay.h"
+#include "RiptideSkyClock.h"
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
 #include "Widgets/SWeakWidget.h"
@@ -679,6 +680,16 @@ void ARiptidePlayerController::SetTimeOfDay(ERiptideTimeOfDay InTime)
 #if RIPTIDE_WITH_DEV_MODE
 	if (!CanUseDevMode())
 	{
+		return;
+	}
+	// In a game with a running day, the time of day is the sky clock's: set it, and the sun follows.
+	if (ARiptideSkyClock* Clock = ARiptideSkyClock::Get(this))
+	{
+		const float Hour = InTime == ERiptideTimeOfDay::GoldenHour ? 17.f : InTime == ERiptideTimeOfDay::Dusk ? 18.3f
+			: InTime == ERiptideTimeOfDay::Night ? 0.f : 12.f;
+		Clock->SetHours(Hour);
+		TimeOfDay = InTime;
+		DevNote(FString::Printf(TEXT("Time: %s (%02d:%02d)"), *TimeOfDayName(InTime), int32(Hour), int32(FMath::Frac(Hour) * 60.f)));
 		return;
 	}
 	ADirectionalLight* Sun = FindSun();

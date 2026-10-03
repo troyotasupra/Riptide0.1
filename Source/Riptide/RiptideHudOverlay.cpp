@@ -7,6 +7,7 @@
 #include "Rendering/DrawElements.h"
 #include "RiptideHUD.h"
 #include "RiptideMenuWidgets.h"
+#include "RiptideSkyClock.h"
 
 namespace
 {
@@ -82,7 +83,7 @@ void RiptideHud::Prompt(const AActor* For, ESlot Slot, const FString& Text, cons
 	}
 }
 
-void RiptideHud::Vitals(const AActor* For, float Health, float Food, float Water, bool bSick)
+void RiptideHud::Vitals(const AActor* For, float Health, float Food, float Water, bool bSick, float Cold, bool bWarm)
 {
 	if (ARiptideHUD* Hud = HudFor(For))
 	{
@@ -90,7 +91,18 @@ void RiptideHud::Vitals(const AActor* For, float Health, float Food, float Water
 		Hud->VitalFood = Food;
 		Hud->VitalWater = Water;
 		Hud->bVitalSick = bSick;
+		Hud->VitalCold = Cold;
+		Hud->bVitalWarm = bWarm;
 		Hud->VitalsTime = Now(Hud->GetWorld());
+	}
+}
+
+void RiptideHud::Fade(const AActor* For, float Alpha)
+{
+	if (ARiptideHUD* Hud = HudFor(For))
+	{
+		Hud->FadeAlpha = Alpha;
+		Hud->FadeTime = Now(Hud->GetWorld());
 	}
 }
 
@@ -187,6 +199,21 @@ int32 SRiptideHudOverlay::OnPaint(const FPaintArgs& Args, const FGeometry& G, co
 	const float Scale = FMath::Clamp(Size.Y / 1080.f, 0.6f, 2.f);
 	const double T = Now(H->GetWorld());
 
+	// Asleep: the screen goes dark (the prompts still show over it).
+	if (H->FadeTime >= 0.0 && T - H->FadeTime < 0.25 && H->FadeAlpha > 0.f)
+	{
+		FillRect(Out, LayerId, G, FVector2f(0.f), Size, Srgb(0.f, 0.f, 0.02f, FMath::Clamp(H->FadeAlpha, 0.f, 1.f)));
+		LayerId += 1;
+	}
+	// The time of day, top right.
+	if (const ARiptideSkyClock* Clock = ARiptideSkyClock::Get(H))
+	{
+		const float Hours = Clock->GetHours();
+		const FString Time = FString::Printf(TEXT("%s  %02d:%02d"), Clock->IsNight() ? TEXT("NIGHT") : TEXT("DAY"), int32(Hours), int32(FMath::Frac(Hours) * 60.f));
+		const FSlateFontInfo ClockFont = Font(EFont::Bold, FMath::RoundToInt(16 * Scale));
+		DrawString(Out, LayerId + 1, G, Time, ClockFont, FVector2f(Size.X - 30.f * Scale, 26.f * Scale), Srgb(1.f, 1.f, 1.f, 0.8f), 1.f);
+	}
+
 	// A small crosshair dot, so it's clear what E acts on.
 	const float Dot = 4.f * Scale;
 	FillRect(Out, LayerId, G, Size * 0.5f - FVector2f(Dot * 0.5f), FVector2f(Dot), Srgb(1.f, 1.f, 1.f, 0.7f));
@@ -225,9 +252,28 @@ int32 SRiptideHudOverlay::OnPaint(const FPaintArgs& Args, const FGeometry& G, co
 			FillRect(Out, LayerId + 1, G, FVector2f(Bx, BY + 5.f * Scale), FVector2f(W * V, BarH), Fills[i]);
 			BY += Row;
 		}
+		// Under the bars: sick, and how the cold is (warm by a fire or in a shelter; cold, then freezing, out at night).
+		FString Status;
 		if (H->bVitalSick)
 		{
-			DrawString(Out, LayerId + 1, G, TEXT("SICK"), Label, FVector2f(BX, BY), Warning());
+			Status += TEXT("SICK   ");
+		}
+		if (H->VitalCold >= 75.f)
+		{
+			Status += TEXT("FREEZING");
+		}
+		else if (H->VitalCold >= 35.f)
+		{
+			Status += TEXT("COLD");
+		}
+		else if (H->bVitalWarm)
+		{
+			Status += TEXT("WARM");
+		}
+		if (!Status.IsEmpty())
+		{
+			const bool bBad = H->bVitalSick || H->VitalCold >= 35.f;
+			DrawString(Out, LayerId + 1, G, Status, Label, FVector2f(BX, BY), bBad ? Warning() : Srgb(1.f, 0.75f, 0.4f));
 		}
 	}
 

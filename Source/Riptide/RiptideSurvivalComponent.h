@@ -21,6 +21,12 @@ struct FRiptideVitals
 
 	UPROPERTY(BlueprintReadOnly, Category = "Survival")
 	float Sickness = 0.f;      // seconds of sickness left
+
+	UPROPERTY(BlueprintReadOnly, Category = "Survival")
+	float Cold = 0.f;          // 0 warm, 100 freezing: out at night away from a fire or a shelter
+
+	UPROPERTY(BlueprintReadOnly, Category = "Survival")
+	bool bWarm = false;        // by a lit fire or in a shelter now
 };
 
 /**
@@ -62,6 +68,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Survival")
 	void Heal(float Amount);
 
+	/** Time passing while asleep (the night skipped): hunger and thirst at Metabolism of their waking rate, and the
+	 * cold gone. Server. */
+	void PassTimeAsleep(float Seconds, float Metabolism);
+
+	UFUNCTION(BlueprintPure, Category = "Survival")
+	float GetCold() const { return Vitals.Cold; }
+
 	/** How many seconds of the day have gone by in the simulation (for tests: SetTimeScale runs it faster). */
 	UFUNCTION(BlueprintPure, Category = "Survival")
 	float GetSimulatedSeconds() const { return Simulated; }
@@ -76,6 +89,14 @@ public:
 	static constexpr float StarvingDamage = 1.f;
 	static constexpr float RegenPerSecond = 0.5f;
 	static constexpr float SickDamage = 0.15f;
+	/** Out at night with nothing warm: freezing in this long; warm again this fast; hurt past FreezingAt. */
+	static constexpr float ColdSeconds = 480.f;
+	static constexpr float WarmUpSeconds = 90.f;
+	static constexpr float FreezingAt = 75.f;
+	static constexpr float FreezingDamage = 0.3f;
+
+	/** By a lit fire or within a finished shelter's warmth (ARiptideStructure). */
+	bool IsNearWarmth() const;
 
 private:
 	UPROPERTY(ReplicatedUsing = OnRep_Vitals)

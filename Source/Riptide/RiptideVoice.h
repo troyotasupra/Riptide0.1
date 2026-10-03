@@ -59,7 +59,7 @@ public:
  * - V is push-to-talk. Spoken without the radio mic, it's heard around you, fading over about 25 m.
  * - Holding the boat's hand mic, what you say goes out on the boat's CB channel (heard from the radio of every other
  *   boat tuned to it, through a radio's tinny speaker), or through the loudhailer horn if the mic's switched to it.
- * - While holding the mic: [ and ] (or the mouse wheel) change the channel, B switches between CB and loudhailer.
+ * - While holding the mic: [ and ] change the channel, T switches between CB and loudhailer.
  * - NPC crews talk on the same channels and over their loudhailers (URiptideRadioSubsystem): heard here as radio
  *   chatter with subtitles.
  *

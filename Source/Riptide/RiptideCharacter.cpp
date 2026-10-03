@@ -104,6 +104,7 @@ void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ARiptideCharacter, HomeBoat);
 	DOREPLIFETIME(ARiptideCharacter, bManningHelm);
+	DOREPLIFETIME(ARiptideCharacter, bSleeping);
 	DOREPLIFETIME(ARiptideCharacter, OverboardCount);
 	DOREPLIFETIME(ARiptideCharacter, bBracing);
 	DOREPLIFETIME(ARiptideCharacter, bSprinting);
@@ -348,6 +349,15 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 
 void ARiptideCharacter::OnMove(const FInputActionValue& Value)
 {
+	if (bSleeping)
+	{
+		// Moving gets up.
+		if (!Value.Get<FVector2D>().IsNearlyZero())
+		{
+			ServerWake();
+		}
+		return;
+	}
 	if (IsKnockedDown())
 	{
 		return;
@@ -747,6 +757,45 @@ void ARiptideCharacter::ServerToggleMic_Implementation(bool bTake)
 	}
 }
 
+void ARiptideCharacter::SetSleeping(bool bSleep)
+{
+	if (!HasAuthority() || bSleeping == bSleep)
+	{
+		return;
+	}
+	bSleeping = bSleep;
+	// Curled up (crouched) where they lie; up again when they wake.
+	if (bSleep)
+	{
+		GetCharacterMovement()->StopMovementImmediately();
+		Crouch();
+	}
+	else
+	{
+		UnCrouch();
+	}
+}
+
+void ARiptideCharacter::ServerWake_Implementation()
+{
+	SetSleeping(false);
+}
+
+void ARiptideCharacter::WakeAfterNight(float SkippedSeconds)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	// A night's sleep: hungrier and thirstier (at under half the waking rate), warm, and somewhat mended.
+	if (Survival)
+	{
+		Survival->PassTimeAsleep(SkippedSeconds, 0.4f);
+		Survival->Heal(25.f);
+	}
+	SetSleeping(false);
+}
+
 void ARiptideCharacter::OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode)
 {
 	Super::OnMovementModeChanged(PrevMovementMode, PreviousCustomMode);
@@ -763,6 +812,11 @@ void ARiptideCharacter::OnMovementModeChanged(EMovementMode PrevMovementMode, ui
 
 void ARiptideCharacter::OnInteract(const FInputActionValue& Value)
 {
+	if (bSleeping)
+	{
+		ServerWake();
+		return;
+	}
 	// Whatever is under the crosshair comes first: a thing on the ground, a plant, a fire. A hand goes out to it.
 	if (!IsInSea() && !IsClimbing() && !IsKnockedDown() && !bManningHelm && !IsInventoryOpen())
 	{
@@ -1598,7 +1652,13 @@ void ARiptideCharacter::DrawHud() const
 	if (Survival && IsPlayerControlled())
 	{
 		const FRiptideVitals& V = Survival->GetVitals();
-		RiptideHud::Vitals(this, V.Health, V.Hunger, V.Thirst, V.Sickness > 0.f);
+		RiptideHud::Vitals(this, V.Health, V.Hunger, V.Thirst, V.Sickness > 0.f, V.Cold, V.bWarm);
+	}
+	if (bSleeping)
+	{
+		RiptideHud::Fade(this, 0.85f);
+		RiptideHud::Prompt(this, RiptideHud::ESlot::Context, TEXT("Asleep: the night passes once everyone is asleep      Move  Get up"));
+		return;
 	}
 	// The thing under the crosshair: what E does with it, and how far a hold has got.
 	if (Interaction && Interaction->HasFocus())

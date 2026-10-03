@@ -1,4 +1,8 @@
 #include "RiptideSurvivalComponent.h"
+#include "Data/RiptideStructures.h"
+#include "RiptideStructure.h"
+#include "RiptideSkyClock.h"
+#include "EngineUtils.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Net/UnrealNetwork.h"
@@ -51,12 +55,21 @@ void URiptideSurvivalComponent::Simulate(float Seconds)
 	{
 		Vitals.Health -= StarvingDamage * Seconds;
 	}
+	// The cold: out at night with nothing warm the body chills; by a fire, in a shelter, or by day it warms again.
+	Vitals.bWarm = IsNearWarmth();
+	const ARiptideSkyClock* Clock = ARiptideSkyClock::Get(this);
+	const bool bChilling = Clock && Clock->IsNight() && !Vitals.bWarm;
+	Vitals.Cold = FMath::Clamp(Vitals.Cold + (bChilling ? 100.f / ColdSeconds : -100.f / WarmUpSeconds) * Seconds, 0.f, 100.f);
+	if (Vitals.Cold >= FreezingAt)
+	{
+		Vitals.Health -= FreezingDamage * Seconds;
+	}
 	if (IsSick())
 	{
 		Vitals.Sickness = FMath::Max(0.f, Vitals.Sickness - Seconds);
 		Vitals.Health -= SickDamage * Seconds;
 	}
-	else if (Vitals.Hunger > 50.f && Vitals.Thirst > 50.f)
+	else if (Vitals.Hunger > 50.f && Vitals.Thirst > 50.f && Vitals.Cold < 50.f)
 	{
 		Vitals.Health += RegenPerSecond * Seconds;
 	}
@@ -75,6 +88,42 @@ void URiptideSurvivalComponent::Consume(float Food, float Water, float SicknessS
 	{
 		Vitals.Sickness = FMath::Max(Vitals.Sickness, SicknessSeconds);
 	}
+}
+
+bool URiptideSurvivalComponent::IsNearWarmth() const
+{
+	const AActor* Owner = GetOwner();
+	if (!Owner || !GetWorld())
+	{
+		return false;
+	}
+	const FVector Here = Owner->GetActorLocation();
+	for (TActorIterator<ARiptideStructure> It(GetWorld()); It; ++It)
+	{
+		const FRiptideStructureDef* Def = It->GetDef();
+		if (!Def || Def->Warmth <= 0.f || FVector::Dist2D(Here, It->GetActorLocation()) > Def->WarmRadius)
+		{
+			continue;
+		}
+		// A fire warms while it burns; a shelter once it's built.
+		if (Def->Station == ERiptideStationKind::Cook ? It->IsLit() : It->IsFinished())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void URiptideSurvivalComponent::PassTimeAsleep(float Seconds, float Metabolism)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	Vitals.Hunger = FMath::Max(0.f, Vitals.Hunger - 100.f / HungerSeconds * Metabolism * Seconds);
+	Vitals.Thirst = FMath::Max(0.f, Vitals.Thirst - 100.f / ThirstSeconds * Metabolism * Seconds);
+	Vitals.Cold = 0.f;
+	Simulated += Seconds;
 }
 
 void URiptideSurvivalComponent::Heal(float Amount)

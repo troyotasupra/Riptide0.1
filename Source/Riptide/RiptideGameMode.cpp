@@ -6,6 +6,7 @@
 #include "WaterBodyOceanActor.h"
 #include "RiptideBeachStart.h"
 #include "RiptideBoat.h"
+#include "RiptideSkyClock.h"
 #include "RiptideCharacter.h"
 #include "RiptideSea.h"
 #include "RiptideHUD.h"
@@ -19,6 +20,17 @@ ARiptideGameMode::ARiptideGameMode()
 	PlayerStateClass = ARiptidePlayerState::StaticClass();
 	HUDClass = ARiptideHUD::StaticClass();      // the in-game menu (Esc)
 	BoatClass = ARiptideBoat::StaticClass();
+}
+
+void ARiptideGameMode::BeginPlay()
+{
+	Super::BeginPlay();
+	if (!ARiptideSkyClock::Get(this))
+	{
+		FActorSpawnParameters Params;
+		Params.ObjectFlags |= RF_Transient;
+		GetWorld()->SpawnActor<ARiptideSkyClock>(ARiptideSkyClock::StaticClass(), FTransform::Identity, Params);
+	}
 }
 
 ARiptideBoat* ARiptideGameMode::FindOrLaunchBoat(AActor* StartSpot)
