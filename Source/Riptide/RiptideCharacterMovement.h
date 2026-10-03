@@ -32,6 +32,8 @@ public:
 	virtual float ImmersionDepth() const override;
 	virtual float GetMaxSpeed() const override;
 	virtual FVector ConstrainInputAcceleration(const FVector& InputAcceleration) const override;
+	virtual void FindFloor(const FVector& CapsuleLocation, FFindFloorResult& OutFloorResult, bool bCanUseCachedLocation,
+		const FHitResult* DownwardSweepResult = nullptr) const override;
 
 	/** Swimming in the sea. */
 	bool IsSeaSwimming() const { return MovementMode == MOVE_Custom && CustomMovementMode == RIPTIDE_MOVE_SeaSwim; }

@@ -1,10 +1,12 @@
-"""Runs automatically when the editor opens. Imports the game's sounds and builds the ocean test map the first time."""
+"""Runs automatically when the editor opens. Imports the game's sounds and builds the ocean test map and the main menu
+map the first time."""
 
 import os
 
 import unreal
 
 MAP_PATH = "/Game/Riptide/Maps/Ocean_Test"
+MENU_MAP_PATH = "/Game/Riptide/Maps/MainMenu"
 AUDIO_PATH = "/Game/Riptide/Audio"
 
 # Sounds, imported from SourceAssets/Audio (credited in Docs/CREDITS.md). Each is levelled so that at volume 1
@@ -24,6 +26,11 @@ SOUNDS = {
     "S_Hull_Slap_15": ("hull_slap_15.ogg", False, -17.8, -1.3, -22.0),
 }
 PEAK_CEILING_DBFS = -8.0
+
+# Each sound's class, for the settings screen's volumes (URiptideSettingsSave): the sea's ambience on its own, everything
+# else (the boat, the water) under effects.
+SOUND_CLASSES = ("SC_Effects", "SC_Ambient")
+AMBIENT_SOUNDS = ("S_Ocean_Ambience",)
 
 
 def _sound_volume(measured_lufs, measured_peak, target_lufs):
@@ -48,7 +55,15 @@ def import_sounds():
         unreal.log(f"Riptide: importing {len(tasks)} sounds")
         unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
 
-    # Levels are applied every launch, so retuning a target above takes effect without a reimport.
+    classes = {}
+    for name in SOUND_CLASSES:
+        path = f"{AUDIO_PATH}/{name}"
+        if not unreal.EditorAssetLibrary.does_asset_exist(path):
+            unreal.AssetToolsHelpers.get_asset_tools().create_asset(name, AUDIO_PATH, unreal.SoundClass, unreal.SoundClassFactory())
+            unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+        classes[name] = unreal.load_asset(path)
+
+    # Levels (and classes) are applied every launch, so retuning a target above takes effect without a reimport.
     for name, (_filename, loops, lufs, peak, target) in SOUNDS.items():
         path = f"{AUDIO_PATH}/{name}"
         sound = unreal.load_asset(path)
@@ -56,9 +71,11 @@ def import_sounds():
             unreal.log_error(f"Riptide: sound {name} failed to import")
             continue
         volume = round(_sound_volume(lufs, peak, target), 4)
-        if sound.get_editor_property("looping") != loops or abs(sound.get_editor_property("volume") - volume) > 1e-4:
+        sound_class = classes.get("SC_Ambient" if name in AMBIENT_SOUNDS else "SC_Effects")
+        if sound.get_editor_property("looping") != loops or abs(sound.get_editor_property("volume") - volume) > 1e-4                 or sound.get_editor_property("sound_class_object") != sound_class:
             sound.set_editor_property("looping", loops)
             sound.set_editor_property("volume", volume)
+            sound.set_editor_property("sound_class_object", sound_class)
             unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
 
 
@@ -71,12 +88,13 @@ def _spawn(actor_class, location=(0.0, 0.0, 0.0), yaw=0.0, pitch=0.0):
     )
 
 
-# Open water the test map covers, in cm (2 km square). The boat does ~15 kn, so this is a few minutes of driving.
-SEA_SIZE = 200000.0
+# Open water the maps cover, in cm (24 km square): about 13 minutes flat out from the start to any edge. Past the
+# edge there's no sea at all, and the boat drops through the world (a 2 km sea was reached in a minute at 30 kn).
+SEA_SIZE = 2400000.0
 
 # The ocean treats the inside of its shoreline spline as dry land for an island. There's no island yet,
 # so the shoreline is shrunk to a 4 m loop parked in a far corner, leaving the spawn point in open water.
-SHORE_CENTRE = (-90000.0, -90000.0)
+SHORE_CENTRE = (-SEA_SIZE * 0.45, -SEA_SIZE * 0.45)
 SHORE_HALF_SIZE = 200.0
 
 # A moderate swell, about 1-1.5 m trough to crest: the engine's default ocean waves (up to 5 m) are storm
@@ -140,6 +158,40 @@ def _cover_waves(ocean):
         return False
     body.set_editor_property("collision_height_offset", needed)
     unreal.log(f"Riptide: ocean collision now reaches {needed:.0f} cm above sea level")
+    return True
+
+
+# Past the edge of the detailed sea the Water plugin can draw a flat "far" ocean out to the horizon. Without it the
+# water simply stopped at the zone's edge and the boat sailed off into nothing. 500 km is past any horizon.
+FAR_SEA_EXTENT = 50000000.0
+FAR_SEA_MATERIAL = "/Water/Materials/WaterSurface/Water_FarMesh"
+
+
+def _far_sea(zone):
+    """Draws the ocean on past the water zone to the horizon. True if it changed."""
+    mesh = zone.get_component_by_class(unreal.WaterMeshComponent)
+    if mesh.get_editor_property("far_distance_mesh_extent") >= FAR_SEA_EXTENT - 1.0:
+        return False
+    mesh.set_editor_property("far_distance_material", unreal.load_asset(FAR_SEA_MATERIAL))
+    mesh.set_editor_property("far_distance_mesh_extent", FAR_SEA_EXTENT)
+    unreal.log("Riptide: the sea is drawn on to the horizon past the water zone")
+    return True
+
+
+# How deep the water must be before waves reach full size. The drawn waves shrink with the depth the renderer
+# measures down to the ground, but the height the game reads (buoyancy, swimmers, the underwater view) uses full
+# waves, so wherever the two disagreed the camera could be under the drawn surface yet "above" the read one, or the
+# other way round (the sky tinted as if underwater). A tiny mask depth keeps the drawn waves full size everywhere.
+OCEAN_WAVE_MASK_DEPTH = 1.0
+
+
+def _full_waves(ocean):
+    """Keeps the drawn waves the same size as the ones the game reads. True if it changed."""
+    body = ocean.get_water_body_component()
+    if abs(body.get_editor_property("target_wave_mask_depth") - OCEAN_WAVE_MASK_DEPTH) < 0.01:
+        return False
+    body.set_editor_property("target_wave_mask_depth", OCEAN_WAVE_MASK_DEPTH)
+    unreal.log("Riptide: drawn waves now full size at any depth")
     return True
 
 
@@ -383,7 +435,7 @@ def make_spray_material():
 
 # The boat model is generated by riptide_boat_mesh.py (our own geometry, no third-party model) and imported here.
 BOATS_PATH = "/Game/Riptide/Boats"
-BOAT_MODEL_VERSION = "29"
+BOAT_MODEL_VERSION = "30"
 # Material slot -> (base colour, metallic, roughness). "Glass" gets its own see-through material.
 BOAT_FINISHES = {
     "Aluminium": ((0.55, 0.57, 0.6), 1.0, 0.38),
@@ -710,6 +762,7 @@ def make_boat_assets():
         "SM_PatrolSkiff": riptide_boat_mesh.build_skiff,
         "SM_Outboard": riptide_boat_mesh.build_outboard,
         "SM_OutboardBracket": riptide_boat_mesh.build_outboard_bracket,
+        "SM_OutboardSwivel": riptide_boat_mesh.build_outboard_swivel,
         "SM_ThrottleLever": riptide_boat_mesh.build_throttle_lever,
         "SM_RadarArray": riptide_boat_mesh.build_radar_array,
         "SM_Searchlight": riptide_boat_mesh.build_searchlight,
@@ -787,6 +840,510 @@ def make_boat_assets():
             assets.delete_asset(leftover.split(".")[0])
 
 
+# --- The crew --------------------------------------------------------------------------------------------------------
+# Quaternius's CC0 bodies, hair and animation libraries (SourceAssets/Characters/Quaternius, credited in
+# Docs/CREDITS.md), and the uniforms and gear riptide_crew_mesh.py generates from them, imported onto one shared
+# skeleton under /Game/Riptide/Characters. URiptideCrewBodyComponent loads them by path. Bump CREW_VERSION when
+# riptide_crew_mesh.py or the recipe here changes, so every machine rebuilds them on its next launch.
+CHARACTERS_PATH = "/Game/Riptide/Characters"
+CREW_VERSION = "4"
+CREW_MATERIALS = f"{CHARACTERS_PATH}/Materials"
+
+# Textures from the packs: (asset name, file under SourceAssets/Characters/Quaternius, kind)
+CREW_TEXTURES = [
+    ("T_CrewMale_Base", "BaseCharacters/T_Superhero_Male_Dark.png", "colour"),
+    ("T_CrewMale_Normal", "BaseCharacters/T_Superhero_Male_Normal.png", "normal"),
+    ("T_CrewMale_Rough", "BaseCharacters/T_Superhero_Male_Roughness.png", "data"),
+    ("T_CrewFemale_Base", "BaseCharacters/T_Superhero_Female_Dark_BaseColor.png", "colour"),
+    ("T_CrewFemale_Normal", "BaseCharacters/T_Superhero_Female_Normal.png", "normal"),
+    ("T_CrewFemale_Rough", "BaseCharacters/T_Superhero_Female_Roughness.png", "data"),
+    ("T_CrewHair1_Base", "Hair/T_Hair_1_BaseColor.png", "colour"),
+    ("T_CrewHair1_Normal", "Hair/T_Hair_1_Normal.png", "normal"),
+    ("T_CrewHair2_Base", "Hair/T_Hair_2_BaseColor.png", "colour"),
+    ("T_CrewHair2_Normal", "Hair/T_Hair_2_Normal.png", "normal"),
+    ("T_CrewEye", "BaseCharacters/T_Eye_Brown.png", "colour"),
+]
+
+# A tiny noise library for the crew's materials' HLSL (value noise and fBm, self-contained so it compiles the same
+# on every platform), wrapped in a struct: a Custom node's code can't declare functions, but it can declare a struct
+# with methods.
+_NOISE_HLSL = (
+    "struct FNoise {\n"
+    "  float h(float3 p) { p = frac(p * 0.3183099 + 0.1); p *= 17.0; return frac(p.x * p.y * p.z * (p.x + p.y + p.z)); }\n"
+    "  float n(float3 x) { float3 i = floor(x); float3 f = frac(x); f = f * f * (3.0 - 2.0 * f);\n"
+    "    return lerp(lerp(lerp(h(i), h(i + float3(1, 0, 0)), f.x), lerp(h(i + float3(0, 1, 0)), h(i + float3(1, 1, 0)), f.x), f.y),\n"
+    "                lerp(lerp(h(i + float3(0, 0, 1)), h(i + float3(1, 0, 1)), f.x), lerp(h(i + float3(0, 1, 1)), h(i + float3(1, 1, 1)), f.x), f.y), f.z); }\n"
+    "  float fbm(float3 p) { float a = 0.5, s = 0.0; for (int k = 0; k < 4; k++) { s += a * n(p); p = p * 2.03 + 17.1; a *= 0.5; } return s / 0.9375; }\n"
+    "};\n"
+    "FNoise nz;\n"
+)
+
+# The uniform's camouflage, from the cloth's own (pre-skinning) position so the pattern stays printed on it as the
+# body moves. Style 0 is soft-edged blotches in three layers (MultiCam-like, desert), 1 hard-edged shapes stretched
+# sideways (woodland, urban), 2 plain cloth. Then the ripstop grid, a little fading, and darker reinforced panels
+# (the mesh's red vertex colour, at the knees and elbows).
+_CAMO_HLSL = _NOISE_HLSL + (
+    "float3 p = Pos / (13.0 * max(Size, 0.1));\n"
+    "float3 c = C1.rgb;\n"
+    "if (Style < 0.5) {\n"
+    "  c = lerp(c, C2.rgb, smoothstep(0.52, 0.535, nz.fbm(p * 0.8 + 3.1)));\n"
+    "  c = lerp(c, C3.rgb, smoothstep(0.57, 0.585, nz.fbm(p * 1.3 + 11.7)));\n"
+    "  c = lerp(c, C4.rgb, smoothstep(0.62, 0.635, nz.fbm(p * 2.6 + 29.3)) * step(0.45, nz.n(p * 1.7 + 5.0)));\n"
+    "} else if (Style < 1.5) {\n"
+    "  float3 q = p * float3(1.0, 1.0, 1.7);\n"
+    "  c = lerp(c, C2.rgb, step(0.52, nz.fbm(q * 0.8 + 5.0)));\n"
+    "  c = lerp(c, C4.rgb, step(0.63, nz.fbm(q * 1.1 + 47.0)));\n"
+    "  c = lerp(c, C3.rgb, step(0.60, nz.fbm(q * 1.3 + 13.0)) * step(0.45, nz.fbm(q * 1.9 + 31.0)));\n"
+    "}\n"
+    "float3 g = abs(frac(Pos / 0.6) - 0.5);\n"
+    "float grid = smoothstep(0.42, 0.5, max(max(g.x, g.y), g.z));\n"
+    "c *= 1.0 - 0.06 * grid;\n"
+    "c *= 0.95 + 0.08 * nz.n(Pos * 0.06) + 0.02 * nz.n(Pos * 2.5);\n"
+    "c *= lerp(1.0, 0.82, Panel);\n"
+    "return c;\n"
+)
+# Creases in the cloth: a soft bump from the same noise (tangent-space normal).
+_CLOTH_NORMAL_HLSL = _NOISE_HLSL + (
+    "float3 q = Pos * 0.35; float e = 0.12;\n"
+    "float h0 = nz.fbm(q);\n"
+    "float hx = nz.fbm(q + float3(e, 0, 0)); float hy = nz.fbm(q + float3(0, e, 0)); float hz = nz.fbm(q + float3(0, 0, e));\n"
+    "return normalize(float3((h0 - hx) + 0.5 * (h0 - hz), (h0 - hy) + 0.5 * (h0 - hz), 0.18 / Strength));\n"
+)
+
+# The gear's surfaces: one material for webbing, nylon, knit, rubber, leather and metal, picked by Weave. The colour
+# is the gear colour (UseGear), the boot leather colour (UseBoot) or a fixed one, times Tint. Boots and gloves mark
+# their parts in vertex colour: boots red for the rubber sole, green the laces, blue the toe and heel caps; gloves
+# red for the palm.
+#   Weave 0 nylon (Cordura), 1 webbing, 2 knit ribs, 3 velcro loop, 4 smooth (rubber, plastic, metal), 5 shemagh
+#   check, 6 boot leather, 7 glove
+_GEAR_HLSL = _NOISE_HLSL + (
+    "float3 base = lerp(Fixed.rgb, Gear.rgb, UseGear); base = lerp(base, Boot.rgb, UseBoot); base *= Tint;\n"
+    "float3 P = float3(UV * 10.0, 0.0);\n"
+    "float w = Weave;\n"
+    "if (w < 0.5) {\n"
+    "  float2 f = abs(frac(UV * 10.0 / 0.32) - 0.5);\n"
+    "  base *= (0.93 + 0.1 * (f.x + f.y)) * (0.9 + 0.18 * nz.n(P * 0.6));\n"
+    "} else if (w < 1.5) {\n"
+    "  base *= (0.9 + 0.1 * abs(sin(UV.x * 10.0 * 18.0))) * (0.92 + 0.12 * nz.n(P * 0.5));\n"
+    "} else if (w < 2.5) {\n"
+    "  base *= 0.78 + 0.22 * abs(sin(UV.x * 3.14159)) + 0.06 * nz.n(P * 3.0);\n"
+    "} else if (w < 3.5) {\n"
+    "  base *= 0.8 + 0.3 * nz.n(P * 9.0);\n"
+    "} else if (w < 4.5) {\n"
+    "  base *= 0.97 + 0.06 * nz.n(P * 0.4);\n"
+    "} else if (w < 5.5) {\n"
+    "  float3 sand = lerp(float3(0.42, 0.37, 0.27), Gear.rgb, 0.3);\n"
+    "  float2 f = frac(UV * float2(1.4, 1.4));\n"
+    "  float band = max(step(f.x, 0.12), step(f.y, 0.12)) * 0.7 + step(frac((UV.x - UV.y) * 4.0), 0.25) * 0.12;\n"
+    "  base = lerp(sand, Gear.rgb * 0.3, band) * (0.9 + 0.15 * nz.n(P * 1.5));\n"
+    "} else if (w < 6.5) {\n"
+    "  base *= 0.88 + 0.16 * nz.n(P * 1.2);\n"
+    "  base = lerp(base, base * 0.6, VC.b);\n"
+    "  base = lerp(base, float3(0.03, 0.03, 0.03), VC.g);\n"
+    "  base = lerp(base, float3(0.018, 0.018, 0.018), VC.r);\n"
+    "} else {\n"
+    "  float2 f = abs(frac(UV * 10.0 / 0.25) - 0.5);\n"
+    "  base *= (0.9 + 0.14 * (f.x + f.y)) * (0.92 + 0.12 * nz.n(P * 0.8));\n"
+    "  base = lerp(base, float3(0.045, 0.045, 0.047), VC.r);\n"
+    "}\n"
+    "return base;\n"
+)
+_GEAR_ROUGH_HLSL = (
+    "float r = Rough;\n"
+    "if (Weave > 5.5 && Weave < 6.5) r = lerp(lerp(r, 0.5, VC.b), 0.9, VC.r);\n"
+    "if (Weave > 6.5) r = lerp(r, 0.95, VC.r);\n"
+    "return r;\n"
+)
+_SKIN_HLSL = (
+    "float lum = dot(Tex.rgb, float3(0.2126, 0.7152, 0.0722));\n"
+    "float3 rel = Tex.rgb / float3(0.58, 0.28, 0.16);\n"
+    "return saturate(Tone.rgb * lerp(lum.xxx / 0.34, rel, 0.3));\n"
+)
+_HAIR_HLSL = (
+    "float lum = dot(Tex.rgb, float3(0.2126, 0.7152, 0.0722));\n"
+    "return saturate(Colour.rgb * pow(saturate(lum / 0.42), 1.3) * 1.15);\n"
+)
+
+# Each material slot the generated meshes use: (material, settings). Gear slots are instances of M_CrewGear:
+#   (UseGear, UseBoot, Tint, Fixed colour, Weave, Roughness, Metallic)
+CREW_GEAR_SLOTS = {
+    "Gear": (1, 0, 1.0, (0.1, 0.1, 0.1), 0, 0.85, 0.0),
+    "GearDark": (1, 0, 0.55, (0.1, 0.1, 0.1), 0, 0.85, 0.0),
+    "Strap": (1, 0, 0.75, (0.1, 0.1, 0.1), 1, 0.8, 0.0),
+    "Belt": (1, 0, 0.7, (0.1, 0.1, 0.1), 1, 0.8, 0.0),
+    "Velcro": (1, 0, 0.9, (0.1, 0.1, 0.1), 3, 0.95, 0.0),
+    "Knit": (1, 0, 0.85, (0.1, 0.1, 0.1), 2, 0.95, 0.0),
+    "Shemagh": (1, 0, 1.0, (0.1, 0.1, 0.1), 5, 0.9, 0.0),
+    "Glove": (1, 0, 0.42, (0.1, 0.1, 0.1), 7, 0.75, 0.0),
+    "Lace": (0, 0, 1.0, (0.02, 0.02, 0.02), 1, 0.8, 0.0),
+    "Sole": (0, 0, 1.0, (0.018, 0.018, 0.018), 4, 0.9, 0.0),
+    "GloveGuard": (1, 0, 0.45, (0.1, 0.1, 0.1), 4, 0.5, 0.0),
+    "Furniture": (1, 0, 0.9, (0.1, 0.1, 0.1), 4, 0.6, 0.0),
+    "Boot": (0, 1, 1.0, (0.1, 0.1, 0.1), 6, 0.62, 0.0),
+    "Mount": (0, 0, 1.0, (0.035, 0.036, 0.038), 4, 0.42, 0.5),
+    "Trim": (0, 0, 1.0, (0.02, 0.02, 0.02), 4, 0.75, 0.0),
+    "Polymer": (0, 0, 1.0, (0.03, 0.03, 0.032), 4, 0.55, 0.0),
+    "Pad": (0, 0, 1.0, (0.045, 0.045, 0.045), 0, 0.95, 0.0),
+    "Metal": (0, 0, 1.0, (0.2, 0.19, 0.17), 4, 0.35, 0.9),
+    "Frame": (0, 0, 1.0, (0.02, 0.02, 0.02), 4, 0.35, 0.0),
+    "GunMetal": (0, 0, 1.0, (0.022, 0.022, 0.024), 4, 0.42, 0.35),
+}
+# Every other slot: the material asset it's drawn with.
+CREW_OTHER_SLOTS = {
+    "Uniform": "MI_CrewCamo", "Camo": "MI_CrewCamo", "Lens": "MI_CrewLens_Sun", "ClearLens": "MI_CrewLens_Clear",
+    "Hair1": "MI_CrewHair1", "Hair2": "MI_CrewHair2", "MI_Hair_1": "MI_CrewHair1", "MI_Hair_2": "MI_CrewHair2",
+    "MI_Eyes": "M_CrewEyes", "MI_Superhero_Male": "MI_CrewSkin_Male", "MI_Superhero_Female": "MI_CrewSkin_Female",
+}
+
+
+class _Graph:
+    """Builds a material's node graph from Python (the same helpers as M_BoatDetail's, reusable)."""
+
+    def __init__(self, mat):
+        self.mat = mat
+        self.mel = unreal.MaterialEditingLibrary
+        self.x = -1600
+
+    def node(self, cls, **props):
+        e = self.mel.create_material_expression(self.mat, cls, self.x, 0)
+        self.x += 40
+        for k, v in props.items():
+            e.set_editor_property(k, v)
+        return e
+
+    def scalar(self, name, default):
+        return self.node(unreal.MaterialExpressionScalarParameter, parameter_name=name, default_value=default)
+
+    def vector(self, name, colour):
+        return self.node(unreal.MaterialExpressionVectorParameter, parameter_name=name, default_value=unreal.LinearColor(*colour, 1.0))
+
+    def texture(self, name, texture, uv=None):
+        e = self.node(unreal.MaterialExpressionTextureSampleParameter2D, parameter_name=name, texture=texture,
+                      sampler_type=_sampler_type_for(texture))
+        if uv is not None:
+            self.mel.connect_material_expressions(uv, "", e, "UVs")
+        return e
+
+    def custom(self, code, output_type, inputs):
+        """An HLSL node: inputs are (name, node, output name) triples."""
+        pins = []
+        for name, _, _ in inputs:
+            pin = unreal.CustomInput()
+            pin.set_editor_property("input_name", name)
+            pins.append(pin)
+        output_type = getattr(unreal.CustomMaterialOutputType, output_type)
+        e = self.node(unreal.MaterialExpressionCustom, code=code, output_type=output_type, inputs=pins)
+        for name, src, out in inputs:
+            self.mel.connect_material_expressions(src, out, e, name)
+        return e
+
+    def out(self, node, prop, output=""):
+        self.mel.connect_material_property(node, output, prop)
+
+
+# Names, looked up when a material is built: the enum isn't there in every launch (a packaged game has no editor).
+_F1, _F3 = "CMOT_FLOAT1", "CMOT_FLOAT3"
+
+
+def _new_material(name, skinned=True):
+    path = f"{CREW_MATERIALS}/{name}"
+    mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(name, CREW_MATERIALS, unreal.Material, unreal.MaterialFactoryNew())
+    if skinned:
+        mat.set_editor_property("used_with_skeletal_mesh", True)
+    return mat, _Graph(mat)
+
+
+def _finish_material(mat):
+    unreal.MaterialEditingLibrary.recompile_material(mat)
+    unreal.EditorAssetLibrary.save_asset(mat.get_path_name().split(".")[0], only_if_is_dirty=False)
+
+
+def _make_crew_materials(textures):
+    """The crew's materials: skin and hair tinted by the look's colours, the eyes, the camouflage uniform, the gear
+    (one master with an instance per slot) and lenses. URiptideCrewBodyComponent sets SkinTone, HairColour,
+    GearColour, BootColour and the camouflage (CamoStyle, CamoSize, Camo1-4) on dynamic instances."""
+    mp = unreal.MaterialProperty
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    mel = unreal.MaterialEditingLibrary
+
+    mat, g = _new_material("M_CrewSkin")
+    base = g.texture("BaseTex", textures["T_CrewMale_Base"])
+    nrm = g.texture("NormalTex", textures["T_CrewMale_Normal"])
+    rough = g.texture("RoughTex", textures["T_CrewMale_Rough"])
+    tone = g.vector("SkinTone", (0.56, 0.32, 0.2))
+    g.out(g.custom(_SKIN_HLSL, _F3, [("Tex", base, "RGB"), ("Tone", tone, "")]), mp.MP_BASE_COLOR)
+    g.out(nrm, mp.MP_NORMAL, "RGB")
+    g.out(rough, mp.MP_ROUGHNESS, "G")
+    spec = g.node(unreal.MaterialExpressionConstant, r=0.35)
+    g.out(spec, mp.MP_SPECULAR)
+    _finish_material(mat)
+
+    mat, g = _new_material("M_CrewHair")
+    base = g.texture("BaseTex", textures["T_CrewHair1_Base"])
+    nrm = g.texture("NormalTex", textures["T_CrewHair1_Normal"])
+    colour = g.vector("HairColour", (0.03, 0.02, 0.015))
+    g.out(g.custom(_HAIR_HLSL, _F3, [("Tex", base, "RGB"), ("Colour", colour, "")]), mp.MP_BASE_COLOR)
+    g.out(nrm, mp.MP_NORMAL, "RGB")
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.6), mp.MP_ROUGHNESS)
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.3), mp.MP_SPECULAR)
+    _finish_material(mat)
+
+    mat, g = _new_material("M_CrewEyes")
+    g.out(g.texture("BaseTex", textures["T_CrewEye"]), mp.MP_BASE_COLOR, "RGB")
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.08), mp.MP_ROUGHNESS)
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.7), mp.MP_SPECULAR)
+    _finish_material(mat)
+
+    mat, g = _new_material("M_CrewCamo")
+    mat.set_editor_property("used_with_static_lighting", False)
+    # The pre-skinning position is only known per vertex: interpolated across each triangle for the pixel shader.
+    pos = g.node(unreal.MaterialExpressionVertexInterpolator)
+    unreal.MaterialEditingLibrary.connect_material_expressions(g.node(unreal.MaterialExpressionPreSkinnedPosition), "", pos, "")
+    vc = g.node(unreal.MaterialExpressionVertexColor)
+    ins = [("Pos", pos, ""), ("Style", g.scalar("CamoStyle", 0.0), ""), ("Size", g.scalar("CamoSize", 1.0), ""), ("Panel", vc, "R")]
+    for i, c in enumerate(((0.3, 0.25, 0.15), (0.15, 0.15, 0.07), (0.17, 0.1, 0.05), (0.05, 0.035, 0.02))):
+        ins.append(("C%d" % (i + 1), g.vector("Camo%d" % (i + 1), c), ""))
+    g.out(g.custom(_CAMO_HLSL, _F3, ins), mp.MP_BASE_COLOR)
+    g.out(g.custom(_CLOTH_NORMAL_HLSL, _F3, [("Pos", pos, ""), ("Strength", g.scalar("Creases", 1.0), "")]), mp.MP_NORMAL)
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.88), mp.MP_ROUGHNESS)
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.3), mp.MP_SPECULAR)
+    _finish_material(mat)
+
+    mat, g = _new_material("M_CrewGear")
+    mat.set_editor_property("used_with_static_lighting", False)
+    uv = g.node(unreal.MaterialExpressionTextureCoordinate)
+    vc = g.node(unreal.MaterialExpressionVertexColor)
+    weave = g.scalar("Weave", 0.0)
+    ins = [("Gear", g.vector("GearColour", (0.22, 0.12, 0.05)), ""), ("Boot", g.vector("BootColour", (0.1, 0.06, 0.03)), ""),
+           ("Fixed", g.vector("FixedColour", (0.1, 0.1, 0.1)), ""), ("UseGear", g.scalar("UseGear", 1.0), ""),
+           ("UseBoot", g.scalar("UseBoot", 0.0), ""), ("Tint", g.scalar("Tint", 1.0), ""), ("Weave", weave, ""),
+           ("UV", uv, ""), ("VC", vc, "")]
+    g.out(g.custom(_GEAR_HLSL, _F3, ins), mp.MP_BASE_COLOR)
+    g.out(g.custom(_GEAR_ROUGH_HLSL, _F1, [("Rough", g.scalar("Roughness", 0.8), ""), ("Weave", weave, ""), ("VC", vc, "")]), mp.MP_ROUGHNESS)
+    g.out(g.scalar("Metallic", 0.0), mp.MP_METALLIC)
+    _finish_material(mat)
+
+    mat, g = _new_material("M_CrewLens")
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    mat.set_editor_property("translucency_lighting_mode", unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
+    mat.set_editor_property("two_sided", True)
+    g.out(g.vector("Tint", (0.01, 0.012, 0.014)), mp.MP_BASE_COLOR)
+    # More see-through looking straight through it, more mirror at a glancing angle.
+    fresnel = g.node(unreal.MaterialExpressionFresnel, exponent=3.0, base_reflect_fraction=0.0)
+    opacity = g.node(unreal.MaterialExpressionLinearInterpolate)
+    mel.connect_material_expressions(g.scalar("Opacity", 0.85), "", opacity, "A")
+    mel.connect_material_expressions(g.node(unreal.MaterialExpressionConstant, r=0.97), "", opacity, "B")
+    mel.connect_material_expressions(fresnel, "", opacity, "Alpha")
+    g.out(opacity, mp.MP_OPACITY)
+    g.out(g.node(unreal.MaterialExpressionConstant, r=1.0), mp.MP_SPECULAR)
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.04), mp.MP_ROUGHNESS)
+    _finish_material(mat)
+
+    def instance(name, parent, scalars=None, vectors=None, textures_=None):
+        path = f"{CREW_MATERIALS}/{name}"
+        mi = tools.create_asset(name, CREW_MATERIALS, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+        mel.set_material_instance_parent(mi, unreal.load_asset(f"{CREW_MATERIALS}/{parent}"))
+        for k, v in (scalars or {}).items():
+            mel.set_material_instance_scalar_parameter_value(mi, k, float(v))
+        for k, v in (vectors or {}).items():
+            mel.set_material_instance_vector_parameter_value(mi, k, unreal.LinearColor(*v, 1.0))
+        for k, v in (textures_ or {}).items():
+            mel.set_material_instance_texture_parameter_value(mi, k, v)
+        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+        return mi
+
+    instance("MI_CrewSkin_Male", "M_CrewSkin", textures_={"BaseTex": textures["T_CrewMale_Base"], "NormalTex": textures["T_CrewMale_Normal"],
+                                                          "RoughTex": textures["T_CrewMale_Rough"]})
+    instance("MI_CrewSkin_Female", "M_CrewSkin", textures_={"BaseTex": textures["T_CrewFemale_Base"], "NormalTex": textures["T_CrewFemale_Normal"],
+                                                            "RoughTex": textures["T_CrewFemale_Rough"]})
+    for k in ("1", "2"):
+        instance("MI_CrewHair" + k, "M_CrewHair", textures_={"BaseTex": textures[f"T_CrewHair{k}_Base"], "NormalTex": textures[f"T_CrewHair{k}_Normal"]})
+    instance("MI_CrewCamo", "M_CrewCamo")
+    instance("MI_CrewLens_Sun", "M_CrewLens", scalars={"Opacity": 0.88}, vectors={"Tint": (0.012, 0.01, 0.008)})
+    instance("MI_CrewLens_Clear", "M_CrewLens", scalars={"Opacity": 0.3}, vectors={"Tint": (0.05, 0.045, 0.035)})
+    for slot, (use_gear, use_boot, tint, fixed, weave, rough, metal) in CREW_GEAR_SLOTS.items():
+        instance("MI_CrewGear_" + slot, "M_CrewGear", scalars={"UseGear": use_gear, "UseBoot": use_boot, "Tint": tint, "Weave": weave,
+                                                              "Roughness": rough, "Metallic": metal}, vectors={"FixedColour": fixed})
+
+
+def _crew_material_for(slot):
+    name = ("MI_CrewGear_" + slot) if slot in CREW_GEAR_SLOTS else CREW_OTHER_SLOTS.get(slot)
+    return unreal.load_asset(f"{CREW_MATERIALS}/{name}") if name else None
+
+
+def _interchange_import(filename, dest, skeleton=None, animations=False):
+    """Imports a glTF/glb with Interchange: skeletal meshes (onto the given skeleton) or only its animations, with
+    no materials, textures or physics assets of its own (ours are assigned after). Returns the imported paths."""
+    p = unreal.InterchangeGenericAssetsPipeline()
+    materials = p.get_editor_property("material_pipeline")
+    materials.set_editor_property("import_materials", False)
+    materials.get_editor_property("texture_pipeline").set_editor_property("import_textures", False)
+    meshes = p.get_editor_property("mesh_pipeline")
+    meshes.set_editor_property("import_static_meshes", False)
+    meshes.set_editor_property("import_skeletal_meshes", not animations)
+    meshes.set_editor_property("create_physics_asset", False)
+    common = p.get_editor_property("common_meshes_properties")
+    common.set_editor_property("recompute_normals", False)       # the files' own normals: smooth across the welds
+    shared = p.get_editor_property("common_skeletal_meshes_and_animations_properties")
+    shared.set_editor_property("import_only_animations", animations)
+    if skeleton:
+        shared.set_editor_property("skeleton", skeleton)
+    p.get_editor_property("animation_pipeline").set_editor_property("import_animations", animations)
+    params = unreal.ImportAssetParameters()
+    params.is_automated = True
+    params.replace_existing = True
+    params.override_pipelines.append(unreal.SoftObjectPath(p.get_path_name()))
+    source = unreal.InterchangeManager.create_source_data(filename)
+    unreal.InterchangeManager.get_interchange_manager_scripted().import_asset(dest, source, params)
+    return unreal.EditorAssetLibrary.list_assets(dest, recursive=False)
+
+
+def _assign_crew_materials(mesh, path):
+    """Each of a skeletal mesh's slots drawn with its crew material (by the slot's name)."""
+    materials = mesh.get_editor_property("materials")
+    for i, slot in enumerate(materials):
+        name = str(slot.get_editor_property("material_slot_name"))
+        mat = _crew_material_for(name)
+        if mat:
+            slot.set_editor_property("material_interface", mat)
+            materials[i] = slot
+        else:
+            unreal.log_warning(f"Riptide: crew material slot '{name}' on {path} has no material")
+    mesh.set_editor_property("materials", materials)
+
+
+def make_crew_assets():
+    """The crew: bodies, generated uniforms and gear, hair, animations, materials and the rifle, imported when
+    missing or when CREW_VERSION changes."""
+    import importlib
+    import riptide_crew_mesh
+    importlib.reload(riptide_crew_mesh)
+
+    assets = unreal.EditorAssetLibrary
+    marker = f"{CHARACTERS_PATH}/Male/SK_CrewMale"
+    clips = [c.split("=") for c in unreal.RiptideCrewLibrary.get_crew_clips()]
+    expected = [marker, f"{CHARACTERS_PATH}/Female/SK_CrewFemale", f"{CHARACTERS_PATH}/SM_Rifle"] + \
+               [f"{CHARACTERS_PATH}/Animations/{name}" for name, _ in clips]
+    if all(assets.does_asset_exist(p) for p in expected) and \
+            assets.get_metadata_tag(unreal.load_asset(marker), "RiptideVersion") == CREW_VERSION:
+        return
+    unreal.log("Riptide: building the crew")
+    if assets.does_directory_exist(CHARACTERS_PATH):
+        assets.delete_directory(CHARACTERS_PATH)
+
+    project = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())
+    source = os.path.join(project, "SourceAssets", "Characters", "Quaternius")
+    out_dir = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()), "Generated", "Crew")
+    generated, rifle_obj = riptide_crew_mesh.build_all(source, out_dir, log=unreal.log)
+
+    # Textures, then the materials that use them.
+    tasks = []
+    for name, rel, _kind in CREW_TEXTURES:
+        task = unreal.AssetImportTask()
+        task.filename = os.path.join(source, rel)
+        task.destination_path = f"{CHARACTERS_PATH}/Textures"
+        task.destination_name = name
+        task.automated = True
+        task.replace_existing = True
+        task.save = False
+        tasks.append(task)
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
+    textures = {}
+    for name, _rel, kind in CREW_TEXTURES:
+        path = f"{CHARACTERS_PATH}/Textures/{name}"
+        tex = unreal.load_asset(path)
+        if kind == "normal":
+            # The packs' normal maps are OpenGL-style (green up): flipped for Unreal.
+            tex.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_NORMALMAP)
+            tex.set_editor_property("srgb", False)
+            tex.set_editor_property("flip_green_channel", True)
+        elif kind == "data":
+            tex.set_editor_property("srgb", False)
+        assets.save_asset(path, only_if_is_dirty=False)
+        textures[name] = tex
+    _make_crew_materials(textures)
+
+    # The bodies (the male one first: its skeleton becomes the crew's), copied under the asset names they get.
+    import shutil
+    skeleton = None
+    for body, src in (("Male", "Superhero_Male_FullBody"), ("Female", "Superhero_Female_FullBody")):
+        folder = os.path.join(out_dir, body)
+        name = "SK_Crew" + body
+        with open(os.path.join(source, "BaseCharacters", src + ".gltf")) as f:
+            doc = f.read()
+        shutil.copyfile(os.path.join(source, "BaseCharacters", src + ".bin"), os.path.join(folder, src + ".bin"))
+        with open(os.path.join(folder, name + ".gltf"), "w") as f:
+            f.write(doc)
+        _interchange_import(os.path.join(folder, name + ".gltf"), f"{CHARACTERS_PATH}/{body}", skeleton)
+        if skeleton is None:
+            skeleton = unreal.load_asset(f"{CHARACTERS_PATH}/{body}/{name}_Skeleton")
+            if not unreal.RiptideCrewLibrary.set_up_crew_skeleton(skeleton):
+                unreal.log_error("Riptide: could not set up the crew skeleton's retargeting")
+            assets.save_asset(skeleton.get_path_name().split(".")[0], only_if_is_dirty=False)
+        for k, (mesh_name, gltf) in enumerate(generated[body].items()):
+            _interchange_import(gltf, f"{CHARACTERS_PATH}/{body}", skeleton)
+            if k % 8 == 7:
+                # Each import keeps its working data until a collection: freed as it goes, so the build's memory
+                # stays low.
+                unreal.SystemLibrary.collect_garbage()
+        for path in assets.list_assets(f"{CHARACTERS_PATH}/{body}", recursive=False):
+            obj = unreal.load_asset(path)
+            if isinstance(obj, unreal.SkeletalMesh):
+                _assign_crew_materials(obj, path)
+                if obj.get_editor_property("skeleton") != skeleton:
+                    unreal.log_error(f"Riptide: {path} is not on the crew skeleton")
+                assets.save_asset(path.split(".")[0], only_if_is_dirty=False)
+
+    # The animations the crew uses (GetCrewClips), renamed; the rest of the libraries' clips are dropped.
+    unreal.SystemLibrary.collect_garbage()
+    import_dir = f"{CHARACTERS_PATH}/Animations/Import"
+    for lib in ("UAL1", "UAL2"):
+        _interchange_import(os.path.join(source, "Animations", lib + "_Standard.glb"), import_dir, skeleton, animations=True)
+        unreal.SystemLibrary.collect_garbage()
+    for name, origin in clips:
+        lib, clip = origin.split("/")
+        src = f"{import_dir}/{lib}_Standard{clip}"
+        if not assets.does_asset_exist(src) or not assets.rename_asset(src, f"{CHARACTERS_PATH}/Animations/{name}"):
+            unreal.log_error(f"Riptide: crew animation {origin} did not import")
+            continue
+        assets.save_asset(f"{CHARACTERS_PATH}/Animations/{name}", only_if_is_dirty=False)
+    assets.delete_directory(import_dir)
+
+    # The rifle (a static mesh, like the boat's parts).
+    task = unreal.AssetImportTask()
+    task.filename = rifle_obj
+    task.destination_path = CHARACTERS_PATH
+    task.destination_name = "SM_Rifle"
+    task.automated = True
+    task.replace_existing = True
+    task.save = True
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    rifle_path = f"{CHARACTERS_PATH}/SM_Rifle"
+    rifle = unreal.load_asset(rifle_path)
+    if rifle:
+        materials = rifle.get_editor_property("static_materials")
+        for i, slot in enumerate(materials):
+            mat = _crew_material_for(str(slot.get_editor_property("material_slot_name")))
+            if mat:
+                slot.set_editor_property("material_interface", mat)
+                materials[i] = slot
+        rifle.set_editor_property("static_materials", materials)
+        tools = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+        nanite = tools.get_nanite_settings(rifle)
+        nanite.set_editor_property("enabled", False)
+        tools.set_nanite_settings(rifle, nanite, True)
+        assets.save_asset(rifle_path, only_if_is_dirty=False)
+    for leftover in assets.list_assets(CHARACTERS_PATH, recursive=False):
+        # The OBJ importer's placeholder materials.
+        if isinstance(unreal.load_asset(leftover), unreal.MaterialInterface):
+            assets.delete_asset(leftover.split(".")[0])
+
+    body = unreal.load_asset(marker)
+    assets.set_metadata_tag(body, "RiptideVersion", CREW_VERSION)
+    assets.save_asset(marker, only_if_is_dirty=False)
+    unreal.log("Riptide: crew ready")
+
+
 def _fog_for_light_beams(fog):
     """Light volumetric fog, so beams show in the air at night (a searchlight's beam, the masthead's glow), kept thin
     so the day stays clear. True if it changed."""
@@ -805,9 +1362,20 @@ def update_ocean_test_map():
     levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
     levels.load_level(MAP_PATH)
     changed = False
-    for actor in unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors():
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
+    zone = next((a for a in actors if isinstance(a, unreal.WaterZone)), None)
+    if zone:
+        changed |= _far_sea(zone)
+    for actor in actors:
         if isinstance(actor, unreal.WaterBodyOcean):
+            # A map built with a smaller sea grows to the current one.
+            extents = actor.get_water_body_component().get_editor_property("collision_extents")
+            if zone and extents.x < SEA_SIZE / 2.0 - 1.0:
+                _open_up_sea(zone, actor)
+                unreal.log(f"Riptide: the sea now reaches {SEA_SIZE / 200000.0:.0f} km each way from the start")
+                changed = True
             changed |= _cover_waves(actor)
+            changed |= _full_waves(actor)
         elif isinstance(actor, unreal.ExponentialHeightFog):
             changed |= _fog_for_light_beams(actor)
     if changed:
@@ -838,8 +1406,10 @@ def build_ocean_test_map():
     zone = _spawn(unreal.WaterZone)
     ocean = _spawn_ocean()
     _open_up_sea(zone, ocean)
+    _far_sea(zone)
     _set_swell(ocean)
     _cover_waves(ocean)
+    _full_waves(ocean)
     # The wake simulation isn't placed here: each boat creates it at runtime (see ARiptideBoat).
 
     # The sea all around: plays everywhere at the same level, not from a point.
@@ -854,6 +1424,79 @@ def build_ocean_test_map():
     levels.save_current_level()
     levels.load_level(MAP_PATH)
     unreal.log("Riptide: ocean test map ready")
+
+
+# Bump when the main menu map's recipe below changes, so every machine rebuilds it on its next launch.
+MENU_MAP_VERSION = "6"
+
+# The menu's night: a low moon ahead of the camera (which looks across the boat from its starboard side), laying a
+# path of light on the sea behind the boat, so the boat and its crew stand dark against it.
+# The menu camera (ARiptideMenuCamera) sets its own exposure and grade; the scene itself (boat, searchlight sweep,
+# crew member) is set up by ARiptideMenuGameMode when the map starts.
+MOON = {"yaw": 110.0, "pitch": -14.0, "intensity": 0.6, "colour": (0.62, 0.72, 1.0)}
+
+
+def _night_fog(fog):
+    """Thicker volumetric fog than Ocean_Test's, a sea haze at night, so the searchlight's beam stands out in the air."""
+    comp = fog.get_component_by_class(unreal.ExponentialHeightFogComponent)
+    comp.set_editor_property("fog_density", 0.025)
+    comp.set_editor_property("fog_height_falloff", 0.25)
+    comp.set_editor_property("fog_inscattering_luminance", unreal.LinearColor(0.004, 0.007, 0.014, 1.0))
+    comp.set_editor_property("enable_volumetric_fog", True)
+    comp.set_editor_property("volumetric_fog_extinction_scale", 0.35)
+    comp.set_editor_property("volumetric_fog_scattering_distribution", 0.75)
+    comp.set_editor_property("volumetric_fog_albedo", unreal.Color(r=230, g=235, b=245, a=255))
+
+
+def build_main_menu_map():
+    """MainMenu: the same open sea and swell as Ocean_Test, at night, run by ARiptideMenuGameMode."""
+    assets = unreal.EditorAssetLibrary
+    levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    if assets.does_asset_exist(MENU_MAP_PATH):
+        if assets.get_metadata_tag(unreal.load_asset(MENU_MAP_PATH), "RiptideVersion") == MENU_MAP_VERSION:
+            return
+        assets.delete_asset(MENU_MAP_PATH)
+
+    unreal.log("Riptide: building the main menu map")
+    levels.new_level(MENU_MAP_PATH)
+
+    moon = _spawn(unreal.DirectionalLight, (0, 0, 5000), yaw=MOON["yaw"], pitch=MOON["pitch"])
+    moon_light = moon.get_component_by_class(unreal.DirectionalLightComponent)
+    moon_light.set_editor_property("atmosphere_sun_light", True)
+    moon_light.set_editor_property("intensity", MOON["intensity"])
+    moon_light.set_editor_property("light_color", unreal.Color(r=int(MOON["colour"][0] * 255), g=int(MOON["colour"][1] * 255),
+                                                                   b=int(MOON["colour"][2] * 255), a=255))
+    moon_light.set_editor_property("volumetric_scattering_intensity", 0.3)
+
+    _spawn(unreal.SkyAtmosphere)
+    sky_light = _spawn(unreal.SkyLight, (0, 0, 1000))
+    sky_light.get_component_by_class(unreal.SkyLightComponent).set_editor_property("real_time_capture", True)
+    _night_fog(_spawn(unreal.ExponentialHeightFog))
+
+    zone = _spawn(unreal.WaterZone)
+    ocean = _spawn_ocean()
+    _open_up_sea(zone, ocean)
+    _far_sea(zone)
+    _set_swell(ocean)
+    _cover_waves(ocean)
+    _full_waves(ocean)
+
+    # The sea all around, quieter than in the game: under the menu.
+    ambience = _spawn(unreal.AmbientSound)
+    ambience_audio = ambience.get_component_by_class(unreal.AudioComponent)
+    ambience_audio.set_editor_property("sound", unreal.load_asset(f"{AUDIO_PATH}/S_Ocean_Ambience"))
+    ambience_audio.set_editor_property("allow_spatialization", False)
+    ambience_audio.set_editor_property("volume_multiplier", 0.6)
+
+    # The boat is launched here.
+    _spawn(unreal.PlayerStart, (0, 0, 150))
+
+    world = unreal.EditorLevelLibrary.get_editor_world()
+    world.get_world_settings().set_editor_property("default_game_mode", unreal.RiptideMenuGameMode)
+    levels.save_current_level()
+    assets.set_metadata_tag(unreal.load_asset(MENU_MAP_PATH), "RiptideVersion", MENU_MAP_VERSION)
+    assets.save_asset(MENU_MAP_PATH, only_if_is_dirty=False)
+    unreal.log("Riptide: main menu map ready")
 
 
 def _running_editor():
@@ -880,6 +1523,17 @@ def _set_up_project():
         make_boat_assets()
     except Exception as err:  # noqa: BLE001 - never block the editor from opening
         unreal.log_error(f"Riptide: could not build the boat model: {err}")
+
+    # Before the ocean test map, which the editor is left on.
+    try:
+        build_main_menu_map()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build the main menu map: {err}")
+
+    try:
+        make_crew_assets()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build the crew: {err}")
 
     try:
         build_ocean_test_map()

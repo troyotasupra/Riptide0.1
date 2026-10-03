@@ -7,6 +7,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/Engine.h"
+#include "EngineUtils.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/StaticMesh.h"
 #include "EnhancedInputComponent.h"
@@ -25,11 +27,13 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "RiptideCharacter.h"
 #include "RiptideGauge.h"
+#include "RiptideSettings.h"
 #include "RiptideSprayComponent.h"
 #include "RiptideStorageComponent.h"
 #include "RiptideWakeFoamComponent.h"
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
+#include "WaterBodyOceanComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "ProceduralMeshComponent.h"
 #include "Sound/SoundAttenuation.h"
@@ -47,18 +51,19 @@ namespace
 	// Half the hull's size in cm (length, beam, depth): a 7.9 m, 2.6 m beam patrol boat.
 	const FVector HullExtent(395.f, 130.f, 35.f);
 
-	// Buoyancy pontoons, in cm. They sit only a quarter of their height in the water at rest, so the hull
-	// has about six times its resting lift in reserve: a bow driven into a swell gets pushed back up hard
-	// instead of burying. The waterline sits 20 cm up the hull.
+	// Buoyancy pontoons, in cm. They sit 45 cm deep at rest, which gives the hull about three times its resting lift
+	// in reserve (like a real open boat's hull up to its gunwale), so a bow driven into a swell still gets pushed back
+	// up hard. How deep they sit also sets how stiffly the hull rides the sea: shallower would bob it up and down like
+	// a cork. The waterline sits 20 cm up the hull.
 	constexpr float PontoonRadius = 60.f;
-	constexpr float PontoonRestDepth = 30.f;
+	constexpr float PontoonRestDepth = 45.f;
 
 	// The outboards' steering pivots on the transom (twin motors 76 cm apart), and the prop relative to a pivot
 	// (see build_outboard in Content/Python/riptide_boat_mesh.py).
 	// Each tilts on the tube at the top of its clamp bracket, which hooks over the transom's motor notch.
 	const FVector OutboardPivot(-HullExtent.X - 5.f, -38.f, 40.f);
 	const FVector OutboardPivotStarboard(-HullExtent.X - 5.f, 38.f, 40.f);
-	const FVector PropInOutboard(-45.f, 0.f, -100.f);
+	const FVector PropInOutboard(-58.f, 0.f, -100.f);
 	const float WaterlineZ = -HullExtent.Z + 20.f;
 
 	// The deck, where the crew stands (see riptide_boat_mesh.py): flat at this height from the transom to the
@@ -73,14 +78,14 @@ namespace
 	// light at the stem, and floods under the canopy over the cockpit.
 	const FVector SearchlightPivot(26.f, 40.f, DeckZ + 244.f);
 	const FVector MastheadLightPoint(-162.f, 0.f, DeckZ + 317.f);
-	const FVector BowLightPoint(383.f, 0.f, DeckZ + 104.f);
+	const FVector BowLightPoint(381.f, 0.f, DeckZ + 102.f);
 
 	// The radar antenna's hub, on its pedestal on the T-top (riptide_boat_mesh.py's RADAR).
 	const FVector RadarHub(-70.f, 0.f, DeckZ + 258.f);
 
 	// The steering wheel's hub on the helm's shaft, its face tilted back toward the helmsman (WHEEL_CENTRE and
 	// WHEEL_TILT_DEG).
-	const FVector WheelCentre(-53.f, 0.f, DeckZ + 88.f);
+	const FVector WheelCentre(-56.f, 0.f, DeckZ + 88.f);
 	constexpr float WheelTiltDeg = 35.f;
 
 	// The radio's hand mic: its clip under the overhead box, the cord's jack on the radio, and where the cord leaves
@@ -138,6 +143,10 @@ ARiptideBoat::ARiptideBoat()
 	HullBody->BodyInstance.SetMassOverride(HullMassKg, true);
 	HullBody->SetLinearDamping(0.f);
 	HullBody->SetAngularDamping(0.5f);
+	// A floating hull never comes to rest: left to the physics engine's default it can fall asleep on flat water,
+	// heeled over wherever a small knock left it, until something wakes it.
+	HullBody->BodyInstance.SleepFamily = ESleepFamily::Custom;
+	HullBody->BodyInstance.CustomSleepThresholdMultiplier = 0.f;
 	RootComponent = HullBody;
 
 	// Placeholder visuals, replaced by the boat model in ApplyModels.
@@ -187,6 +196,12 @@ ARiptideBoat::ARiptideBoat()
 	MotorBracketStarboard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorBracketStarboard"));
 	MotorBracketStarboard->SetupAttachment(HullBody);
 	MotorBracketStarboard->SetRelativeLocation(OutboardPivotStarboard);
+	MotorSwivel = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorSwivel"));
+	MotorSwivel->SetupAttachment(HullBody);
+	MotorSwivel->SetRelativeLocation(OutboardPivot);
+	MotorSwivelStarboard = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MotorSwivelStarboard"));
+	MotorSwivelStarboard->SetupAttachment(HullBody);
+	MotorSwivelStarboard->SetRelativeLocation(OutboardPivotStarboard);
 	ThrottleLeverPort = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ThrottleLeverPort"));
 	ThrottleLeverPort->SetupAttachment(HullBody);
 	ThrottleLeverPort->SetRelativeLocation(ThrottlePivotPort);
@@ -268,7 +283,8 @@ ARiptideBoat::ARiptideBoat()
 	RadarArray = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RadarArray"));
 	RadarArray->SetupAttachment(HullBody);
 	RadarArray->SetRelativeLocation(RadarHub);
-	for (UStaticMeshComponent* Part : { MotorBracket.Get(), MotorBracketStarboard.Get(), ThrottleLeverPort.Get(), ThrottleLeverStarboard.Get(), RadarArray.Get() })
+	for (UStaticMeshComponent* Part : { MotorBracket.Get(), MotorBracketStarboard.Get(), MotorSwivel.Get(), MotorSwivelStarboard.Get(),
+			ThrottleLeverPort.Get(), ThrottleLeverStarboard.Get(), RadarArray.Get() })
 	{
 		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
@@ -297,6 +313,7 @@ ARiptideBoat::ARiptideBoat()
 	HullModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_PatrolSkiff.SM_PatrolSkiff")));
 	OutboardModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_Outboard.SM_Outboard")));
 	BracketModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_OutboardBracket.SM_OutboardBracket")));
+	SwivelModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_OutboardSwivel.SM_OutboardSwivel")));
 	LeverModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_ThrottleLever.SM_ThrottleLever")));
 	RadarModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_RadarArray.SM_RadarArray")));
 
@@ -385,22 +402,35 @@ ARiptideBoat::ARiptideBoat()
 
 	// Weight sits low and aft (engine, fuel, crew on the floor), which keeps the hull from rolling over.
 	HullBody->BodyInstance.COMNudge = FVector(-30.f, 0.f, -30.f);
+	// How hard the hull is to set rocking and spinning, set to a real boat's: about 3,300 kg m^2 to roll (its weight
+	// out in the shell and up in the T-top, plus the water that rolls with it) and 27,000 to pitch or to turn. The
+	// physics engine works the box's figures out from how its mass is spread along each axis (one axis's inertia
+	// comes from the spread along the other two), and the scale stretches those spreads; left alone it rocks like a
+	// solid block, quicker than a real hull. These give the figures above (the handling test logs them): with the
+	// pontoons, about a 2 second roll and a 1.5 second pitch.
+	HullBody->BodyInstance.InertiaTensorScale = FVector(1.234f, 0.957f, 3.55f);
 
-	// Pontoons run down both sides, where the hull's width resists rolling, plus one at the stern
-	// that also tells us if the prop is wet. BeginPlay sizes their lift so they float PontoonRestDepth deep.
+	// Pontoons stand in for the hull's buoyancy: down both sides, plus one on the centreline aft. BeginPlay sizes their
+	// lift so they float PontoonRestDepth deep. How far out they sit sets how stiffly the hull resists rolling and
+	// pitching, so they sit where the hull's own waterline does its work: half a metre either side of the keel (where
+	// a V-bottom's buoyancy is centred, well inside its full beam), and closer in toward the bow, where the hull
+	// narrows and lifts out of the water. Spread to the hull's edges they rolled it back upright in under a second,
+	// like a raft. (A real boat this size has a metacentric height of about a metre: these give that.)
 	Buoyancy = CreateDefaultSubobject<UBuoyancyComponent>(TEXT("Buoyancy"));
+	// The engine's buoyancy shares out the weight between the pontoons about the centre of mass itself; letting it
+	// centre their positions on the centre of mass first takes the COM nudge off twice, and the hull floats out of trim.
+	Buoyancy->BuoyancyData.bCenterPontoonsOnCOM = false;
 	const float PontoonZ = WaterlineZ - PontoonRestDepth + PontoonRadius;
-	const float ChineY = HullExtent.Y * 0.6f;
 	const FVector PontoonOffsets[] = {
-		FVector(HullExtent.X * 0.8f, ChineY, PontoonZ),
-		FVector(HullExtent.X * 0.8f, -ChineY, PontoonZ),
-		FVector(HullExtent.X * 0.27f, ChineY, PontoonZ),
-		FVector(HullExtent.X * 0.27f, -ChineY, PontoonZ),
-		FVector(-HullExtent.X * 0.27f, ChineY, PontoonZ),
-		FVector(-HullExtent.X * 0.27f, -ChineY, PontoonZ),
-		FVector(-HullExtent.X * 0.8f, ChineY, PontoonZ),
-		FVector(-HullExtent.X * 0.8f, -ChineY, PontoonZ),
-		FVector(-HullExtent.X, 0.f, PontoonZ),
+		FVector(220.f, 30.f, PontoonZ),
+		FVector(220.f, -30.f, PontoonZ),
+		FVector(70.f, 50.f, PontoonZ),
+		FVector(70.f, -50.f, PontoonZ),
+		FVector(-110.f, 50.f, PontoonZ),
+		FVector(-110.f, -50.f, PontoonZ),
+		FVector(-260.f, 50.f, PontoonZ),
+		FVector(-260.f, -50.f, PontoonZ),
+		FVector(-330.f, 0.f, PontoonZ),
 	};
 	for (const FVector& Offset : PontoonOffsets)
 	{
@@ -409,8 +439,6 @@ ARiptideBoat::ARiptideBoat()
 		Pontoon.Radius = PontoonRadius;
 		Buoyancy->BuoyancyData.Pontoons.Add(Pontoon);
 	}
-	SternPontoonIndex = Buoyancy->BuoyancyData.Pontoons.Num() - 1;
-	BowPontoonIndex = 0;
 }
 
 void ARiptideBoat::OnConstruction(const FTransform& Transform)
@@ -447,6 +475,11 @@ void ARiptideBoat::ApplyModels()
 	{
 		MotorBracket->SetStaticMesh(Bracket);
 		MotorBracketStarboard->SetStaticMesh(Bracket);
+	}
+	if (UStaticMesh* Swivel = SwivelModel.LoadSynchronous())
+	{
+		MotorSwivel->SetStaticMesh(Swivel);
+		MotorSwivelStarboard->SetStaticMesh(Swivel);
 	}
 	if (UStaticMesh* Head = SearchlightModel.LoadSynchronous())
 	{
@@ -642,11 +675,11 @@ namespace
 		FHullStation S;
 		S.SheerY = T < 0.35f ? HullExtent.Y : HullExtent.Y * FMath::Pow(FMath::Max(0.f, FMath::Cos((T - 0.35f) / 0.65f * UE_HALF_PI)), 0.75f);
 		S.SheerZ = DeckZ + 55.f + 45.f * FMath::Pow(T, 2.2f);
-		S.KeelZ = -42.f + 30.f * FMath::Pow(FMath::SmoothStep(0.62f, 1.f, T), 1.3f) + 50.f * FMath::SmoothStep(0.93f, 1.f, T);
+		S.KeelZ = -42.f + 50.f * FMath::Pow(FMath::SmoothStep(0.55f, 1.f, T), 1.7f);
 		S.ChineY = S.SheerY * (0.88f - 0.1f * FMath::SmoothStep(0.6f, 1.f, T));
 		S.ChineZ = FMath::Min(-24.f + 34.f * FMath::SmoothStep(0.55f, 1.f, T), S.SheerZ - 6.f);
-		// The keel runs up into the stem to meet the chines there, always below them.
-		S.KeelZ = FMath::Min(S.KeelZ, S.ChineZ - 18.f * (1.f - FMath::SmoothStep(0.9f, 1.f, T)) - 0.5f);
+		// The keel runs up into the stem to meet the chines there, always below them, the V sharpening to the tip.
+		S.KeelZ = FMath::Min(S.KeelZ, S.ChineZ - 3.f - 15.f * (1.f - FMath::SmoothStep(0.93f, 1.f, T)));
 		return S;
 	}
 
@@ -1010,6 +1043,20 @@ AActor* ARiptideBoat::SpawnWakeSimulation(UClass* SimClass)
 	return Sim;
 }
 
+void ARiptideBoat::UpdateEngineRevs(float DeltaSeconds)
+{
+	// Each engine's revs follow its throttle. With its prop out of the water it has nothing to push against and races,
+	// past its usual full revs at full throttle up to the rev limiter (the tachometer goes into the red, the note
+	// climbs), and drops back as the prop bites again.
+	const USceneComponent* Props[2] = { Propeller, PropellerStarboard };
+	for (int32 Motor = 0; Motor < 2; ++Motor)
+	{
+		const float Output = GetDriveFraction(Motor);
+		const float TargetRevs = IsPropSubmerged(Props[Motor]) ? Output : FMath::Min(1.f + PropOutOverRev, Output * (1.f + 3.f * PropOutOverRev));
+		MotorRevs[Motor] = FMath::FInterpTo(MotorRevs[Motor], TargetRevs, DeltaSeconds, 6.f);
+	}
+}
+
 void ARiptideBoat::StartSounds()
 {
 	if (GetNetMode() == NM_DedicatedServer)
@@ -1056,7 +1103,6 @@ void ARiptideBoat::UpdateSounds(float DeltaSeconds)
 	// Engines: each motor runs while it has fuel and isn't dead, with its own pair of recordings. Pitch and volume
 	// follow that motor's actual output (a sputter is heard as a dip), and it races when its prop leaves the water.
 	UAudioComponent* MotorLayers[2][2] = { { EngineAudio, EngineHighAudio }, { EngineAudioStarboard, EngineHighAudioStarboard } };
-	const USceneComponent* Props[2] = { Propeller, PropellerStarboard };
 	for (int32 Motor = 0; Motor < 2; ++Motor)
 	{
 		const bool bRunning = IsMotorRunning(Motor);
@@ -1076,8 +1122,6 @@ void ARiptideBoat::UpdateSounds(float DeltaSeconds)
 			}
 		}
 		const float Output = GetDriveFraction(Motor);
-		const float TargetRevs = FMath::Min(1.f, Output * (IsPropSubmerged(Props[Motor]) ? 1.f : 1.f + PropOutOverRev));
-		MotorRevs[Motor] = FMath::FInterpTo(MotorRevs[Motor], TargetRevs, DeltaSeconds, 6.f);
 
 		// Engine speed moves between idle and full on a musical (log) scale. Each recording is pitched to that speed,
 		// and the two crossfade at equal power by where the speed sits between them. The starboard motor runs a touch
@@ -1426,12 +1470,24 @@ void ARiptideBoat::OnTrimReleased(const FInputActionValue& Value)
 
 void ARiptideBoat::OnCutThrottle(const FInputActionValue& Value)
 {
+	if (HasAuthority())
+	{
+		bCutThrottleRequested = true;
+	}
+	else
+	{
+		ServerCutThrottle();
+	}
+}
+
+void ARiptideBoat::ServerCutThrottle_Implementation()
+{
 	bCutThrottleRequested = true;
 }
 
 void ARiptideBoat::OnLook(const FInputActionValue& Value)
 {
-	const FVector2D Delta = Value.Get<FVector2D>();
+	const FVector2D Delta = Value.Get<FVector2D>() * RiptideSettings::LookScale();     // the player's sensitivity and invert
 	LookYaw = FMath::Clamp(LookYaw + Delta.X * LookSensitivity, -170.f, 170.f);
 	LookPitch = FMath::Clamp(LookPitch + Delta.Y * LookSensitivity, -70.f, 70.f);
 	HelmCamera->SetRelativeRotation(FRotator(LookPitch, LookYaw, 0.f));
@@ -1516,7 +1572,8 @@ void ARiptideBoat::ServerToggleLight_Implementation(uint8 Which)
 
 void ARiptideBoat::AimSearchlight(float YawDeg, float PitchDeg)
 {
-	if (HasAuthority())
+	// Clamping doesn't catch a NaN (it passes straight through), so anything that isn't a real angle is ignored.
+	if (HasAuthority() && FMath::IsFinite(YawDeg) && FMath::IsFinite(PitchDeg))
 	{
 		// Its mount turns almost all the way round and tilts from well down to a little up.
 		SearchlightYaw = FMath::Clamp(FRotator::NormalizeAxis(YawDeg), -170.f, 170.f);
@@ -1711,12 +1768,17 @@ void ARiptideBoat::LeaveHelm()
 	UE_LOG(LogRiptideBoat, Log, TEXT("%s left the helm of %s"), *Crew->GetName(), *GetName());
 }
 
-void ARiptideBoat::ServerSetControls_Implementation(float InThrottleInput, float InSteerInput, float InTrimInput, bool bInCutThrottle)
+void ARiptideBoat::ServerSetControls_Implementation(float InThrottleInput, float InSteerInput, float InTrimInput)
 {
+	// Clamping doesn't catch a NaN (it passes straight through, and would then spread through the whole simulation),
+	// so a frame of controls that aren't real numbers is ignored.
+	if (!FMath::IsFinite(InThrottleInput) || !FMath::IsFinite(InSteerInput) || !FMath::IsFinite(InTrimInput))
+	{
+		return;
+	}
 	ThrottleInput = FMath::Clamp(InThrottleInput, -1.f, 1.f);
 	SteerInput = FMath::Clamp(InSteerInput, -1.f, 1.f);
 	TrimInput = FMath::Clamp(InTrimInput, -1.f, 1.f);
-	bCutThrottleRequested |= bInCutThrottle;
 }
 
 // --- Simulation ---
@@ -1727,19 +1789,24 @@ void ARiptideBoat::Tick(float DeltaSeconds)
 
 	if (IsLocallyControlled() && !HasAuthority())
 	{
-		ServerSetControls(ThrottleInput, SteerInput, TrimInput, bCutThrottleRequested);
-		bCutThrottleRequested = false;
+		ServerSetControls(ThrottleInput, SteerInput, TrimInput);
 	}
 
 	UpdatePropImmersion();
 
+	// The helm, the engines and the fuel are the server's to decide (and replicate).
 	if (HasAuthority())
 	{
+		RescueIfOffTheSea();
 		UpdateControls(DeltaSeconds);
 		UpdateEngine(DeltaSeconds);
-		ApplyThrust();
-		ApplyHydrodynamics();
 	}
+	// The water's forces act on every machine's copy of the hull, from the replicated engine output, steering and
+	// trim and this machine's own reading of the sea at the props. Between the server's corrections a client's hull
+	// is simulating too, and without them it would have no drag, damping or planing lift and would jitter.
+	ApplyThrust();
+	ApplyHydrodynamics();
+	UpdateEngineRevs(DeltaSeconds);
 
 	PoseOutboards();
 	UpdateSearchlight(DeltaSeconds);
@@ -1819,6 +1886,10 @@ void ARiptideBoat::PoseOutboards()
 	const FQuat Pose = GetOutboardRotation();
 	MotorMesh->SetRelativeRotation(Pose);
 	MotorMeshStarboard->SetRelativeRotation(Pose);
+	// The swivel brackets tilt with the trim but don't steer: the motors turn in their steering tubes.
+	const FRotator Tilt(-TrimDeg, 0.f, 0.f);
+	MotorSwivel->SetRelativeRotation(Tilt);
+	MotorSwivelStarboard->SetRelativeRotation(Tilt);
 	Propeller->SetRelativeLocation(OutboardPivot + Pose.RotateVector(PropInOutboard));
 	PropellerStarboard->SetRelativeLocation(OutboardPivotStarboard + Pose.RotateVector(PropInOutboard));
 }
@@ -1830,7 +1901,8 @@ ERiptideGear ARiptideBoat::GetGear() const
 
 float ARiptideBoat::GetThrottleOpening() const
 {
-	return FMath::Clamp((FMath::Abs(ThrottleLever) - NeutralDetent) / (1.f - NeutralDetent), 0.f, 1.f);
+	const float Closed = NeutralDetent + GearIdleBand;
+	return FMath::Clamp((FMath::Abs(ThrottleLever) - Closed) / FMath::Max(1.f - Closed, 0.01f), 0.f, 1.f);
 }
 
 float ARiptideBoat::GetDriveFraction(int32 Motor) const
@@ -1941,6 +2013,7 @@ void ARiptideBoat::ApplyThrust()
 	// Along the prop shafts: steering swings them (right pushes the stern left, turning the bow right), and trim
 	// tilts them (out pushes down on the stern, lifting the bow; in pushes it up, holding the bow down).
 	const FVector ThrustDir = HullBody->GetComponentQuat() * GetOutboardRotation().RotateVector(FVector::ForwardVector);
+	const float ForwardKnots = FVector::DotProduct(HullBody->GetPhysicsLinearVelocity(), HullBody->GetForwardVector()) * CmPerSecToKnots;
 	float WetProps = 0.f;
 	for (int32 Motor = 0; Motor < 2; ++Motor)
 	{
@@ -1948,14 +2021,15 @@ void ARiptideBoat::ApplyThrust()
 		const float Output = GetMotorOutput(Motor);
 		if (IsPropSubmerged(Prop))
 		{
-			const float ThrustN = 0.5f * MaxThrust * Output * (Output > 0.f ? 1.f : ReverseThrustScale);
+			// A prop bites less the faster the water already comes at it (the way it's pushing).
+			const float Inflow01 = FMath::Clamp(ForwardKnots * FMath::Sign(Output) / ThrustFalloffKnots, 0.f, 1.f);
+			const float ThrustN = 0.5f * MaxThrust * Output * (Output > 0.f ? 1.f : ReverseThrustScale) * (1.f - ThrustFalloff * Inflow01);
 			HullBody->AddForceAtLocation(ThrustDir * ThrustN * NewtonsToUnreal, Prop->GetComponentLocation());
 			WetProps += 0.5f;
 		}
 	}
 
 	// Trim's hold on the running attitude, through the hull's planing lift: grows with speed and drive.
-	const float ForwardKnots = FVector::DotProduct(HullBody->GetPhysicsLinearVelocity(), HullBody->GetForwardVector()) * CmPerSecToKnots;
 	const float SpeedFactor = FMath::Min(FMath::Square(FMath::Max(0.f, ForwardKnots) / TrimFullEffectKnots), 1.2f);
 	float MomentNm = (TrimDeg > 0.f ? TrimMomentPerDeg : TrimInMomentPerDeg) * TrimDeg * SpeedFactor * WetProps * FMath::Max(0.f, EngineOutput);
 	if (MomentNm > 0.f)
@@ -1980,12 +2054,13 @@ void ARiptideBoat::ApplyHydrodynamics()
 		return;
 	}
 
-	// Quadratic water drag in the hull's frame: slippery going forward, stubborn going sideways.
+	// Water resistance in the hull's frame: along its length the hull's own resistance curve (see
+	// GetHullResistanceN), sideways the keel's stubborn quadratic drag.
 	const FTransform& Xf = HullBody->GetComponentTransform();
 	const FVector LocalVelMs = Xf.InverseTransformVectorNoScale(HullBody->GetPhysicsLinearVelocity()) / 100.f;
 
 	const FVector LocalDragN(
-		-ForwardDrag * LocalVelMs.X * FMath::Abs(LocalVelMs.X),
+		-GetHullResistanceN(LocalVelMs.X),
 		-LateralDrag * LocalVelMs.Y * FMath::Abs(LocalVelMs.Y),
 		0.f);
 	HullBody->AddForce(Xf.TransformVectorNoScale(LocalDragN) * NewtonsToUnreal);
@@ -2007,11 +2082,11 @@ void ARiptideBoat::ApplyHydrodynamics()
 	// with its resting draft, so a bow lifting clear (or leaving a crest) loses the lift and settles back.
 	if (LocalVelMs.X > 0.f)
 	{
-		// Where the lift acts moves aft as the boat speeds up and rises onto the plane: well forward coming up onto
-		// the plane (lifting the bow over its own bow wave), close over the centre of gravity at full speed, so the
-		// hull settles to running a few degrees bow-up instead of standing on its tail.
+		// Where the lift acts moves aft a little as the boat speeds up and rises onto the plane: well forward coming
+		// up onto it (lifting the bow over its own bow wave), still about 1.4 m ahead of the centre of gravity at full
+		// speed, so the hull runs a couple of degrees bow-up like a real deep-V at neutral trim, rather than flat.
 		const float Planing01 = FMath::Clamp((LocalVelMs.X * 1.94384f - 8.f) / 20.f, 0.f, 1.f);
-		const FVector LiftPoint = Xf.TransformPosition(FVector(HullExtent.X * FMath::Lerp(0.3f, -0.04f, Planing01), 0.f, -HullExtent.Z));
+		const FVector LiftPoint = Xf.TransformPosition(FVector(HullExtent.X * FMath::Lerp(0.32f, 0.28f, Planing01), 0.f, -HullExtent.Z));
 
 		float WaterHeightSum = 0.f;
 		int32 NumForward = 0;
@@ -2031,6 +2106,12 @@ void ARiptideBoat::ApplyHydrodynamics()
 		const float WeightN = HullMassKg * FMath::Abs(GetWorld()->GetGravityZ()) / 100.f;
 		const float LiftN = Wetness * FMath::Min(PlaningLift * LocalVelMs.X * LocalVelMs.X, WeightN * MaxPlaningLiftFraction);
 		HullBody->AddForceAtLocation(Xf.GetUnitAxis(EAxis::Z) * LiftN * NewtonsToUnreal, LiftPoint);
+
+		// Climbing the hump, the hull sits in the trough of its own wave, bow on the crest and stern in the hollow
+		// behind it: the bow rises a few degrees while it gets onto the plane, then drops as it planes off.
+		const float Knots = LocalVelMs.X * 1.94384f;
+		const float Hump01 = FMath::Exp(-FMath::Square((Knots - HumpKnots) / FMath::Max(HumpWidthKnots, 0.1f)));
+		HullBody->AddTorqueInRadians(-Xf.GetUnitAxis(EAxis::Y) * HumpBowRiseNm * Hump01 * Wetness * NewtonsToUnreal * 100.f);
 	}
 
 	// A planing hull's pitch stability: as its bow rises past its natural running angle, the pressure on its bottom
@@ -2049,23 +2130,40 @@ void ARiptideBoat::ApplyHydrodynamics()
 		}
 	}
 
-	// Resist spinning in place, and resist rocking so the hull settles after a wave instead of building up a roll.
+	// Resist spinning in place, and resist rocking so the hull settles after a wave instead of building up a roll. Roll
+	// damps harder on the plane, where the bottom's lift pushes back on whichever side goes down.
 	const FVector Up = HullBody->GetUpVector();
+	const FVector Fwd = Xf.GetUnitAxis(EAxis::X);
 	const FVector AngVel = HullBody->GetPhysicsAngularVelocityInRadians();
 	const float YawRate = FVector::DotProduct(AngVel, Up);
-	const FVector RockRate = AngVel - Up * YawRate;
-	HullBody->AddTorqueInRadians(-Up * YawRate * YawDamping - RockRate * RockDamping, NAME_None, true);
+	const float RollRate = FVector::DotProduct(AngVel, Fwd);
+	const FVector PitchRate = AngVel - Up * YawRate - Fwd * RollRate;
+	const float OnPlane01 = FMath::Clamp(LocalVelMs.X * 1.94384f / TrimFullEffectKnots, 0.f, 1.f);
+	const float RollDampingNow = FMath::Lerp(RollDamping, RollDampingPlaning, OnPlane01);
+	HullBody->AddTorqueInRadians(-Up * YawRate * YawDamping - Fwd * RollRate * RollDampingNow - PitchRate * PitchDamping,
+		NAME_None, true);
+}
+
+float ARiptideBoat::GetHullResistanceN(float ForwardMs) const
+{
+	if (ForwardMs < 0.f)
+	{
+		// Transom first: the flat stern shoves the water ahead of it.
+		return -AsternDrag * ForwardMs * ForwardMs;
+	}
+	// Ahead: friction and spray, plus the wave-making hump on the way onto the plane, easing to the planing drag past it.
+	const float Knots = ForwardMs * 1.94384f;
+	const float Hump = FMath::Exp(-FMath::Square((Knots - HumpKnots) / FMath::Max(HumpWidthKnots, 0.1f)));
+	const float WaveN = Knots <= HumpKnots ? HumpDragN * Hump : PlaningDragN + (HumpDragN - PlaningDragN) * Hump;
+	// Fades out at a crawl, so it never holds a boat at rest (the hump curve's tail doesn't quite reach zero).
+	return ForwardDrag * ForwardMs * ForwardMs + WaveN * FMath::Clamp(Knots / 2.f, 0.f, 1.f);
 }
 
 float ARiptideBoat::GetBowFreeboardCm() const
 {
-	if (!Buoyancy || !Buoyancy->BuoyancyData.Pontoons.IsValidIndex(BowPontoonIndex))
-	{
-		return 0.f;
-	}
-	const FSphericalPontoon& Bow = Buoyancy->BuoyancyData.Pontoons[BowPontoonIndex];
+	// The sea right under the stem (the bow pontoons sit well aft of it, where the hull's buoyancy is).
 	const FVector BowDeckEdge = HullBody->GetComponentTransform().TransformPosition(FVector(HullExtent.X, 0.f, HullExtent.Z));
-	return BowDeckEdge.Z - Bow.WaterHeight;
+	return BowDeckEdge.Z - GetSeaSurfaceZ(BowDeckEdge);
 }
 
 float ARiptideBoat::GetSeaSurfaceZ(FVector Location) const
@@ -2089,7 +2187,8 @@ float ARiptideBoat::GetSeaSurfaceZ(FVector Location) const
 
 float ARiptideBoat::GetSpeedKnots() const
 {
-	return HullBody->GetComponentVelocity().Size() * CmPerSecToKnots;
+	// Over the sea, as a GPS reads it: the hull's rise and fall on the swell isn't speed.
+	return HullBody->GetComponentVelocity().Size2D() * CmPerSecToKnots;
 }
 
 void ARiptideBoat::ApplyEngineDamage(float Amount, int32 Motor)
@@ -2123,7 +2222,7 @@ FTransform ARiptideBoat::GetFuelFillerTransform() const
 {
 	// On the starboard gunwale, aft (riptide_boat_mesh.py's _fittings: station 0.2).
 	const FTransform& Xf = HullBody->GetComponentTransform();
-	return FTransform(Xf.GetRotation(), Xf.TransformPosition(FVector(-237.f, 127.f, DeckZ + 56.f)));
+	return FTransform(Xf.GetRotation(), Xf.TransformPosition(FVector(-237.f, 121.5f, DeckZ + 56.f)));
 }
 
 void ARiptideBoat::SetTrimInput(float Trim)
@@ -2381,4 +2480,48 @@ void ARiptideBoat::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 	LadderUser = nullptr;
 	Super::EndPlay(EndPlayReason);
+}
+
+void ARiptideBoat::RescueIfOffTheSea()
+{
+	// Twenty metres under sea level, the boat has left the sea: driven off its edge, where there's no water to float
+	// on, it falls through the world. Put it back on the water just inside the edge, upright and stopped, with its
+	// crew aboard where they were standing.
+	const FVector Here = GetActorLocation();
+	if (Here.Z > -2000.f)
+	{
+		return;
+	}
+	FVector Target = Here;
+	if (!CachedOcean.IsValid())
+	{
+		CachedOcean = Cast<AWaterBodyOcean>(UGameplayStatics::GetActorOfClass(this, AWaterBodyOcean::StaticClass()));
+	}
+	if (const AWaterBodyOcean* Ocean = CachedOcean.Get())
+	{
+		if (const UWaterBodyComponent* Body = Ocean->GetWaterBodyComponent())
+		{
+			const FVector Centre = Ocean->GetActorLocation();
+			const FVector Reach = Body->GetCollisionExtents() * 0.95f;
+			Target.X = FMath::Clamp(Target.X, Centre.X - Reach.X, Centre.X + Reach.X);
+			Target.Y = FMath::Clamp(Target.Y, Centre.Y - Reach.Y, Centre.Y + Reach.Y);
+		}
+	}
+	Target.Z = GetSeaSurfaceZ(FVector(Target.X, Target.Y, 0.f)) + 15.f;
+	const FRotator Upright(0.f, GetActorRotation().Yaw, 0.f);
+	const FTransform Old = GetActorTransform();
+	const FTransform New(Upright, Target);
+	for (ARiptideCharacter* Crew : TActorRange<ARiptideCharacter>(GetWorld()))
+	{
+		if (Crew->GetHomeBoat() == this && !Crew->IsInSea())
+		{
+			Crew->SetActorLocation(New.TransformPosition(Old.InverseTransformPosition(Crew->GetActorLocation())) + FVector(0.f, 0.f, 5.f),
+				false, nullptr, ETeleportType::TeleportPhysics);
+			Crew->GetCharacterMovement()->Velocity = FVector::ZeroVector;
+		}
+	}
+	SetActorLocationAndRotation(Target, Upright, false, nullptr, ETeleportType::ResetPhysics);
+	HullBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
+	HullBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	UE_LOG(LogRiptideBoat, Warning, TEXT("%s went off the edge of the sea at %s: back on the water at %s"), *GetName(), *Here.ToString(), *Target.ToString());
 }

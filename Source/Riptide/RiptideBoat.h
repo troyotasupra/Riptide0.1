@@ -259,6 +259,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Boat")
 	float GetPropSpinRate(int32 Motor) const { return Motor == 0 || Motor == 1 ? PropSpinRate[Motor] : 0.f; }
 
+	// For the dev mode's physics overlay: where each motor (0 port, 1 starboard) pushes, whether its prop is biting,
+	// and which way the motors push (along their shafts, steered and trimmed), in the world.
+	FVector GetPropLocation(int32 Motor) const { return (Motor == 1 ? PropellerStarboard : Propeller)->GetComponentLocation(); }
+	bool IsPropWet(int32 Motor) const { return bPropWet[Motor == 1 ? 1 : 0]; }
+	FVector GetThrustDirection() const { return GetActorQuat() * GetOutboardRotation().RotateVector(FVector::ForwardVector); }
+
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UBoxComponent> HullBody;
@@ -279,6 +285,13 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UStaticMeshComponent> MotorBracketStarboard;
+
+	/** The outboards' swivel brackets, hung on the clamp brackets' tilt tubes: they trim with the motors, but don't steer. */
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> MotorSwivel;
+
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UStaticMeshComponent> MotorSwivelStarboard;
 
 	/** The twin throttle levers on the console, which move with the throttle and gear. */
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
@@ -381,6 +394,9 @@ protected:
 	TSoftObjectPtr<UStaticMesh> BracketModel;
 
 	UPROPERTY(EditAnywhere, Category = "Boat")
+	TSoftObjectPtr<UStaticMesh> SwivelModel;
+
+	UPROPERTY(EditAnywhere, Category = "Boat")
 	TSoftObjectPtr<UStaticMesh> LeverModel;
 
 	UPROPERTY(EditAnywhere, Category = "Boat")
@@ -450,6 +466,9 @@ protected:
 	TObjectPtr<ARiptideCharacter> LadderUser;
 
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	/** Puts the boat back on the water (with its crew) if it has fallen off the edge of the sea. Server only. */
+	void RescueIfOffTheSea();
 
 	void UpdatePropsAndWheel(float DeltaSeconds);
 	float PropSpinRate[2] = { 0.f, 0.f };
@@ -581,9 +600,11 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Boat|Sound", meta = (ClampMin = "0", ClampMax = "1"))
 	float EngineIdleVolume = 0.4f;
 
-	/** Extra revs when the prop comes out of the water and the engine races, as a fraction of full revs. */
-	UPROPERTY(EditAnywhere, Category = "Boat|Sound", meta = (ClampMin = "0", ClampMax = "1"))
-	float PropOutOverRev = 0.3f;
+	/** How far past full revs an engine races when its prop comes out of the water and has nothing to push against,
+	 * as a fraction of full revs: up to the rev limiter (full revs are 6000 rpm, the limiter about 6650). The
+	 * tachometer and the engine note both follow it into the red. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "0.5"))
+	float PropOutOverRev = 0.12f;
 
 	/** Speed at which the hull wash reaches full volume. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Sound")
@@ -605,20 +626,53 @@ protected:
 
 	// --- Hull ---
 
+	/** Loaded weight: the aluminium hull and console (about 1,900 kg), two 300 hp outboards (570 kg), a two-thirds
+	 * full tank, crew and gear. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull", meta = (ClampMin = "50"))
-	float HullMassKg = 2000.f;
+	float HullMassKg = 3200.f;
 
-	/** Water resistance moving forward (N per (m/s)^2). Sets top speed. */
+	// Going ahead, the hull's resistance has three parts, as on a real planing boat:
+	// - friction and spray, growing with the square of the speed (ForwardDrag);
+	// - wave-making: at low speed the hull climbs its own bow wave, and the resistance builds to a hump around
+	//   HumpKnots, the hardest part of getting onto the plane (HumpDragN);
+	// - once over the hump it rides on top of the water, but holding its weight up on the bottom's lift still costs a
+	//   steady drag (PlaningDragN), so the resistance eases off past the hump rather than vanishing.
+	// With MaxThrust these give about 30 knots flat out, 3-4 seconds to get onto the plane and 8-10 to reach 25 knots.
+
+	/** Friction and spray resistance going ahead (N per (m/s)^2). */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
-	float ForwardDrag = 59.f;
+	float ForwardDrag = 23.5f;
+
+	/** Peak wave-making resistance at the hump (N), at HumpKnots; it builds over about HumpWidthKnots before it. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float HumpDragN = 3500.f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float HumpKnots = 11.f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float HumpWidthKnots = 4.f;
+
+	/** How hard the hump lifts the bow (N*m at its peak): the bow rises to about 4 degrees getting onto the plane. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float HumpBowRiseNm = 40000.f;
+
+	/** What the wave-making resistance eases off to once on the plane (N). */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float PlaningDragN = 2800.f;
+
+	/** Water resistance going astern (N per (m/s)^2). The flat transom and the motors hanging off it shove water
+	 * instead of slicing through it, so a boat can't do much over 6 knots backwards. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float AsternDrag = 400.f;
 
 	/** Water resistance moving sideways (N per (m/s)^2). The keel: higher = less sliding in turns. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
-	float LateralDrag = 2000.f;
+	float LateralDrag = 3200.f;
 
 	/** Water resistance to bobbing up and down (N per m/s). Higher = the hull settles faster after a wave. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
-	float HeaveDamping = 13300.f;
+	float HeaveDamping = 15000.f;
 
 	/** How quickly the hull stops spinning, in 1/s. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
@@ -630,22 +684,34 @@ protected:
 
 	/** How hard the bottom pushes the bow back down per degree past the running angle, at planing speed (N*m). */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
-	float PlaningPitchStiffness = 12000.f;
+	float PlaningPitchStiffness = 19000.f;
 
 	/** How quickly the hull's spin dies out while it's in the air, in 1/s. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
 	float AirRockDamping = 1.5f;
 
-	/** How quickly roll and pitch rocking dies out in the water, in 1/s. */
+	// How quickly rocking dies out in the water, in 1/s. A hull lying still rolls on for a few gentle swings (little
+	// but its own bilges and chines resist rolling); its pitching dies out within a swing or two, since pitching
+	// shoves the whole bow and stern up and down through the water. Under way the bottom's planing lift resists
+	// rolling too, so the roll damps harder the faster it goes. Much more and the hull feels glued to the sea.
+
+	/** Roll damping lying still or going slowly. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
-	float RockDamping = 6.f;
+	float RollDamping = 0.8f;
+
+	/** Roll damping on the plane (at TrimFullEffectKnots and up). */
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float RollDampingPlaning = 2.5f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
+	float PitchDamping = 2.2f;
 
 	/**
 	 * Hydrodynamic lift on the forward hull as it moves (N per (m/s)^2 of forward speed). Pushes the bow up
 	 * at speed so it rides over swells instead of burying. Only acts where the forward hull is in the water.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull")
-	float PlaningLift = 155.f;
+	float PlaningLift = 248.f;
 
 	/** Largest planing lift as a fraction of the boat's weight, so jumps off wave crests don't launch it. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Hull", meta = (ClampMin = "0", ClampMax = "1"))
@@ -653,23 +719,37 @@ protected:
 
 	// --- Engine ---
 
-	/** Thrust of both motors together at full throttle, in Newtons (twin 250 hp outboards). Each motor gives half, and
-	 * only while its prop is in the water. With ForwardDrag this sets a top speed of about 30 knots. */
+	/** Thrust of both motors together at full throttle from a standstill, in Newtons (twin 300 hp outboards). Each
+	 * motor gives half, and only while its own prop is in the water. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
-	float MaxThrust = 14000.f;
+	float MaxThrust = 12000.f;
 
-	/** Fraction of forward thrust available in reverse. */
+	/** How much thrust the props have lost by ThrustFalloffKnots, as a fraction: the faster the water already comes
+	 * at a prop, the less each turn of it adds. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "0.9"))
+	float ThrustFalloff = 0.3f;
+
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
+	float ThrustFalloffKnots = 30.f;
+
+	/** Fraction of forward thrust available in reverse (a prop pushes less well backwards). */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "1"))
-	float ReverseThrustScale = 0.4f;
+	float ReverseThrustScale = 0.35f;
 
 	/** The lever's neutral band either side of centre: past it the gear engages (forward or reverse), and the throttle
 	 * opens from idle over the rest of the lever's travel. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "0.5"))
 	float NeutralDetent = 0.12f;
 
-	/** Thrust with the gear engaged and the throttle at idle, as a fraction of full (the boat creeps along in gear). */
+	/** Lever travel past the gear detent that stays at idle, like a real binnacle: the gear clicks in, and the throttle
+	 * only starts to open a little further on. Leaves room to idle along in gear without touching the throttle. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "0.3"))
-	float IdleThrustInGear = 0.06f;
+	float GearIdleBand = 0.08f;
+
+	/** Thrust with the gear engaged and the throttle at idle, as a fraction of full: twin outboards idling in gear
+	 * push the boat along at about 3.5-4 knots. */
+	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "0.3"))
+	float IdleThrustInGear = 0.018f;
 
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
 	float IdleRpm = 650.f;
@@ -710,16 +790,16 @@ protected:
 	/**
 	 * Pitching moment per degree of trim at TrimFullEffectKnots and full throttle, in N*m (positive trim lifts the
 	 * bow). Tilting the thrust alone hardly moves a heavy hull; on a real boat trim mostly works through the hull's
-	 * planing lift, so this grows with speed. At 2500 and cruising speed, fully out lifts the bow about 5 degrees
-	 * (measured on flat water).
+	 * planing lift, so this grows with speed. At 2500, flat out, fully out lifts the bow from about 2 degrees to
+	 * about 4 (measured on flat water), where the planing bottom stops giving it any more.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
 	float TrimMomentPerDeg = 2500.f;
 
 	/** The same for trimming in (bow down). Trimmed in, the bow is pressed onto the water rather than lifted off it, so
-	 * the hull doesn't run out of grip and it can work harder: fully in drops the bow about 3 degrees. */
+	 * the hull doesn't run out of grip and it can work harder: fully in drops the bow about 4 degrees. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
-	float TrimInMomentPerDeg = 5500.f;
+	float TrimInMomentPerDeg = 4000.f;
 
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
 	float TrimFullEffectKnots = 22.f;
@@ -731,9 +811,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine", meta = (ClampMin = "0", ClampMax = "1"))
 	float StartingFuelFraction = 0.7f;
 
-	/** Fuel each motor burns per second at full throttle (a 250 hp outboard flat out: about 95 L an hour) and at idle. */
+	/** Fuel each motor burns per second at full throttle (a 300 hp outboard flat out: about 112 L an hour) and at idle. */
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
-	float FuelBurnFullPerMotor = 0.026f;
+	float FuelBurnFullPerMotor = 0.031f;
 
 	UPROPERTY(EditAnywhere, Category = "Boat|Engine")
 	float FuelBurnIdlePerMotor = 0.0006f;
@@ -789,6 +869,14 @@ private:
 	void UpdateEngine(float DeltaSeconds);
 	void ApplyThrust();
 	void ApplyHydrodynamics();
+
+	/** The hull's water resistance along its length at a forward speed (m/s; negative is astern), in Newtons, signed
+	 * with the speed. */
+	float GetHullResistanceN(float ForwardMs) const;
+
+	/** Moves each engine's revs toward what its throttle and prop ask for (the tachometer and the engine note read
+	 * them). Runs on every machine, from replicated state. */
+	void UpdateEngineRevs(float DeltaSeconds);
 	void DrawDebugHud() const;
 	bool IsPropSubmerged(const USceneComponent* Prop) const;
 
@@ -893,8 +981,13 @@ private:
 	UFUNCTION(Server, Reliable)
 	void ServerLeaveHelm(float InLookYaw, float InLookPitch);
 
+	/** The held controls, sent every frame (a lost one is replaced by the next). */
 	UFUNCTION(Server, Unreliable)
-	void ServerSetControls(float InThrottleInput, float InSteerInput, float InTrimInput, bool bInCutThrottle);
+	void ServerSetControls(float InThrottleInput, float InSteerInput, float InTrimInput);
+
+	/** Cutting the throttle is a single press, so it goes on its own, reliably. */
+	UFUNCTION(Server, Reliable)
+	void ServerCutThrottle();
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> HelmMapping;
@@ -962,12 +1055,6 @@ private:
 
 	/** How far above the surface (cm) a prop has to rise before it counts as out of the water. */
 	float PropDryMargin = 4.f;
-
-	/** Index of the buoyancy pontoon nearest the propeller, used to read the water height there. */
-	int32 SternPontoonIndex = INDEX_NONE;
-
-	/** Index of a bow pontoon, used to read the water height at the bow. */
-	int32 BowPontoonIndex = INDEX_NONE;
 
 	/** Distance falloff shared by the boat's sounds, so other boats fade with distance. */
 	UPROPERTY(Transient)

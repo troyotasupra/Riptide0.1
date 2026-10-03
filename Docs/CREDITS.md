@@ -13,6 +13,24 @@ Every third-party asset in Riptide is CC0 (public domain). No attribution is req
 
 Apart from the engine excerpts, the files are unedited. Levels are set when the editor imports them (`Content/Python/init_unreal.py`).
 
+## Characters (`SourceAssets/Characters/Quaternius/`)
+
+All by [Quaternius](https://quaternius.com), CC0, downloaded from itch.io (the free Standard versions):
+
+| Folder in the repo | Pack | Source |
+|---|---|---|
+| `BaseCharacters/` | The rigged Superhero male and female bodies, eye and skin textures, from "Universal Base Characters" | [itch.io](https://quaternius.itch.io/universal-base-characters) |
+| `Hair/` | Hairstyles, beard and eyebrows rigged to the head bone, from "Universal Base Characters" | [itch.io](https://quaternius.itch.io/universal-base-characters) |
+| `Animations/UAL1_Standard.glb` | "Universal Animation Library" (locomotion, swimming, crouching, combat and more) | [itch.io](https://quaternius.itch.io/universal-animation-library) |
+| `Animations/UAL2_Standard.glb` | "Universal Animation Library 2" (parkour, climbing and more) | [itch.io](https://quaternius.itch.io/universal-animation-library-2) |
+
+The files are unedited. What the game uses from them (imported by `Content/Python/init_unreal.py`):
+- the Superhero male and female bodies (with their eyes and eyebrows) and their skin, eye and hair textures (tinted in the material to the chosen skin tone and hair colour);
+- the hairstyles Hair_Buzzed (Hair_BuzzedFemale for the female body), Hair_SimpleParted, Hair_Long and Hair_Buns, and Hair_Beard, refitted to each head by `riptide_crew_mesh.py`; the separate Eyebrows files aren't needed (the bodies have their own);
+- 15 clips: from UAL1 Idle_Loop, Walk_Loop, Jog_Fwd_Loop, Crouch_Idle_Loop, Crouch_Fwd_Loop, Jump_Start, Jump_Loop, Jump_Land, Swim_Idle_Loop, Swim_Fwd_Loop and Pistol_Idle_Loop (the menu's shouldered rifle); from UAL2 ClimbUp_1m (over the top of the ladder), Idle_Rail_Loop (holding on), Hit_Knockback and LayToIdle (knocked down and getting up). There's no ladder clip in the Standard libraries: the climb itself is posed in code on the ladder's treads.
+
+The crew's uniforms, boots, gloves, balaclava, shemagh, headgear, glasses, vests, packs and rifle are our own, generated in code (`Content/Python/riptide_crew_mesh.py`).
+
 ## Models
 
 The patrol skiff and outboard are our own, generated in code (`Content/Python/riptide_boat_mesh.py`).

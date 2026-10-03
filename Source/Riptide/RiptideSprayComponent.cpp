@@ -10,6 +10,8 @@ URiptideSprayComponent::URiptideSprayComponent(const FObjectInitializer& ObjectI
 	PrimaryComponentTick.bCanEverTick = true;
 	// Flies after the boat has moved for the frame, so new spray leaves the hull where it is now.
 	PrimaryComponentTick.TickGroup = TG_PostPhysics;
+	// While the world is paused (the dev mode's freeze) it still turns each cloud to face the camera flying round it.
+	PrimaryComponentTick.bTickEvenWhenPaused = true;
 	SetUsingAbsoluteLocation(true);
 	SetUsingAbsoluteRotation(true);
 	SetUsingAbsoluteScale(true);
@@ -54,6 +56,12 @@ void URiptideSprayComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	if (Clouds.Num() == 0 && GetNumSections() == 0)
 	{
+		return;
+	}
+	if (TickType == LEVELTICK_PauseTick)
+	{
+		// Frozen: the spray hangs where it is.
+		RebuildMesh();
 		return;
 	}
 

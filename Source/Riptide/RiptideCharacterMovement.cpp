@@ -1,5 +1,6 @@
 #include "RiptideCharacterMovement.h"
 
+#include "Components/CapsuleComponent.h"
 #include "GameFramework/Character.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
@@ -72,6 +73,29 @@ FVector URiptideCharacterMovement::ConstrainInputAcceleration(const FVector& Inp
 {
 	// The engine flattens input unless swimming or flying in its own modes; in the sea, up and down count too.
 	return IsSeaSwimming() ? InputAcceleration : Super::ConstrainInputAcceleration(InputAcceleration);
+}
+
+void URiptideCharacterMovement::FindFloor(const FVector& CapsuleLocation, FFindFloorResult& OutFloorResult, bool bCanUseCachedLocation,
+	const FHitResult* DownwardSweepResult) const
+{
+	Super::FindFloor(CapsuleLocation, OutFloorResult, bCanUseCachedLocation, DownwardSweepResult);
+	if (!OutFloorResult.bBlockingHit || !CharacterOwner)
+	{
+		return;
+	}
+	// Standing flush against the hull's inside, the floor sweep can catch the top edge of that wall on the side of the
+	// capsule and call it the floor: the body was lifted onto it for a frame and dropped back, a 24 cm pop. A real floor
+	// is under the rounded bottom; anything touching higher up is a wall, so look straight down with a thinner capsule.
+	float Radius, HalfHeight;
+	CharacterOwner->GetCapsuleComponent()->GetScaledCapsuleSize(Radius, HalfHeight);
+	if (OutFloorResult.HitResult.ImpactPoint.Z <= CapsuleLocation.Z - HalfHeight + Radius)
+	{
+		return;
+	}
+	const float Reach = MaxStepHeight + MAX_FLOOR_DIST;
+	FFindFloorResult Under;
+	ComputeFloorDist(CapsuleLocation, Reach, Reach, Under, 0.5f * Radius);
+	OutFloorResult = Under;
 }
 
 void URiptideCharacterMovement::UpdateCharacterStateBeforeMovement(float DeltaSeconds)

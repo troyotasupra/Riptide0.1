@@ -5,8 +5,10 @@ Unreal), so it runs anywhere. Coordinates are Unreal's: X forward, Y right (star
 the origin at the centre of the boat's physics box (HullExtent 395 x 130 x 35 in ARiptideBoat), so the waterline
 sits at Z = -15. Full size for a 26 ft patrol boat: 7.9 m long, 2.6 m beam, with room to walk around the console.
 
-    build_skiff()     -> Mesh   hull, collar, deck, console, leaning post, T-top, bow rail
-    build_outboard()  -> Mesh   one outboard, pivot at its steering axis (the model origin); the boat carries two
+    build_skiff()             -> Mesh   hull, collar, deck, console, leaning post, T-top, rails and fittings
+    build_outboard()          -> Mesh   one outboard, origin at its tilt tube; the boat carries two
+    build_outboard_bracket()  -> Mesh   its clamp bracket on the transom (fixed)
+    build_outboard_swivel()   -> Mesh   its swivel bracket (trims, doesn't steer)
     Mesh.write_obj(path)
 """
 
@@ -19,12 +21,15 @@ HALF_BEAM = 130.0
 STERN_X = -395.0
 STATIONS = 60
 DECK_Z = 20.0            # the cockpit deck, 35 cm above the waterline (self-bailing, and clear of the swell)
+GUNWALE_W = 14.0         # width of the gunwale cap: the bulwark walls stand this far in from the sheer
+COLLAR_OVER = 3.0        # the fender collar's top laps this far in over the cap; fittings go inboard of it
+GUNWALE_MID = 0.5 * (COLLAR_OVER + GUNWALE_W)      # the middle of the cap's exposed width, where fittings sit
 
 # The stern: a bulkhead across the boat in front of the motors, gunwale-high, closing the cockpit off from the sea.
 # Behind it the transom is notched down to where the motors clamp on, with a splashwell between the two (its floor
 # well above the waterline) to catch spray coming over the notch.
 BULKHEAD_X = -340.0      # aft face of the cockpit
-WELL_HALF = 72.0         # half the width of the motor notch and splashwell
+WELL_HALF = 80.0         # half the width of the motor notch and splashwell (the cowlings swing into it at full lock)
 SILL_Z = 45.0            # top of the transom in the notch, where the motor brackets hook on
 WELL_FLOOR_Z = 38.0
 TRANSOM_THICK = 5.0
@@ -51,12 +56,12 @@ def station(t):
         u = (t - 0.35) / 0.65
         sheer_b = HALF_BEAM * max(0.0, math.cos(u * math.pi / 2)) ** 0.75
     sheer_z = DECK_Z + 55.0 + 45.0 * t ** 2.2              # knee-high bulwarks aft, sweeping up to a proud bow
-    keel_z = -42.0 + 30.0 * smoothstep(0.62, 1.0, t) ** 1.3 + 50.0 * smoothstep(0.93, 1.0, t)
+    keel_z = -42.0 + 50.0 * smoothstep(0.55, 1.0, t) ** 1.7   # the forefoot rising fair into the stem
     chine_b = sheer_b * (0.88 - 0.1 * smoothstep(0.6, 1.0, t))
     chine_z = -24.0 + 34.0 * smoothstep(0.55, 1.0, t)       # chine sweeps up into the bow
     chine_z = min(chine_z, sheer_z - 6.0)
-    # The keel runs up into the stem to meet the chines there, always below them (a V to the very tip).
-    keel_z = min(keel_z, chine_z - 18.0 * (1.0 - smoothstep(0.9, 1.0, t)) - 0.5)
+    # The keel runs up into the stem to meet the chines there, always below them, the V sharpening to the very tip.
+    keel_z = min(keel_z, chine_z - 3.0 - 15.0 * (1.0 - smoothstep(0.93, 1.0, t)))
     deck_z = DECK_Z + 14.0 * smoothstep(0.7, 1.0, t)
     return {"sheer_b": sheer_b, "sheer_z": sheer_z, "keel_z": keel_z, "chine_b": chine_b, "chine_z": chine_z,
             "deck_z": deck_z, "x": STERN_X + LENGTH * t}
@@ -91,6 +96,8 @@ class Mesh:
         fixed = []
         for i, j, k in tris:
             n = cross(sub(points[j], points[i]), sub(points[k], points[i]))
+            if n[0] * n[0] + n[1] * n[1] + n[2] * n[2] < 1e-8:
+                continue        # zero area (where a row closes to a point: a pole, the stem): nothing to draw
             if outward_hint is not None:
                 c = tuple((points[i][a] + points[j][a] + points[k][a]) / 3.0 for a in range(3))
                 inside = outward_hint(c)
@@ -155,24 +162,54 @@ class Mesh:
         self.fan([(p[0], y0, p[1]) for p in profile_xz], material, outward_hint=hint)
         self.fan([(p[0], y1, p[1]) for p in profile_xz], material, outward_hint=hint)
 
-    def tube(self, path, radius, material, sides=10):
-        """Round tube along a polyline, open ends (they meet other parts)."""
-        rows = []
+    def tube(self, path, radius, material, sides=10, closed=False, caps=False):
+        """Round tube along a polyline. The cross-section is carried along the path without twisting (parallel
+        transport) and mitred at bends, so the tube keeps its full thickness round corners. closed: the path is a
+        loop (a ring), joined back to its start. caps: close the two ends with flat discs (for ends left in the
+        open; ends buried in another part can stay open)."""
+        path = list(path)
+        if closed and len(path) > 2 and sum((path[0][a] - path[-1][a]) ** 2 for a in range(3)) < 1e-6:
+            path = path[:-1]
+        # Drop repeated points: they have no direction.
+        path = [p for i, p in enumerate(path) if i == 0 or sum((p[a] - path[i - 1][a]) ** 2 for a in range(3)) > 1e-8]
+        n = len(path)
+        if closed:
+            segs = [norm(sub(path[(i + 1) % n], path[i])) for i in range(n)]
+        else:
+            segs = [norm(sub(path[i + 1], path[i])) for i in range(n - 1)]
+        rows, u = [], None
         for i, p in enumerate(path):
-            d = norm(sub(path[min(i + 1, len(path) - 1)], path[max(i - 1, 0)]))
-            ref = (0.0, 0.0, 1.0) if abs(d[2]) < 0.9 else (1.0, 0.0, 0.0)
-            u = norm(cross(d, ref))
+            din, dout = (segs[i - 1], segs[i]) if closed else (segs[max(i - 1, 0)], segs[min(i, n - 2)])
+            d = norm((din[0] + dout[0], din[1] + dout[1], din[2] + dout[2]))
+            if u is None:
+                ref = (0.0, 0.0, 1.0) if abs(d[2]) < 0.9 else (1.0, 0.0, 0.0)
+                u = norm(cross(d, ref))
+            else:
+                k = u[0] * d[0] + u[1] * d[1] + u[2] * d[2]
+                u = norm((u[0] - k * d[0], u[1] - k * d[1], u[2] - k * d[2]))
             v = cross(d, u)
-            rows.append([(p[0] + radius * (math.cos(a) * u[0] + math.sin(a) * v[0]),
-                          p[1] + radius * (math.cos(a) * u[1] + math.sin(a) * v[1]),
-                          p[2] + radius * (math.cos(a) * u[2] + math.sin(a) * v[2]))
-                         for a in (2 * math.pi * s / sides for s in range(sides))])
-        pts_center = path
+            c = max(0.35, din[0] * d[0] + din[1] * d[1] + din[2] * d[2])      # cos of half the bend
+            b = sub(dout, din)
+            bl = math.sqrt(b[0] ** 2 + b[1] ** 2 + b[2] ** 2)
+            b = (b[0] / bl, b[1] / bl, b[2] / bl) if bl > 1e-6 else (0.0, 0.0, 0.0)
+            row = []
+            for s in range(sides):
+                a = 2 * math.pi * s / sides
+                o = [radius * (math.cos(a) * u[j] + math.sin(a) * v[j]) for j in range(3)]
+                ob = o[0] * b[0] + o[1] * b[1] + o[2] * b[2]
+                row.append(tuple(p[j] + o[j] + b[j] * ob * (1.0 / c - 1.0) for j in range(3)))
+            rows.append(row)
+        if closed:
+            rows.append(rows[0])
+        centre = path + ([path[0]] if closed else [])
 
-        def hint(p):
-            best = min(pts_center, key=lambda q: (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2)
-            return best
+        def hint(q):
+            return min(centre, key=lambda c_: (c_[0] - q[0]) ** 2 + (c_[1] - q[1]) ** 2 + (c_[2] - q[2]) ** 2)
         self.grid(rows, material, outward_hint=hint, close_rows=True)
+        if caps and not closed:
+            # Each disc faces away from the next point along the tube.
+            self.fan(rows[0], material, outward_hint=lambda q, inner=path[1]: inner)
+            self.fan(rows[-1], material, outward_hint=lambda q, inner=path[-2]: inner)
 
     def write_obj(self, path):
         """OBJ for Unreal's importer, which keeps X and Z and flips Y (right- to left-handed), so positions and
@@ -224,38 +261,20 @@ def _hull(m):
                   (s["x"], side * s["sheer_b"], s["sheer_z"])] for s in secs]
         m.grid(sides, "Aluminium", outward_hint=lambda p: (p[0], 0.0, p[2]))
 
-        # Inside: bulwark wall from the gunwale down to the deck, 6 cm in from the sheer.
-        wall = [[(s["x"], side * max(0.0, s["sheer_b"] - 6.0), s["sheer_z"]),
-                 (s["x"], side * max(0.0, s["sheer_b"] - 6.0), s["deck_z"])] for s in secs[:-2]]
+        # Inside: bulwark wall from the gunwale down to the deck, the gunwale cap's width in from the sheer.
+        wall = [[(s["x"], side * max(0.0, s["sheer_b"] - GUNWALE_W), s["sheer_z"]),
+                 (s["x"], side * max(0.0, s["sheer_b"] - GUNWALE_W), s["deck_z"])] for s in secs[:-2]]
         m.grid(wall, "HullInside", outward_hint=lambda p: (p[0], side * 500.0, p[2]))
         # Gunwale cap closing the top of the shell, right to the stem, where the two sides meet (and the bow platform
         # fills between their inner edges).
-        cap = [[(s["x"], side * s["sheer_b"], s["sheer_z"]), (s["x"], side * max(0.0, s["sheer_b"] - 6.0), s["sheer_z"])]
+        cap = [[(s["x"], side * s["sheer_b"], s["sheer_z"]), (s["x"], side * max(0.0, s["sheer_b"] - GUNWALE_W), s["sheer_z"])]
                for s in secs]
         m.grid(cap, "Aluminium", outward_hint=lambda p: (p[0], p[1], p[2] - 50.0))
 
-        # Fender collar: a thick black rubber band around the gunwale (like a patrol boat's foam collar).
-        # Its inner edge sits down on the gunwale cap and tucks into the topsides, and the tube is closed all
-        # round, so there's no slit to see through between it and the hull from any side.
-        collar = []
-        for s in secs:
-            b, z = s["sheer_b"], s["sheer_z"]
-            collar.append([(s["x"], side * (b - 3.0), z - 0.2), (s["x"], side * (b - 1.0), z + 4.0),
-                           (s["x"], side * (b + 7.0), z + 1.0), (s["x"], side * (b + 9.0), z - 6.0),
-                           (s["x"], side * (b + 7.0), z - 13.0), (s["x"], side * (b + 2.5), z - 17.0),
-                           (s["x"], side * (b - 1.5), z - 20.0)])      # a lip tucked into the topsides
-
-        def collar_core(p, side=side):
-            b = station(min(1.0, max(0.0, (p[0] - STERN_X) / LENGTH)))["sheer_b"]
-            z = station(min(1.0, max(0.0, (p[0] - STERN_X) / LENGTH)))["sheer_z"]
-            return (p[0], side * (b + 3.0), z - 5.0)
-        m.grid(collar, "Collar", outward_hint=collar_core, close_rows=True)
-        # Close its ends: at the transom, and at the stem, where the two sides meet.
-        m.fan(collar[0], "Collar", outward_hint=lambda p: (p[0] + 50.0, p[1], p[2]))
-        m.fan(collar[-1], "Collar", outward_hint=lambda p: (p[0] - 50.0, p[1], p[2]))
+    _collar(m, secs)
 
     # Deck: flat between the bulwark walls, rising into the bow.
-    deck = [[(s["x"], -max(0.0, s["sheer_b"] - 6.0), s["deck_z"]), (s["x"], max(0.0, s["sheer_b"] - 6.0), s["deck_z"])]
+    deck = [[(s["x"], -max(0.0, s["sheer_b"] - GUNWALE_W), s["deck_z"]), (s["x"], max(0.0, s["sheer_b"] - GUNWALE_W), s["deck_z"])]
             for s in secs[:-2]]
     m.grid(deck, "Deck", outward_hint=lambda p: (p[0], p[1], p[2] - 50.0))
 
@@ -285,25 +304,87 @@ def _hull(m):
     _stern_box(m, s0)
 
     se = secs[-3]
-    m.fan([(se["x"], -max(0.0, se["sheer_b"] - 6.0), se["deck_z"]), (se["x"], max(0.0, se["sheer_b"] - 6.0), se["deck_z"]),
-           (se["x"], max(0.0, se["sheer_b"] - 6.0), se["sheer_z"]), (se["x"], -max(0.0, se["sheer_b"] - 6.0), se["sheer_z"])],
-          "HullInside", outward_hint=lambda p: (p[0] + 50.0, 0.0, p[2]))
+    # Where the deck ends, the walls have met over the stem and the gunwale caps close the bow; only with a
+    # narrow gunwale is there a gap between the walls there, which a bulkhead and a bow platform fill.
+    if se["sheer_b"] - GUNWALE_W > 0.5:
+        m.fan([(se["x"], -max(0.0, se["sheer_b"] - GUNWALE_W), se["deck_z"]), (se["x"], max(0.0, se["sheer_b"] - GUNWALE_W), se["deck_z"]),
+               (se["x"], max(0.0, se["sheer_b"] - GUNWALE_W), se["sheer_z"]), (se["x"], -max(0.0, se["sheer_b"] - GUNWALE_W), se["sheer_z"])],
+              "HullInside", outward_hint=lambda p: (p[0] + 50.0, 0.0, p[2]))
 
-    # Bow platform (the anchor locker's lid) closing the stem over the end of the deck at gunwale height, so the bow
-    # reads as solid from inside the boat rather than showing the backs of the hull's outer faces.
-    tip = secs[-1]
-    rim = [(s["x"], max(0.0, s["sheer_b"] - 6.0), s["sheer_z"]) for s in secs[-3:-1]]
-    outline = [(se["x"], -rim[0][1], rim[0][2]), (rim[1][0], -rim[1][1], rim[1][2]), (tip["x"], 0.0, tip["sheer_z"]),
-               (rim[1][0], rim[1][1], rim[1][2]), (se["x"], rim[0][1], rim[0][2])]
-    m.fan(outline, "Deck", outward_hint=lambda p: (p[0], p[1], p[2] - 50.0))
-    # Its edges down to the hull sides, so there's no gap under the lid where the walls stop.
-    for side in (1.0, -1.0):
-        edge = [[(x, side * y, z), (x, side * y, z - 30.0)] for x, y, z in
-                [(se["x"], rim[0][1], rim[0][2]), (rim[1][0], rim[1][1], rim[1][2]), (tip["x"], 0.0, tip["sheer_z"])]]
-        m.grid(edge, "HullInside", outward_hint=lambda p: (p[0], side * 500.0, p[2]))
+        # Bow platform (the anchor locker's lid) closing the stem over the end of the deck at gunwale height, so the bow
+        # reads as solid from inside the boat rather than showing the backs of the hull's outer faces.
+        tip = secs[-1]
+        rim = [(s["x"], max(0.0, s["sheer_b"] - GUNWALE_W), s["sheer_z"]) for s in secs[-3:-1]]
+        outline = [(se["x"], -rim[0][1], rim[0][2]), (rim[1][0], -rim[1][1], rim[1][2]), (tip["x"], 0.0, tip["sheer_z"]),
+                   (rim[1][0], rim[1][1], rim[1][2]), (se["x"], rim[0][1], rim[0][2])]
+        m.fan(outline, "Deck", outward_hint=lambda p: (p[0], p[1], p[2] - 50.0))
+        # Its edges down to the hull sides, so there's no gap under the lid where the walls stop.
+        for side in (1.0, -1.0):
+            edge = [[(x, side * y, z), (x, side * y, z - 30.0)] for x, y, z in
+                    [(se["x"], rim[0][1], rim[0][2]), (rim[1][0], rim[1][1], rim[1][2]), (tip["x"], 0.0, tip["sheer_z"])]]
+            m.grid(edge, "HullInside", outward_hint=lambda p: (p[0], side * 500.0, p[2]))
+
+
+# The fender collar's cross-section: (out from the sheer, up from it) going round the tube. Its top laps in over the
+# gunwale cap by COLLAR_OVER, and its lowest point is a lip tucked into the topsides, so no slit shows anywhere.
+COLLAR_PROFILE = ((-COLLAR_OVER, -0.2), (-1.0, 4.0), (7.0, 1.0), (9.0, -6.0), (7.0, -13.0), (2.5, -17.0), (-1.5, -20.0))
+COLLAR_CORE = (3.0, -5.0)
+
+
+def _collar(m, secs):
+    """The fender collar: one black rubber tube from the port quarter round the stem to the starboard quarter, its
+    ends rounded off just behind the transom corners and wrapped round the bow (a little slimmer there)."""
+    rows, cores = [], []
+
+    def add(x0, y0, z0, nx, ny, scale=1.0, lap=1.0, bulge=1.0):
+        # scale shrinks the section about its core (to round off the ends); lap scales the parts that reach in over
+        # the cap and into the topsides, which narrow to nothing at the stem where the two sides meet, and bulge
+        # how far it stands out there, so the tube wraps round the bow without folding through itself.
+        ring = []
+        for o, dz in COLLAR_PROFILE:
+            o = o * lap if o < 0.0 else o * bulge
+            o = COLLAR_CORE[0] * bulge + (o - COLLAR_CORE[0] * bulge) * scale
+            dz = COLLAR_CORE[1] + (dz - COLLAR_CORE[1]) * scale
+            ring.append((x0 + nx * o, y0 + ny * o, z0 + dz))
+        rows.append(ring)
+        cores.append((x0 + nx * COLLAR_CORE[0] * bulge, y0 + ny * COLLAR_CORE[0] * bulge, z0 + COLLAR_CORE[1]))
+    s0, tip = secs[0], secs[-1]
+    ends = ((3, 0.25), (2, 0.6), (1, 0.88))
+    for k, sc in ends:                                   # the port end, rounded off behind the transom
+        add(STERN_X - 2.0 * k, -s0["sheer_b"], s0["sheer_z"], 0.0, -1.0, sc)
+    for s in secs:
+        add(s["x"], -s["sheer_b"], s["sheer_z"], 0.0, -1.0, 1.0, min(1.0, s["sheer_b"] / 6.0))
+    for k in range(1, 8):                                # round the stem
+        th = math.pi * k / 8
+        add(tip["x"], 0.0, tip["sheer_z"], math.sin(th), -math.cos(th), 1.0, 0.0, 1.0 - 0.4 * math.sin(th))
+    for s in reversed(secs):
+        add(s["x"], s["sheer_b"], s["sheer_z"], 0.0, 1.0, 1.0, min(1.0, s["sheer_b"] / 6.0))
+    for k, sc in reversed(ends):                         # and the starboard end
+        add(STERN_X - 2.0 * k, s0["sheer_b"], s0["sheer_z"], 0.0, 1.0, sc)
+
+    def core(p):
+        return min(cores, key=lambda c: (c[0] - p[0]) ** 2 + (c[1] - p[1]) ** 2 + (c[2] - p[2]) ** 2)
+    # Round the tube, with a hard edge at the tucked-in lip (its two faces meet at a sharp angle there).
+    m.grid(rows, "Collar", outward_hint=core)
+    m.grid([[r[-1], r[0]] for r in rows], "Collar", outward_hint=core)
+    m.fan(rows[0], "Collar", outward_hint=lambda p: (p[0] + 50.0, p[1], p[2]))
+    m.fan(rows[-1], "Collar", outward_hint=lambda p: (p[0] + 50.0, p[1], p[2]))
 
 
 RADAR = (-70.0, 0.0, DECK_Z + 220.0 + 8.0 + 30.0)   # spinning array's hub (ARiptideBoat's RadarHub)
+
+# Fittings that the game also knows the place of (ARiptideBoat): the fuel filler on the starboard gunwale
+# (GetFuelFillerTransform), the bow light (BowLightPoint) and the anchor locker's lid (the anchor locker's spot).
+FUEL_FILLER = (-237.0, station(0.2)["sheer_b"] - GUNWALE_MID, station(0.2)["sheer_z"])
+BOW_LIGHT = (381.0, 0.0, station((381.0 - STERN_X) / LENGTH)["sheer_z"] + 4.0)    # the lamps' centre
+ANCHOR_LID_X = 375.0
+# The gunwale grab rails: from the stern quarters to abreast of the console, GRAB_RAIL_H above the cap.
+GRAB_RAIL_X = (-290.0, -40.0)
+GRAB_RAIL_STANCHIONS = (-200.0, -120.0)
+GRAB_RAIL_H = 25.0
+# The boarding ladder: its rails reach this far down, and its treads (ARiptideBoat's ladder foot is among them).
+LADDER_BOTTOM_Z = -75.0
+LADDER_RUNGS = (-70.0, -54.0, -38.0, -22.0, -6.0, 10.0, 26.0, 42.0, 58.0)
 
 
 def _ball(m, c, r, material, rows=8, cols=16):
@@ -323,6 +404,7 @@ def _dome(m, c, r, h, material):
         pts.append([(c[0] + r * math.cos(a) * math.cos(b), c[1] + r * math.cos(a) * math.sin(b), c[2] + h * math.sin(a))
                     for b in [2 * math.pi * j / 16 for j in range(16)]])
     m.grid(pts, material, outward_hint=lambda p: c, close_rows=True)
+    m.fan(pts[0], material, outward_hint=lambda p: (c[0], c[1], c[2] + 10.0))     # its flat base
 
 
 def _cone(m, a, b, r0, r1, material, sides=12):
@@ -348,13 +430,13 @@ def _cone(m, a, b, r0, r1, material, sides=12):
 def _ring(m, c, r, tube_r, plane, material):
     """A small eye or ring: plane "xz" (faces sideways) or "yz" (faces fore and aft)."""
     pts = []
-    for i in range(17):
+    for i in range(16):
         a = 2 * math.pi * i / 16
         if plane == "xz":
             pts.append((c[0] + r * math.cos(a), c[1], c[2] + r * math.sin(a)))
         else:
             pts.append((c[0], c[1] + r * math.cos(a), c[2] + r * math.sin(a)))
-    m.tube(pts, tube_r, material, sides=6)
+    m.tube(pts, tube_r, material, sides=6, closed=True)
 
 
 def _deck_z_at(x):
@@ -384,11 +466,11 @@ def _obox(m, T, lo, hi, material):
 def _cleat(m, T):
     """A 25 cm mooring cleat in the local frame T (horns along s): a tie-off point. An oval base, two raked legs,
     and horns that thin toward their tips and turn up a little, so a line can't slip off."""
-    _obox(m, T, (-7.0, -2.4, 0.0), (7.0, 2.4, 1.0), "Frame")
+    _obox(m, T, (-7.0, -2.4, -0.3), (7.0, 2.4, 1.0), "Frame")
     for s in (-4.0, 4.0):
-        m.tube([T((s, 0.0, 0.8)), T((s * 1.15, 0.0, 4.4))], 1.35, "Frame", sides=8)
+        m.tube([T((s, 0.0, 0.8)), T((s * 1.15, 0.0, 4.4))], 1.35, "Frame", sides=8, caps=True)
     horn = [T((s, 0.0, 5.2 + 0.012 * s * s)) for s in (-12.5, -10.0, -6.0, 0.0, 6.0, 10.0, 12.5)]
-    m.tube(horn, 1.25, "Frame", sides=8)
+    m.tube(horn, 1.25, "Frame", sides=8, caps=True)
     for end in (horn[0], horn[-1]):
         _ball(m, end, 1.25, "Frame", rows=4, cols=8)
 
@@ -407,19 +489,44 @@ def _gunwale_frame(t, side, inset):
 
 def _deck_hatch(m, x0, x1, hy, handle=True):
     """A flush deck hatch (a storage locker's lid): level with the deck so nothing catches a foot, set in a black
-    gasket, with flush pull latches."""
-    def flat(x, y, lift):
-        return (x, y, _deck_z_at(x) + lift)
-    # Gasket: a black border 2 cm wide around the lid.
-    g = 2.0
-    _quad(m, flat(x0 - g, -hy - g, 0.1), flat(x1 + g, -hy - g, 0.1), flat(x1 + g, hy + g, 0.1), flat(x0 - g, hy + g, 0.1),
-          "Trim", (0.5 * (x0 + x1), 0.0, 300.0))
-    _quad(m, flat(x0, -hy, 0.2), flat(x1, -hy, 0.2), flat(x1, hy, 0.2), flat(x0, hy, 0.2), "Deck", (0.5 * (x0 + x1), 0.0, 300.0))
+    gasket, with flush pull latches. Each layer follows the deck where it rises into the bow."""
+    def panel(xa, xb, ya, yb, lift, material):
+        n = max(1, int(math.ceil((xb - xa) / 6.0)))
+        xs = [xa + (xb - xa) * i / n for i in range(n + 1)]
+        m.grid([[(x, ya, _deck_z_at(x) + lift), (x, yb, _deck_z_at(x) + lift)] for x in xs], material,
+               outward_hint=lambda p: (p[0], p[1], p[2] - 50.0))
+    g = 2.0      # the gasket: a black border 2 cm wide around the lid
+    panel(x0 - g, x1 + g, -hy - g, hy + g, 0.1, "Trim")
+    panel(x0, x1, -hy, hy, 0.2, "Deck")
     if handle:
         for y in (-hy * 0.5, hy * 0.5):
             xh = x0 + 7.0
-            _quad(m, flat(xh - 3.0, y - 5.0, 0.3), flat(xh + 3.0, y - 5.0, 0.3), flat(xh + 3.0, y + 5.0, 0.3),
-                  flat(xh - 3.0, y + 5.0, 0.3), "Frame", (xh, y, 300.0))
+            panel(xh - 3.0, xh + 3.0, y - 5.0, y + 5.0, 0.3, "Frame")
+
+
+def _side_y(st, z):
+    """Half-width of the topsides at height z (between their middle line and the sheer) in station st."""
+    zm = 0.5 * (st["chine_z"] + st["sheer_z"])
+    return st["sheer_b"] * (0.99 + 0.01 * (z - zm) / (st["sheer_z"] - zm))
+
+
+def _circle(c, r, n=12, axis="z"):
+    out = []
+    for i in range(n):
+        a = 2 * math.pi * i / n
+        if axis == "z":
+            out.append((c[0] + r * math.cos(a), c[1] + r * math.sin(a), c[2]))
+        elif axis == "x":
+            out.append((c[0], c[1] + r * math.cos(a), c[2] + r * math.sin(a)))
+        else:
+            out.append((c[0] + r * math.cos(a), c[1], c[2] + r * math.sin(a)))
+    return out
+
+
+def _gunwale_point(x, inset, lift=0.0, side=1.0):
+    """A point on the gunwale cap at X, `inset` cm in from the sheer, on the given side."""
+    st = station((x - STERN_X) / LENGTH)
+    return (x, side * (st["sheer_b"] - inset), st["sheer_z"] + lift)
 
 
 def _fittings(m):
@@ -428,94 +535,147 @@ def _fittings(m):
     _deck_hatch(m, 55.0, 150.0, 40.0)
     _deck_hatch(m, 170.0, 240.0, 28.0)
     _deck_hatch(m, -300.0, -245.0, 26.0)
-    # Anchor locker lid on the bow platform.
+    # Anchor locker lid on the bow platform, where the gunwale caps close in over the stem.
     tip = station(1.0)
-    bp = station(0.975)
-    m.box((bp["x"] - 6.0, -5.0, bp["sheer_z"]), (bp["x"] + 6.0, 5.0, bp["sheer_z"] + 0.6), "Trim")
+    ax = ANCHOR_LID_X
+    az = station((ax - STERN_X) / LENGTH)["sheer_z"]
+    m.box((ax - 6.0, -5.0, az - 0.2), (ax + 6.0, 5.0, az + 0.6), "Trim")
 
     # Cleats: bow pair, midship (spring) pair on the gunwale caps, lying along the gunwale as it curves and rises,
-    # and the stern pair on the stern box's top, outboard of its hatches.
+    # and the stern pair on the gunwale beside the stern box. All on the middle of the cap, inboard of the collar.
     for t in (0.87, 0.49):
         for side in (1.0, -1.0):
-            _cleat(m, _gunwale_frame(t, side, 3.6))
+            _cleat(m, _gunwale_frame(t, side, GUNWALE_MID))
     s0 = station(0.0)
     for side in (1.0, -1.0):
-        _cleat(m, _frame((STERN_X + 33.0, side * (s0["sheer_b"] - 13.0), s0["sheer_z"]), (1.0, 0.0, 0.0)))
+        _cleat(m, _frame((STERN_X + 33.0, side * (s0["sheer_b"] - GUNWALE_MID), s0["sheer_z"]), (1.0, 0.0, 0.0)))
+    # Towing bitts: a short post with a cross-pin on each stern box top, behind its hatch, to tow from or be towed.
+    for side in (1.0, -1.0):
+        bx, by, bz = STERN_X + 6.0, side * 98.0, s0["sheer_z"]
+        m.box((bx - 4.5, by - 4.5, bz - 0.2), (bx + 4.5, by + 4.5, bz + 1.2), "Frame")
+        m.tube([(bx, by, bz + 1.0), (bx, by, bz + 18.0)], 3.0, "Frame", sides=12, caps=True)
+        m.tube([(bx, by - 7.0, bz + 13.0), (bx, by + 7.0, bz + 13.0)], 1.2, "Frame", sides=8, caps=True)
     # Tow post (samson post) on the foredeck, just aft of the anchor locker.
     tx = 345.0
     tz = _deck_z_at(tx)
-    m.box((tx - 6.0, -6.0, tz), (tx + 6.0, 6.0, tz + 1.5), "Frame")
-    m.tube([(tx, 0.0, tz + 1.5), (tx, 0.0, tz + 32.0)], 3.0, "Frame", sides=12)
-    m.tube([(tx, -9.0, tz + 24.0), (tx, 9.0, tz + 24.0)], 1.5, "Frame", sides=8)
-    # Bow eye on the stem, above the waterline, and towing / lifting eyes on the transom corners.
-    _ring(m, (tip["x"] - 12.0, 0.0, 22.0), 4.0, 1.2, "xz", "Frame")
+    m.box((tx - 6.0, -6.0, tz - 0.6), (tx + 6.0, 6.0, tz + 1.5), "Frame")
+    m.tube([(tx, 0.0, tz + 1.5), (tx, 0.0, tz + 32.0)], 3.0, "Frame", sides=12, caps=True)
+    m.tube([(tx, -9.0, tz + 24.0), (tx, 9.0, tz + 24.0)], 1.5, "Frame", sides=8, caps=True)
+    # Bow eye standing out of the stem above the waterline, and towing / lifting eyes on the transom's upper
+    # corners, outboard of the motor notch and clear of the ladder; each eye stands square out of its face.
+    _ring(m, (tip["x"] + 1.5, 0.0, 22.0), 3.5, 1.0, "xz", "Frame")
     for side in (1.0, -1.0):
-        _ring(m, (STERN_X - 1.5, side * 84.0, 55.0), 3.5, 1.0, "yz", "Frame")   # clear of the ladder
+        _ring(m, (STERN_X - 2.5, side * 100.0, 55.0), 3.5, 1.0, "xz", "Frame")
 
-    # Combination bow light at the stem: red to port, green to starboard.
-    lz = tip["sheer_z"] + 2.0
-    m.box((tip["x"] - 16.0, -3.0, lz), (tip["x"] - 8.0, 0.0, lz + 4.0), "NavRed")
-    m.box((tip["x"] - 16.0, 0.0, lz), (tip["x"] - 8.0, 3.0, lz + 4.0), "NavGreen")
-    m.box((tip["x"] - 17.0, -4.0, lz - 1.0), (tip["x"] - 7.0, 4.0, lz), "Trim")
+    # Combination bow light on the foredeck at the stem: red to port, green to starboard, on a low base.
+    lx = BOW_LIGHT[0]
+    lz = BOW_LIGHT[2] - 2.0
+    base_z = station((lx - 4.0 - STERN_X) / LENGTH)["sheer_z"] - 0.5
+    m.box((lx - 3.0, -3.0, lz), (lx + 3.0, 0.0, lz + 4.0), "NavRed")
+    m.box((lx - 3.0, 0.0, lz), (lx + 3.0, 3.0, lz + 4.0), "NavGreen")
+    m.box((lx - 4.0, -3.5, base_z), (lx + 4.0, 3.5, lz), "Trim")
 
-    # Weapon mount sockets: one on the foredeck behind the tow post, one at each aft corner of the cockpit.
-    for x, y, z in ((315.0, 0.0, _deck_z_at(315.0)),
-                    (-315.0, station(0.1)["sheer_b"] - 3.8, station(0.1)["sheer_z"]),
-                    (-315.0, -(station(0.1)["sheer_b"] - 3.8), station(0.1)["sheer_z"])):
-        hw = 6.0 if y == 0.0 else 3.8          # the gunwale's sockets sit on its 6 cm cap
-        m.box((x - 6.0, y - hw, z), (x + 6.0, y + hw, z + 1.2), "Frame")
+    # Weapon mount sockets: one on the foredeck behind the tow post, one at each aft corner of the cockpit on the
+    # gunwale cap. Each is a stainless tube with a dark bore.
+    for x, y, z in ((315.0, 0.0, _deck_z_at(315.0)), _gunwale_point(-315.0, GUNWALE_MID),
+                    _gunwale_point(-315.0, GUNWALE_MID, side=-1.0)):
+        hw = 6.0 if y == 0.0 else 4.5
+        m.box((x - 6.0, y - hw, z - 0.6), (x + 6.0, y + hw, z + 1.2), "Frame")
         m.tube([(x, y, z + 1.2), (x, y, z + 14.0)], 3.2, "Frame", sides=12)
+        top = z + 14.0
+        m.grid([_circle((x, y, top), 3.2), _circle((x, y, top), 2.2)], "Frame",
+               outward_hint=lambda p, top=top: (p[0], p[1], top - 10.0), close_rows=True)
+        m.grid([_circle((x, y, top), 2.2), _circle((x, y, top - 2.0), 2.2)], "Trim", close_rows=True,
+               outward_hint=lambda p, x=x, y=y: (2 * p[0] - x, 2 * p[1] - y, p[2]))      # the bore's wall, facing in
+        m.fan(_circle((x, y, top - 2.0), 2.2), "Trim", outward_hint=lambda p, top=top: (p[0], p[1], top - 10.0))
 
     # The life ring in its holder on the console's front face, where it's to hand from the foredeck and the helm.
     ring_c = (40.5, 0.0, DECK_Z + 36.0)
-    m.tube([(ring_c[0], 30.0 * math.cos(a), ring_c[2] + 30.0 * math.sin(a)) for a in [2 * math.pi * i / 24 for i in range(25)]],
-           5.0, "Safety", sides=10)
+    m.tube([(ring_c[0], 30.0 * math.cos(a), ring_c[2] + 30.0 * math.sin(a)) for a in [2 * math.pi * i / 24 for i in range(24)]],
+           5.0, "Safety", sides=10, closed=True)
     for dy in (-18.0, 18.0):
-        m.tube([(35.0, dy, ring_c[2] + 26.0), (41.0, dy, ring_c[2] + 26.0), (41.0, dy, ring_c[2] + 32.0)], 0.9, "Frame", sides=6)
+        m.tube([(35.0, dy, ring_c[2] + 26.0), (41.0, dy, ring_c[2] + 26.0), (41.0, dy, ring_c[2] + 32.0)], 0.9, "Frame",
+               sides=6, caps=True)
 
     # Console: grab rails down both sides, the fire extinguisher on its bracket to port, and the compass up top.
     for side in (1.0, -1.0):
         y = side * 49.0
-        m.tube([(-38.0, side * 45.0, DECK_Z + 70.0), (-38.0, y, DECK_Z + 70.0), (22.0, y, DECK_Z + 70.0),
-                (22.0, side * 45.0, DECK_Z + 70.0)], 1.3, "Frame", sides=8)
+        m.tube([(-38.0, side * 44.5, DECK_Z + 70.0), (-38.0, y, DECK_Z + 70.0), (22.0, y, DECK_Z + 70.0),
+                (22.0, side * 44.5, DECK_Z + 70.0)], 1.3, "Frame", sides=8)
     m.tube([(-10.0, -51.0, DECK_Z + 14.0), (-10.0, -51.0, DECK_Z + 50.0)], 5.5, "Red", sides=12)
+    m.fan(_circle((-10.0, -51.0, DECK_Z + 14.0), 5.5), "Red", outward_hint=lambda p: (p[0], p[1], p[2] + 10.0))
     _dome(m, (-10.0, -51.0, DECK_Z + 50.0), 5.5, 4.0, "Red")
-    m.tube([(-10.0, -51.0, DECK_Z + 54.0), (-13.0, -51.0, DECK_Z + 58.0)], 1.0, "Trim", sides=6)
+    m.tube([(-10.0, -51.0, DECK_Z + 54.0), (-13.0, -51.0, DECK_Z + 58.0)], 1.0, "Trim", sides=6, caps=True)
     m.box((-8.0, -46.0, DECK_Z + 20.0), (-5.0, -45.0, DECK_Z + 46.0), "Frame")
     _dome(m, (-8.0, 0.0, DECK_Z + 112.0), 6.0, 5.0, "Glass")
     m.tube([(-8.0, 0.0, DECK_Z + 112.0), (-8.0, 0.0, DECK_Z + 113.5)], 6.5, "Trim", sides=12)
+    m.grid([_circle((-8.0, 0.0, DECK_Z + 113.5), 6.5), _circle((-8.0, 0.0, DECK_Z + 113.5), 5.5)], "Trim",
+           outward_hint=lambda p: (p[0], p[1], p[2] - 10.0), close_rows=True)
 
-    # Leaning post: backrest bolster and a grab rail across its back.
+    # Leaning post: backrest bolster and a grab rail across its back, its ends into the bolster.
     m.box((-177.0, -38.0, DECK_Z + 92.0), (-171.0, 38.0, DECK_Z + 120.0), "Cushion")
-    m.tube([(-178.0, -36.0, DECK_Z + 80.0), (-182.0, -36.0, DECK_Z + 124.0), (-182.0, 36.0, DECK_Z + 124.0),
-            (-178.0, 36.0, DECK_Z + 80.0)], 1.3, "Frame", sides=8)
+    m.tube([(-175.5, -36.0, DECK_Z + 100.0), (-182.0, -36.0, DECK_Z + 124.0), (-182.0, 36.0, DECK_Z + 124.0),
+            (-175.5, 36.0, DECK_Z + 100.0)], 1.3, "Frame", sides=8)
 
-    # Cockpit drains (scuppers) at the foot of the stern bulkhead, and the fuel filler on the starboard gunwale.
+    # Cockpit drains (scuppers) at the foot of the stern bulkhead, and the fuel filler on the starboard gunwale
+    # with its tank's vents on the hull sides below the collar, just forward of it.
     for side in (1.0, -1.0):
         m.box((BULKHEAD_X - 0.5, side * 60.0 - 8.0, DECK_Z), (BULKHEAD_X + 0.3, side * 60.0 + 8.0, DECK_Z + 6.0), "Trim")
-    fs = station(0.2)
-    m.tube([(fs["x"], fs["sheer_b"] - 3.6, fs["sheer_z"]), (fs["x"], fs["sheer_b"] - 3.6, fs["sheer_z"] + 0.8)], 2.4, "Frame", sides=12)
+    fx, fy, fz = FUEL_FILLER
+    m.tube([(fx, fy, fz - 0.5), (fx, fy, fz + 0.8)], 2.4, "Frame", sides=12, caps=True)
+    m.box((fx - 0.4, fy - 1.6, fz + 0.8), (fx + 0.4, fy + 1.6, fz + 1.3), "Frame")
+    for side in (1.0, -1.0):
+        vx = fx + 25.0
+        st = station((vx - STERN_X) / LENGTH)
+        vz = st["sheer_z"] - 27.0
+        vy = _side_y(st, vz)
+        # A clamshell vent: a half-round hood opening aft, on a flat plate set into the side.
+        m.box((vx - 4.0, side * (vy - 0.3), vz - 2.5), (vx + 4.0, side * (vy + 0.4), vz + 2.5), "Frame")
+        hood = [[(vx + 3.5 - 7.0 * f, side * (vy + 0.4 + 1.8 * math.sin(a) * (1.0 - 0.6 * f)), vz + 2.0 * math.cos(a))
+                 for a in [math.pi * k / 6 for k in range(7)]] for f in (0.0, 0.5, 1.0)]
+        m.grid(hood, "Frame", outward_hint=lambda p, side=side, vy=vy, vz=vz: (p[0], side * vy, vz))
+        m.fan(hood[0], "Frame", outward_hint=lambda p, vx=vx: (vx - 10.0, p[1], p[2]))
+        m.fan(hood[-1], "Trim", outward_hint=lambda p, vx=vx: (vx + 10.0, p[1], p[2]))
+
+    # A grab rail along each gunwale from the stern quarters to the cockpit's forward end, on stanchions: the
+    # handhold for crew along the side decks (the bow rail carries on forward of it).
+    for side in (1.0, -1.0):
+        x0, x1 = GRAB_RAIL_X
+        n = 20
+        xs = [x0 + (x1 - x0) * i / n for i in range(n + 1)]
+        a = _gunwale_point(x0 - 4.0, GUNWALE_MID, 0.0, side)
+        b = _gunwale_point(x1 + 4.0, GUNWALE_MID, 0.0, side)
+        rail = [_gunwale_point(x, GUNWALE_MID, GRAB_RAIL_H, side) for x in xs]
+        m.tube([(a[0], a[1], a[2] - 0.5), (a[0] + 1.0, a[1], a[2] + GRAB_RAIL_H - 5.0)] + rail +
+               [(b[0] - 1.0, b[1], b[2] + GRAB_RAIL_H - 5.0), (b[0], b[1], b[2] - 0.5)], 1.6, "Frame", sides=8)
+        for x in [x0 - 4.0] + list(GRAB_RAIL_STANCHIONS) + [x1 + 4.0]:
+            p = _gunwale_point(x, GUNWALE_MID, 0.0, side)
+            if x in GRAB_RAIL_STANCHIONS:
+                m.tube([(p[0], p[1], p[2] - 0.5), (p[0], p[1], p[2] + GRAB_RAIL_H)], 1.4, "Frame", sides=8)
+            m.tube([(p[0], p[1], p[2] - 0.2), (p[0], p[1], p[2] + 1.0)], 2.8, "Frame", sides=12, caps=True)
 
     # Transom: hydraulic trim tabs hinged along the bottom edge between the motors and the corners, following the
     # V of the bottom and set down a few degrees, each worked by a ram from a mount higher up the transom. Clear of
     # the motors' lower units at full lock and trim, and of the ladder.
-    s0 = station(0.0)
     for side in (1.0, -1.0):
         _trim_tab(m, s0, side, 60.0, 88.0)
-    # The boarding ladder reaches into the water, so a swimmer can climb out (ARiptideBoat's ladder foot): two
-    # stainless rails on standoffs off the transom's port corner, flat treads, and a grab handle over the top.
+    # The boarding ladder reaches well into the water, so a swimmer can climb out (ARiptideBoat's ladder foot): two
+    # stainless rails on standoffs off the transom's port corner, flat treads, and a grab handle over the top that
+    # comes down onto the stern box, aft of its hatch.
     lx = STERN_X - 4.0
     for y in (-114.0, -94.0):
-        m.tube([(lx, y, -45.0), (lx, y, 72.0), (STERN_X + 2.0, y, 80.0), (STERN_X + 14.0, y, 80.0)], 1.2, "Frame", sides=8)
+        m.tube([(lx, y, LADDER_BOTTOM_Z), (lx, y, 72.0), (STERN_X + 2.0, y, 80.0), (STERN_X + 6.0, y, 80.0),
+                (STERN_X + 7.0, y, s0["sheer_z"] - 0.5)], 1.2, "Frame", sides=8, caps=True)
         for z in (8.0, 58.0):
             m.box((lx, y - 1.0, z - 2.0), (STERN_X, y + 1.0, z + 2.0), "Frame")
-    for z in (-38.0, -22.0, -6.0, 10.0, 26.0, 42.0, 58.0):
+    for z in LADDER_RUNGS:
         m.box((lx - 2.2, -113.0, z - 0.7), (lx + 2.2, -95.0, z + 0.7), "Frame")
-    # Bilge pump outlets on the hull sides, aft.
+    # Bilge pump outlets on the hull sides, aft, set into the plating.
     for x in (-300.0, -200.0):
         st = station((x - STERN_X) / LENGTH)
+        z = st["sheer_z"] - 28.0
         for side in (1.0, -1.0):
-            _ring(m, (x, side * (st["sheer_b"] + 0.5), st["sheer_z"] - 28.0), 2.0, 0.6, "xz", "Frame")
+            _ring(m, (x, side * (_side_y(st, z) + 0.3), z), 2.0, 0.6, "xz", "Frame")
 
     # Running strakes along the bottom: they throw the spray out sideways and give the hull its grip.
     for f in (0.38, 0.68):
@@ -526,7 +686,7 @@ def _fittings(m):
                 y = st["chine_b"] * f
                 z = st["keel_z"] + (st["chine_z"] - st["keel_z"]) * (f ** 0.9) - 1.0
                 path.append((st["x"], side * y, z))
-            m.tube(path, 1.6, "Aluminium", sides=5)
+            m.tube(path, 1.6, "Aluminium", sides=5, caps=True)
 
 
 def _bottom_z(s, y):
@@ -547,10 +707,10 @@ def _trim_tab(m, s0, side, y0, y1, length=23.0, drop_deg=6.0, thick=0.8):
     m.grid(bottom, "Frame", outward_hint=lambda p: (p[0], p[1], p[2] + 20.0))
     for row_a, row_b in ((trail, [(p[0], p[1], p[2] - thick) for p in trail]),):
         m.grid([row_a, row_b], "Frame", outward_hint=lambda p: (p[0] + 20.0, p[1], p[2]))
-    for i in (0, -1):
+    for i, out in ((0, 0.0), (-1, side * 300.0)):          # the inboard end faces in, the outboard end out
         _quad(m, hinge[i], trail[i], (trail[i][0], trail[i][1], trail[i][2] - thick), (hinge[i][0], hinge[i][1], hinge[i][2] - thick),
-              "Frame", (STERN_X - length / 2, 0.0, hinge[i][2]))
-    m.tube([(STERN_X - 0.8, p[1], p[2] - 0.3) for p in hinge], 0.9, "Frame", sides=6)
+              "Frame", (STERN_X - length / 2, out, hinge[i][2]))
+    m.tube([(STERN_X - 0.8, p[1], p[2] - 0.3) for p in hinge], 0.9, "Frame", sides=6, caps=True)
     # The ram: its cylinder on a bracket up the transom, its rod down to a clevis on the tab's top.
     ym = side * 0.5 * (y0 + y1)
     zm = _bottom_z(s0, ym)
@@ -558,8 +718,8 @@ def _trim_tab(m, s0, side, y0, y1, length=23.0, drop_deg=6.0, thick=0.8):
     lower = (STERN_X - length * 0.6, ym, zm - drop * 0.6 + 1.2)
     mid = tuple(upper[a] + (lower[a] - upper[a]) * 0.55 for a in range(3))
     m.box((STERN_X - 2.0, ym - 3.0, zm + 27.0), (STERN_X, ym + 3.0, zm + 33.0), "Trim")
-    m.tube([upper, mid], 2.2, "Trim", sides=10)
-    m.tube([mid, lower], 0.8, "Frame", sides=6)
+    m.tube([upper, mid], 2.2, "Trim", sides=10, caps=True)
+    m.tube([mid, lower], 0.8, "Frame", sides=6, caps=True)
     m.box((lower[0] - 2.0, ym - 1.5, lower[2] - 1.2), (lower[0] + 2.0, ym + 1.5, lower[2] + 0.6), "Frame")
 
 
@@ -572,7 +732,7 @@ def _quad(m, a, b, c, d, material, facing):
 def _stern_box(m, s0):
     """The bulkhead across the stern, its flat top with hatches, and the splashwell behind it in front of the motors."""
     top = s0["sheer_z"]
-    inner = s0["sheer_b"] - 6.0
+    inner = s0["sheer_b"] - GUNWALE_W
     x0, x1 = STERN_X + TRANSOM_THICK, BULKHEAD_X        # inside of the transom, front of the box
     cockpit = (0.0, 0.0, DECK_Z + 60.0)
     # Bulkhead facing the cockpit, deck to gunwale, the full width between the bulwarks.
@@ -581,7 +741,7 @@ def _stern_box(m, s0):
     for side in (1.0, -1.0):
         _quad(m, (x0 - TRANSOM_THICK, side * WELL_HALF, top), (x1, side * WELL_HALF, top), (x1, side * inner, top),
               (x0 - TRANSOM_THICK, side * inner, top), "Deck", (-360.0, side * 90.0, top + 100.0))
-        hy0, hy1 = side * (WELL_HALF + 8.0), side * (inner - 16.0)      # outboard of it, the stern cleat
+        hy0, hy1 = side * (WELL_HALF + 6.0), side * (inner - 4.0)       # outboard of it, the stern cleat
         m.box((x0 + 6.0, min(hy0, hy1), top), (x1 - 8.0, max(hy0, hy1), top + 0.8), "Trim")
     # Splashwell: floor, sides, the bulkhead's back, and the inside of the transom up to the sill.
     well_centre = ((x0 + x1) / 2, 0.0, (WELL_FLOOR_Z + top) / 2)
@@ -601,8 +761,8 @@ def _stern_box(m, s0):
         for dy, r in ((-4.0, 1.6), (3.0, 1.2)):
             y = my + dy
             m.tube([(x1 - 0.5, y * 0.8, top - 12.0), (x1 - 12.0, y * 0.85, WELL_FLOOR_Z + 4.0),
-                    (x0 + 8.0, y, WELL_FLOOR_Z + 3.0), (x0 + 1.0, y, SILL_Z + 3.0), (STERN_X - 6.0, y, SILL_Z + 2.0)],
-                   r, "Trim", sides=6)
+                    (x0 + 8.0, y, WELL_FLOOR_Z + 3.0), (x0 + 1.0, y, SILL_Z + 6.0), (STERN_X - 12.0, y, SILL_Z + 5.0)],
+                   r, "Trim", sides=6, caps=True)  # over the bracket's hook and into the cowling's front
 
 
 def _console(m):
@@ -616,7 +776,7 @@ def _console(m):
     # Throttle binnacle on the console's back, right of the wheel: the twin levers (a separate model) pivot on top.
     bx, by, bz = BINNACLE
     m.box((bx - 4.0, by - 9.0, bz - 14.0), (-45.0, by + 9.0, bz), "Trim")
-    m.tube([(bx, by - 8.0, bz), (bx, by + 8.0, bz)], 2.2, "Frame", sides=10)
+    m.tube([(bx, by - 8.0, bz), (bx, by + 8.0, bz)], 2.2, "Frame", sides=10, caps=True)
 
     # Leaning post behind the helm, with a padded bolster. It leaves about 75 cm to stand in behind the wheel, room
     # to stay clear of it with the boat pitching.
@@ -630,7 +790,7 @@ def _windscreen(m, base_z):
     height = 38.0
     front_lean, wing_lean = height * math.tan(math.radians(25.0)), height * math.tan(math.radians(8.0))
     # Base outline on the console top (plan view), from the port wing round the front to the starboard wing.
-    corner_r, front_x, half = 13.0, 5.0, 45.0
+    corner_r, front_x, half = 22.0, 5.0, 45.0      # corners rounder than the front's rake, so the top edge stays fair
     cx, cy = front_x - corner_r, half - corner_r
     port = [(-20.0, -half), (cx, -half)]
     port += [(cx + corner_r * math.sin(a), -cy - corner_r * math.cos(a)) for a in [math.radians(15 * i) for i in range(1, 6)]]
@@ -647,18 +807,19 @@ def _windscreen(m, base_z):
     base, top_row = [], []
     for i, (x, y) in enumerate(base_xy):
         nx, ny = inward(i)
-        lean = front_lean * nx * nx + wing_lean * ny * ny   # the front rakes well back; the wings stand nearly upright
+        # The front rakes well back, the wings stand nearly upright, blending smoothly round the corners.
+        lean = wing_lean + (front_lean - wing_lean) * (1.0 - abs(ny))
         base.append((x, y, base_z))
         top_row.append((x + nx * lean, y + ny * lean, base_z + height))
     m.grid([base, top_row], "Glass", outward_hint=lambda p: (-60.0, 0.0, p[2]))
     # Frame: a grab rail along the top, posts at the wing ends and the front corners, and a trim strip along the base.
-    m.tube(top_row, 1.8, "Frame", sides=8)
+    m.tube(top_row, 1.8, "Frame", sides=8, caps=True)
     for i in (0, 2 + 5 - 1, len(base) - 1 - (2 + 5 - 1), len(base) - 1):
-        m.tube([base[i], top_row[i]], 1.4, "Frame", sides=8)
-    m.tube(base, 1.2, "Trim", sides=6)
+        m.tube([base[i], top_row[i]], 1.4, "Frame", sides=8, caps=True)
+    m.tube(base, 1.2, "Trim", sides=6, caps=True)
 
 
-WHEEL_CENTRE = (-53.0, 0.0, DECK_Z + 88.0)   # the wheel's hub (ARiptideBoat's WheelCentre)
+WHEEL_CENTRE = (-56.0, 0.0, DECK_Z + 88.0)   # the wheel's hub (ARiptideBoat's WheelCentre)
 WHEEL_TILT_DEG = 35.0                        # its face tilted back from upright, toward the helmsman
 
 
@@ -674,27 +835,27 @@ def _dash_and_wheel(m, deck):
     def on_slope(f, y, out=0.6):
         return (lo[0] + sx * f + nx * out, y, lo[1] + sz * f + nz * out)
     # Black panel across the dash, with a chart display in the middle and a gauge either side.
-    panel = [on_slope(0.05, -40.0), on_slope(0.05, 40.0), on_slope(0.95, 40.0), on_slope(0.95, -40.0)]
+    panel = [on_slope(0.05, -40.0, 0.15), on_slope(0.05, 40.0, 0.15), on_slope(0.95, 40.0, 0.15), on_slope(0.95, -40.0, 0.15)]
     m._part(panel, [(0, 1, 2), (0, 2, 3)], "Trim", outward_hint=lambda p: (p[0] - 50.0 * nx, p[1], p[2] - 50.0 * nz))
     # The screen's bezel and the gauges' chrome rings; the faces are live displays (ARiptideBoat's gauges).
     sy0, sy1, sf0, sf1 = 17.0, 17.0, 0.12, 0.9
-    bezel = [on_slope(sf0, -sy0), on_slope(sf0, sy1), on_slope(sf1, sy1), on_slope(sf1, -sy0), on_slope(sf0, -sy0)]
-    m.tube([(p[0] + nx * 1.0, p[1], p[2] + nz * 1.0) for p in bezel], 0.7, "Trim", sides=6)
+    bezel = [on_slope(sf0, -sy0), on_slope(sf0, sy1), on_slope(sf1, sy1), on_slope(sf1, -sy0)]
+    m.tube([(p[0] + nx * 0.4, p[1], p[2] + nz * 0.4) for p in bezel], 0.7, "Trim", sides=6, closed=True)
     for gy in (-28.5, 28.5):
         c = on_slope(0.5, gy, 1.2)
         ring = [(c[0] + 7.2 * math.sin(a) * ux, c[1] + 7.2 * math.cos(a), c[2] + 7.2 * math.sin(a) * uz)
-                for a in [2 * math.pi * i / 24 for i in range(25)]]
-        m.tube(ring, 0.9, "Frame", sides=6)
+                for a in [2 * math.pi * i / 24 for i in range(24)]]
+        m.tube(ring, 0.9, "Frame", sides=6, closed=True)
 
     # The helm: a tilt-helm bezel on the console's rear face and the shaft out of it to the wheel (build_wheel, which
     # turns on it: ARiptideBoat's WheelCentre).
     tilt = math.radians(WHEEL_TILT_DEG)
     axis = (-math.cos(tilt), 0.0, math.sin(tilt))      # the wheel faces back and up
     cx, cy, cz = WHEEL_CENTRE
-    shaft_in = (cx - axis[0] * 12.0, 0.0, cz - axis[2] * 12.0)
+    shaft_in = (cx - axis[0] * 15.0, 0.0, cz - axis[2] * 15.0)
     hub_back = (cx - axis[0] * 4.5, 0.0, cz - axis[2] * 4.5)
     m.tube([shaft_in, hub_back], 1.6, "Frame", sides=10)
-    _cone(m, (cx - axis[0] * 12.5, 0.0, cz - axis[2] * 12.5), (cx - axis[0] * 9.0, 0.0, cz - axis[2] * 9.0), 6.5, 3.0, "Trim", sides=14)
+    _cone(m, (cx - axis[0] * 15.5, 0.0, cz - axis[2] * 15.5), (cx - axis[0] * 12.0, 0.0, cz - axis[2] * 12.0), 6.5, 3.0, "Trim", sides=14)
 
 
 def _t_top(m):
@@ -703,19 +864,18 @@ def _t_top(m):
     # Legs close in against the console and leaning post, leaving the side decks clear to walk.
     legs = [(-150.0, 48.0), (-150.0, -48.0), (20.0, 48.0), (20.0, -48.0)]
     for x, y in legs:
-        m.tube([(x, y, deck), (x, y * 1.05, deck + 110.0), (x + (8.0 if x > 0 else -8.0), y * 1.25, top)], 3.5, "Frame")
+        m.tube([(x, y, deck - 0.5), (x, y * 1.05, deck + 110.0), (x + (8.0 if x > 0 else -8.0), y * 1.25, top)], 3.5, "Frame")
     # Canopy frame and roof.
     ring = [(-158.0, 60.0, top), (28.0, 60.0, top), (28.0, -60.0, top), (-158.0, -60.0, top), (-158.0, 60.0, top)]
-    m.tube(ring, 3.5, "Frame")
+    m.tube(ring, 3.5, "Frame", closed=True)
     m.box((-165.0, -70.0, top + 2.0), (35.0, 70.0, top + 8.0), "Canopy")
     roof = top + 8.0
     # Searchlight (starboard) and FLIR thermal camera ball (port) at the front edge, each on a pan-tilt base. The
     # searchlight's head is its own model (build_searchlight), aimed from the helm.
-    m.tube([(26.0, 40.0, roof), (26.0, 40.0, roof + 8.0)], 5.0, "Trim", sides=12)
-    m.tube([(26.0, -40.0, roof), (26.0, -40.0, roof + 6.0)], 5.0, "Trim", sides=12)
+    m.tube([(26.0, 40.0, roof), (26.0, 40.0, roof + 8.0)], 5.0, "Trim", sides=12, caps=True)
+    m.tube([(26.0, -40.0, roof), (26.0, -40.0, roof + 8.0)], 5.0, "Trim", sides=12)    # up into the ball
     _ball(m, (26.0, -40.0, roof + 15.0), 9.0, "White")
-    m.fan([(26.0 + 8.6, -40.0 + 4.0 * math.cos(a), roof + 15.0 + 4.0 * math.sin(a)) for a in [2 * math.pi * i / 12 for i in range(12)]],
-          "Trim", outward_hint=lambda p: (0.0, -40.0, roof + 15.0))
+    m.tube([(26.0 + 6.5, -40.0, roof + 15.0), (26.0 + 9.4, -40.0, roof + 15.0)], 3.6, "Trim", sides=12, caps=True)
     # Open-array radar pedestal (the array itself is a separate, spinning model: build_radar_array).
     m.box((-80.0, -12.0, roof), (-60.0, 12.0, roof + 22.0), "White")
     m.tube([(RADAR[0], 0.0, roof + 22.0), (RADAR[0], 0.0, RADAR[2])], 5.0, "White", sides=12)
@@ -727,19 +887,20 @@ def _t_top(m):
     # VHF whips (2.4 m) on ratchet mounts at the aft corners, raked slightly aft, and a short AIS whip.
     for y in (-62.0, 62.0):
         m.box((-162.0, y - 3.0, roof), (-156.0, y + 3.0, roof + 6.0), "Frame")
-        m.tube([(-159.0, y, roof + 6.0), (-175.0, y * 1.02, roof + 240.0)], 1.2, "White", sides=6)
-    m.tube([(-150.0, 20.0, roof), (-153.0, 20.0, roof + 95.0)], 0.9, "Trim", sides=6)
+        m.tube([(-159.0, y, roof + 6.0), (-175.0, y * 1.02, roof + 240.0)], 1.2, "White", sides=6, caps=True)
+    m.tube([(-150.0, 20.0, roof), (-153.0, 20.0, roof + 95.0)], 0.9, "Trim", sides=6, caps=True)
     # All-round white masthead light on a pole, aft centre, clear above everything.
     m.tube([(-162.0, 0.0, roof), (-162.0, 0.0, roof + 85.0)], 2.0, "Frame", sides=8)
     m.tube([(-162.0, 0.0, roof + 85.0), (-162.0, 0.0, roof + 93.0)], 3.2, "NavWhite", sides=12)
-    m.box((-165.0, -3.5, roof + 93.0), (-159.0, 3.5, roof + 95.0), "Trim")
+    m.tube([(-162.0, 0.0, roof + 84.2), (-162.0, 0.0, roof + 85.2)], 3.6, "Trim", sides=12, caps=True)   # the lens base
+    m.box((-165.6, -3.6, roof + 93.0), (-158.4, 3.6, roof + 95.0), "Trim")
     # Loudhailer horn under the canopy's front lip, and the ship's horn beside it.
     m.box((24.0, -8.0, top - 12.0), (32.0, 8.0, top + 2.0), "Trim")
     _cone(m, (32.0, 0.0, top - 5.0), (46.0, 0.0, top - 5.0), 4.0, 10.0, "White")
     m.fan([(33.0, 4.0 * math.cos(a), top - 5.0 + 4.0 * math.sin(a)) for a in [2 * math.pi * i / 12 for i in range(12)]],
           "Trim", outward_hint=lambda p: (20.0, 0.0, top - 5.0))            # the driver, deep in the throat
-    m.tube([(46.0, 10.0 * math.cos(a), top - 5.0 + 10.0 * math.sin(a)) for a in [2 * math.pi * i / 16 for i in range(17)]],
-           0.6, "White", sides=6)                                              # a rolled lip on the bell
+    m.tube([(46.0, 10.0 * math.cos(a), top - 5.0 + 10.0 * math.sin(a)) for a in [2 * math.pi * i / 16 for i in range(16)]],
+           0.6, "White", sides=6, closed=True)                                              # a rolled lip on the bell
     _cone(m, (22.0, 20.0, top - 6.0), (34.0, 20.0, top - 6.0), 2.0, 5.0, "Frame")
     m.box((20.0, 18.0, top - 8.0), (24.0, 22.0, top - 4.0), "Trim")
     # Overhead electronics box above the helm with two VHF radios and a speaker in its face.
@@ -762,15 +923,15 @@ def _electronics_box(m, top):
     m.box((x - 1.2, 1.0, top - 19.0), (x, 24.0, top - 5.0), "Trim")
     m.box((x - 1.5, 6.0, top - 15.5), (x - 1.2, 18.0, top - 8.5), "Lamp")
     for yk, zk, r in ((3.5, top - 9.0, 1.4), (3.5, top - 15.0, 1.4), (21.0, top - 9.0, 1.1)):
-        m.tube([(x - 1.2, yk, zk), (x - 3.2, yk, zk)], r, "Frame", sides=10)
+        m.tube([(x - 1.2, yk, zk), (x - 3.2, yk, zk)], r, "Frame", sides=10, caps=True)
     for i in range(4):
         m.box((x - 1.6, 7.0 + 2.8 * i, top - 18.0), (x - 1.2, 9.0 + 2.8 * i, top - 16.6), "Console")
-    m.tube([(x - 1.2, MIC_CORD_JACK[1], MIC_CORD_JACK[2]), (MIC_CORD_JACK[0], MIC_CORD_JACK[1], MIC_CORD_JACK[2])], 0.8, "Frame", sides=8)
+    m.tube([(x - 1.2, MIC_CORD_JACK[1], MIC_CORD_JACK[2]), (MIC_CORD_JACK[0], MIC_CORD_JACK[1], MIC_CORD_JACK[2])], 0.8, "Frame", sides=8, caps=True)
     # Second radio (the AIS), smaller.
     m.box((x - 1.2, -17.0, top - 17.0), (x, -2.0, top - 7.0), "Trim")
     m.box((x - 1.5, -14.5, top - 14.5), (x - 1.2, -5.0, top - 9.5), "Lamp")
     # Speaker grille.
-    m.tube([(x, -25.0, top - 11.0), (x - 1.0, -25.0, top - 11.0)], 5.0, "Trim", sides=14)
+    m.tube([(x, -25.0, top - 11.0), (x - 1.0, -25.0, top - 11.0)], 5.0, "Trim", sides=14, caps=True)
     for dz in (-3.0, -1.0, 1.0, 3.0):
         w = math.sqrt(max(0.0, 16.0 - dz * dz))
         m.box((x - 1.3, -25.0 - w, top - 11.0 + dz - 0.3), (x - 1.0, -25.0 + w, top - 11.0 + dz + 0.3), "Frame")
@@ -781,15 +942,27 @@ def _electronics_box(m, top):
 
 
 def _bow_rail(m):
-    secs = [station(t) for t in [0.55 + 0.45 * i / 20 for i in range(21)]]
+    """The bow rail (pulpit): one continuous stainless tube from the port gunwale round the bow to the starboard
+    gunwale, each end coming down to a foot on the cap, with stanchions between, all on the middle of the cap."""
+    inset, h = GUNWALE_MID, 30.0
+    lo, hi = 0.9, 1.0                    # where the rail's line, `inset` in from the sheer, meets the centreline
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if station(mid)["sheer_b"] > inset else (lo, mid)
+    tip = station(lo)
+    secs = [station(0.55 + (lo - 0.012 - 0.55) * i / 20) for i in range(21)]
+    x0 = secs[0]["x"] - 6.0
+    foot = _gunwale_point(x0, inset)
+    stbd = [(foot[0], foot[1], foot[2] - 0.5), (x0 + 1.5, foot[1], foot[2] + h - 4.0)]
+    stbd += [(s["x"], s["sheer_b"] - inset, s["sheer_z"] + h) for s in secs]
+    port = [(x, -y, z) for x, y, z in stbd]
+    m.tube(port + [(tip["x"], 0.0, tip["sheer_z"] + h)] + list(reversed(stbd)), 2.2, "Frame", sides=8)
     for side in (1.0, -1.0):
-        rail = [(s["x"], side * max(0.0, s["sheer_b"] - 10.0), s["sheer_z"] + 30.0) for s in secs[:-2]]
-        tip = secs[-2]
-        rail.append((tip["x"] + 5.0, 0.0, tip["sheer_z"] + 30.0))
-        m.tube(rail, 2.2, "Frame", sides=8)
-        for s in secs[:-2:4]:
-            b = max(0.0, s["sheer_b"] - 10.0)
-            m.tube([(s["x"], side * b, s["sheer_z"]), (s["x"], side * b, s["sheer_z"] + 30.0)], 1.8, "Frame", sides=8)
+        for i in (None, 4, 9, 14, 18):
+            p = _gunwale_point(x0, inset, 0.0, side) if i is None else _gunwale_point(secs[i]["x"], inset, 0.0, side)
+            if i is not None:
+                m.tube([(p[0], p[1], p[2] - 0.5), (p[0], p[1], p[2] + h)], 1.8, "Frame", sides=8)
+            m.tube([(p[0], p[1], p[2] - 0.2), (p[0], p[1], p[2] + 1.0)], 3.0, "Frame", sides=12, caps=True)
 
 
 def build_skiff():
@@ -809,21 +982,23 @@ def build_searchlight():
     """The searchlight's head: origin at its pivot, the beam along +X, on a yoke that sits on the T-top base."""
     m = Mesh()
     m.tube([(-6.0, 0.0, 0.0), (12.0, 0.0, 0.0)], 8.0, "Frame", sides=16)
-    m.fan([(-6.0, 7.9 * math.cos(a), 7.9 * math.sin(a)) for a in [2 * math.pi * i / 16 for i in range(16)]], "Frame",
+    m.fan([(-6.0, 8.0 * math.cos(a), 8.0 * math.sin(a)) for a in [2 * math.pi * i / 16 for i in range(16)]], "Frame",
           outward_hint=lambda p: (6.0, 0.0, 0.0))
     m.fan([(12.0, 7.2 * math.cos(a), 7.2 * math.sin(a)) for a in [2 * math.pi * i / 16 for i in range(16)]], "Lamp",
           outward_hint=lambda p: (0.0, 0.0, 0.0))
+    m.grid([[(12.0, r * math.cos(a), r * math.sin(a)) for a in [2 * math.pi * i / 16 for i in range(16)]] for r in (8.0, 7.2)],
+           "Trim", outward_hint=lambda p: (0.0, 0.0, 0.0), close_rows=True)     # the bezel round the lens
     for y in (-9.5, 9.5):
         m.box((-2.0, y - 1.0, -8.0), (4.0, y + 1.0, 1.0), "Trim")
     m.box((-2.0, -10.5, -9.0), (4.0, 10.5, -7.0), "Trim")
-    m.tube([(-6.0, 0.0, 5.0), (-10.0, 0.0, 9.0)], 1.0, "Trim", sides=6)   # handle
+    m.tube([(-6.0, 0.0, 5.0), (-10.0, 0.0, 9.0)], 1.0, "Trim", sides=6, caps=True)   # handle
     return m
 
 
 def build_radar_array():
     """The open-array radar antenna that spins on the T-top: origin at its hub, the array lying fore and aft."""
     m = Mesh()
-    m.tube([(0.0, 0.0, -4.0), (0.0, 0.0, 2.0)], 7.0, "White", sides=14)
+    m.tube([(0.0, 0.0, -4.0), (0.0, 0.0, 2.0)], 7.0, "White", sides=14, caps=True)
     m.box((-55.0, -3.0, 2.0), (55.0, 3.0, 12.0), "White")
     m.box((-55.5, -3.5, 5.0), (55.5, -3.0, 9.0), "Trim")
     return m
@@ -859,16 +1034,21 @@ def _loft(m, rings, material, centre_x, cap_bottom=False, cap_top=False):
         m.fan(rings[-1], material, outward_hint=lambda p: (centre_x, 0.0, p[2] - 10.0))
 
 
-# The outboard's lower unit, in its own frame (origin at the tilt tube, the transom's outer face at X = +5): a 25 in
-# shaft puts the anti-ventilation plate 64 cm under the clamp, 2-3 cm below the hull's bottom at the motor, and the
-# prop's centre 22 cm under the plate, so its tips just clear it.
+# The outboard's lower unit, in its own frame (origin at the tilt tube, the transom's outer face at X = +5). The
+# transom in the motor notch stands 80 cm above the hull's bottom under each motor, so the anti-ventilation plate is
+# 78 cm under the tilt tube (83 cm under the sill): 2.7 cm below the bottom there, as it should be, and the prop's
+# centre 22 cm under the plate, so its tips just clear it. (That's a long-shaft leg, between a 30 in XL and a 35 in
+# XXL; the motor's mounting holes make up the difference.)
 PLATE_Z = -78.0
-PROP_CENTRE = (-45.0, 0.0, -100.0)      # the boat's PropInOutboard
+# The motor's body (cowling, leg, gearcase, prop) sits this far aft of the tilt tube, behind its swivel bracket, so
+# the cowling's front corners clear the transom when it's steered hard over and trimmed out.
+BODY_AFT = 13.0
+PROP_CENTRE = (-45.0 - BODY_AFT, 0.0, -100.0)      # the boat's PropInOutboard
 PROP_RADIUS = 19.0                       # a 15 in x 19 in stainless three-blade
 
 
 def build_outboard():
-    """A big outboard (a 300 hp V8 on a 25 in shaft). Origin = the tilt tube at the top of its clamp bracket (a
+    """A big outboard (a 300 hp V8 on a long shaft). Origin = the tilt tube at the top of its clamp bracket (a
     separate model, fixed to the transom): the motor trims and steers about it. The prop sits at PROP_CENTRE."""
     m = Mesh()
     pz = PLATE_Z
@@ -882,20 +1062,19 @@ def build_outboard():
         (74.0, -30.0, 26.0, 21.5), (80.0, -31.0, 17.0, 13.5), (82.5, -31.5, 7.0, 5.0))]
     _loft(m, top, "Cowling", -27.0, cap_top=True)
     split = _superellipse_ring(8.0, -26.0, 32.3, 26.8)
-    m.tube(split + [split[0]], 0.8, "Trim", sides=6)
+    m.tube(split, 0.8, "Trim", sides=6, closed=True)
     # Air intake grille across the top of the back, and the latch at the front.
     for i in range(4):
         z = 58.0 + 3.0 * i
         m.box((-62.0 + 0.4 * i, -12.0, z), (-60.0 + 0.4 * i, 12.0, z + 1.2), "Trim")
     m.box((6.8, -5.0, 20.0), (7.8, 5.0, 24.0), "Trim")
 
-    # Steering: the swivel bracket hangs off the tilt tube and carries the steering tube; the motor rides on rubber
-    # mounts on it, just in front of the midsection.
-    for y in (-11.0, 11.0):
-        m.box((-6.0, y - 2.0, -4.0), (1.0, y + 2.0, 4.0), "Trim")
-    m.box((-6.0, -10.0, -3.0), (-2.0, 10.0, 3.0), "Trim")
-    m.tube([(-4.5, 0.0, -24.0), (-4.5, 0.0, 3.0)], 3.5, "Trim", sides=10)
-    m.box((-10.0, -6.0, -24.0), (-3.0, 6.0, -18.0), "Trim")
+    # Steering: the motor rides on rubber mounts off the swivel bracket's steering tube (build_outboard_swivel, which
+    # trims with the motor but doesn't steer), just in front of the leg and the lower cowl.
+    mounts_start = len(m.verts)
+    m.box((-10.0 - BODY_AFT, -4.0, -24.0), (-7.5, 4.0, -18.0), "Trim")
+    m.box((-8.0 - BODY_AFT, -4.0, -8.0), (-7.5, 4.0, -2.0), "Trim")
+    mounts_end = len(m.verts)
 
     # Midsection: the driveshaft housing, a streamlined leg from inside the chaps down to the plate.
     mid = [_foil_ring(z, le, c, t) for z, le, c, t in (
@@ -935,6 +1114,20 @@ def build_outboard():
     m.prism([(-10.0, cz - 5.0), (-37.0, cz - 5.0), (-36.0, cz - PROP_RADIUS - 5.0), (-28.0, cz - PROP_RADIUS - 6.5)], -1.3, 1.3,
             "Cowling")
 
+    # The whole body (everything but its mounts) sits BODY_AFT behind the tilt tube.
+    m.verts = [v if mounts_start <= i < mounts_end else ((v[0][0] - BODY_AFT, v[0][1], v[0][2]), v[1], v[2])
+               for i, v in enumerate(m.verts)]
+    return m
+
+
+def build_outboard_swivel():
+    """The swivel bracket: hung on the tilt tube, it tilts with the motor's trim but doesn't steer (the motor turns
+    in its steering tube). Same origin as build_outboard (ARiptideBoat's swivel components, posed by trim only)."""
+    m = Mesh()
+    for y in (-11.0, 11.0):
+        m.box((-6.0, y - 2.0, -4.0), (1.0, y + 2.0, 4.0), "Trim")
+    m.box((-6.0, -10.0, -3.0), (-2.0, 10.0, 3.0), "Trim")
+    m.tube([(-4.5, 0.0, -24.0), (-4.5, 0.0, 3.0)], 3.5, "Trim", sides=10, caps=True)
     return m
 
 
@@ -964,8 +1157,16 @@ def build_propeller():
                 x = cx + rake - dphi * pitch / (2 * math.pi)
                 row.append((x, r * math.cos(base + skew + dphi), cz + r * math.sin(base + skew + dphi)))
             rows.append(row)
-        m.grid(rows, "Prop")
-        m.grid([list(reversed(row)) for row in rows], "Prop")
+        # A thin blade seen from both sides: the same triangles twice, facing each way.
+        pts = [q for row in rows for q in row]
+        w = len(rows[0])
+        tris = []
+        for r in range(len(rows) - 1):
+            for c in range(w - 1):
+                a, b, cc, d = r * w + c, r * w + c + 1, (r + 1) * w + c + 1, (r + 1) * w + c
+                tris += [(a, b, cc), (a, cc, d)]
+        m._part(pts, tris, "Prop")
+        m._part(pts, [(i, k, j) for i, j, k in tris], "Prop")
     return m
 
 
@@ -980,8 +1181,8 @@ def build_wheel():
 
     def ring_path(r, x, n=48):
         return [(x, r * math.cos(2 * math.pi * i / n), r * math.sin(2 * math.pi * i / n)) for i in range(n + 1)]
-    m.tube(ring_path(r_rim, 0.0), 0.7, "Frame", sides=8)                     # stainless core, showing at the spokes
-    m.tube(ring_path(r_rim, 0.0), 1.55, "Trim", sides=12)                    # black grip over it
+    m.tube(ring_path(r_rim, 0.0), 0.7, "Frame", sides=8, closed=True)        # stainless core, showing at the spokes
+    m.tube(ring_path(r_rim, 0.0), 1.55, "Trim", sides=12, closed=True)       # black grip over it
     # Spokes: flat stainless bars, dished back to the hub.
     for k in range(5):
         a = math.pi / 2 + 2 * math.pi * k / 5
@@ -995,16 +1196,18 @@ def build_wheel():
             _obox(m, T, (0.0, -1.1, -0.35), (L, 1.1, 0.35), "Frame")
     # Hub and cap.
     m.tube([(-dish - 2.0, 0.0, 0.0), (-dish + 1.0, 0.0, 0.0)], 4.2, "Frame", sides=16)
+    m.fan([(-dish - 2.0, 4.2 * math.cos(b), 4.2 * math.sin(b)) for b in [2 * math.pi * j / 16 for j in range(16)]], "Frame",
+          outward_hint=lambda p: (0.0, 0.0, 0.0))                                 # the hub's back, where the shaft goes in
     cap = []
     for i in range(5):
         a = (math.pi / 2) * i / 4
-        cap.append([(-dish + 1.0 + 1.8 * math.sin(a), 3.9 * math.cos(a) * math.cos(b), 3.9 * math.cos(a) * math.sin(b))
+        cap.append([(-dish + 1.0 + 1.8 * math.sin(a), 4.2 * math.cos(a) * math.cos(b), 4.2 * math.cos(a) * math.sin(b))
                     for b in [2 * math.pi * j / 16 for j in range(16)]])
     m.grid(cap, "Trim", outward_hint=lambda p: (-dish - 2.0, 0.0, 0.0), close_rows=True)
     # Spinner knob on the rim at the top, standing out toward the helmsman.
     kz = r_rim
     m.tube([(0.0, 0.0, kz), (5.0, 0.0, kz)], 0.7, "Frame", sides=8)
-    m.tube([(5.0, 0.0, kz), (9.5, 0.0, kz)], 1.5, "Trim", sides=12)
+    m.tube([(5.0, 0.0, kz), (9.5, 0.0, kz)], 1.5, "Trim", sides=12, caps=True)
     _ball(m, (9.5, 0.0, kz), 1.5, "Trim", rows=4, cols=12)
     return m
 
@@ -1022,7 +1225,7 @@ def build_mic():
         m.box((-2.0, -1.7, -6.8 + 0.8 * i), (-1.85, 1.7, -6.5 + 0.8 * i), "Frame")
     m.box((-0.8, -3.5, -8.5), (0.8, -3.0, -3.5), "Console")                   # push-to-talk bar
     m.box((-0.4, -0.8, -1.6), (0.4, 0.8, 0.0), "Trim")                         # hanging tab
-    m.tube([(0.0, 0.0, -11.0), (0.0, 0.0, -12.6)], 0.6, "Trim", sides=8)     # strain relief
+    m.tube([(0.0, 0.0, -11.0), (0.0, 0.0, -12.6)], 0.6, "Trim", sides=8, caps=True)     # strain relief
     return m
 
 
@@ -1033,20 +1236,22 @@ def build_outboard_bracket():
     """The clamp bracket that stays on the transom while the motor trims: a plate down the transom's outer face, a
     hook over the sill, and the tilt tube. Same origin as build_outboard (the tilt tube)."""
     m = Mesh()
-    m.box((-1.0, -12.0, -28.0), (5.0, 12.0, 6.0), "Trim")          # against the transom (its outer face is at X = +5)
-    m.box((5.0, -12.0, 5.0), (5.0 + TRANSOM_THICK + 2.0, 12.0, 8.0), "Trim")   # hooked over the sill
-    m.box((5.0 + TRANSOM_THICK, -12.0, -6.0), (5.0 + TRANSOM_THICK + 2.0, 12.0, 8.0), "Trim")
-    m.tube([(0.0, -16.0, 0.0), (0.0, 16.0, 0.0)], 2.6, "Cowling", sides=10)    # tilt tube
-    for y in (-8.0, 8.0):                                                         # clamp screws
-        m.tube([(-1.0, y, -20.0), (-5.0, y, -20.0)], 1.5, "Prop", sides=8)
+    w = 10.0                                                                     # half its width
+    m.box((-1.0, -w, -28.0), (5.0, w, 6.0), "Trim")          # against the transom (its outer face is at X = +5)
+    m.box((5.0, -w, 5.0), (5.0 + TRANSOM_THICK + 2.0, w, 8.0), "Trim")   # hooked over the sill
+    m.box((5.0 + TRANSOM_THICK, -w, WELL_FLOOR_Z - OUTBOARD_PIVOT_Z), (5.0 + TRANSOM_THICK + 2.0, w, 8.0), "Trim")
+    m.tube([(0.0, -13.0, 0.0), (0.0, 13.0, 0.0)], 2.6, "Cowling", sides=10, caps=True)    # tilt tube
+    for y in (-6.0, 6.0):                                                         # through-bolt heads
+        for z in (-13.0, -26.0):
+            m.tube([(-0.5, y, z), (-2.0, y, z)], 1.5, "Prop", sides=8, caps=True)
     return m
 
 
 def build_throttle_lever():
     """One lever of the twin throttle: origin at its pivot, standing up, with a black grip across the top."""
     m = Mesh()
-    m.tube([(0.0, 0.0, 0.0), (0.0, 0.0, 17.0)], 1.1, "Frame", sides=8)
-    m.tube([(0.0, -3.5, 18.0), (0.0, 3.5, 18.0)], 1.9, "Trim", sides=10)
+    m.tube([(0.0, 0.0, -1.0), (0.0, 0.0, 17.0)], 1.1, "Frame", sides=8, caps=True)
+    m.tube([(0.0, -3.5, 18.0), (0.0, 3.5, 18.0)], 1.9, "Trim", sides=10, caps=True)
     return m
 
 
@@ -1056,6 +1261,7 @@ if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "."
     os.makedirs(out, exist_ok=True)
     for name, mesh in (("skiff", build_skiff()), ("outboard", build_outboard()), ("bracket", build_outboard_bracket()),
+                       ("swivel", build_outboard_swivel()),
                        ("lever", build_throttle_lever()), ("radar", build_radar_array()), ("searchlight", build_searchlight()),
                        ("propeller", build_propeller()), ("wheel", build_wheel()), ("mic", build_mic())):
         mesh.write_obj(os.path.join(out, name + ".obj"))

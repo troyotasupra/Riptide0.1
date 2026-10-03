@@ -8,8 +8,8 @@ class ARiptideBoat;
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
+class URiptideCrewBodyComponent;
 class URiptideStorageComponent;
-class UStaticMeshComponent;
 class SRiptideInventory;
 struct FInputActionValue;
 
@@ -34,6 +34,16 @@ public:
 	virtual void NotifyControllerChanged() override;
 
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void PossessedBy(AController* NewController) override;
+	virtual void OnRep_PlayerState() override;
+
+	/** Builds this crew member's body from their player's look (ARiptidePlayerState): build, skin, hair, uniform
+	 * and gear. Called on every machine whenever the look arrives or changes. */
+	void ApplyAppearance();
+
+	/** The crew member's body (the character's mesh): what it wears and how it's animated. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	URiptideCrewBodyComponent* GetCrewBody() const;
 
 	/** The boat this character belongs to: the one it stands on, returns to after going overboard, and drives. */
 	UFUNCTION(BlueprintCallable, Category = "Crew")
@@ -123,6 +133,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsKnockedDown() const;
 
+	/** Seconds since the last knockdown began (large if there's never been one), on every machine. */
+	float GetKnockdownElapsed() const;
+
+	/** Seconds into climbing over the top of the ladder onto the deck. */
+	float GetClimbOverTime() const { return ClimbOverTime; }
+
+	/** How long a knockdown keeps a crew member down (s). */
+	static constexpr double KnockdownSeconds = 1.4;
+
+	/** The dev mode's god mode: the deck's jolts never throw this crew member, braced or not (and it's back on its feet). */
+	void SetSteadyFeet(bool bSteady) { bSteadyFeet = bSteady; KnockdownEndTime = bSteady ? -1.0 : KnockdownEndTime; }
+
 	/** How many times the boat's motion has thrown this crew member off balance, and knocked them down. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	int32 GetStaggerCount() const { return StaggerCount; }
@@ -184,14 +206,23 @@ protected:
 	float HelmReach = 110.f;
 
 	// Riding the boat: the deck's jolts (from slams, hard turns and big throttle changes) throw an unbraced crew member.
-	// Past StaggerG they stumble the way they're thrown; past KnockdownG they go down for a moment.
+	// Past the stagger figures they stumble the way they're thrown; past the knockdown ones they go down for a moment.
+	// Someone standing without holding on staggers at about 0.4 g sideways (a hard turn at speed), and has their
+	// knees buckled by the deck driving up into them at over a g on top of gravity (a hard slam into a swell).
 
-	/** Deck acceleration (in g, beyond gravity) that throws you off balance, and that knocks you down. */
+	/** Sideways deck acceleration (in g) that throws you off balance, and that knocks you down. */
 	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
-	float StaggerG = 0.9f;
+	float StaggerG = 0.4f;
 
 	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
-	float KnockdownG = 2.2f;
+	float KnockdownG = 1.1f;
+
+	/** The same for the deck slamming up into your feet (in g beyond gravity). */
+	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
+	float SlamStaggerG = 1.2f;
+
+	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
+	float SlamKnockdownG = 3.f;
 
 	/** How far a handhold can be to hold on to it (cm). */
 	UPROPERTY(EditAnywhere, Category = "Crew|Balance")
@@ -260,9 +291,10 @@ private:
 	/** Closes the inventory if what it was opened for is out of reach now. */
 	void CloseInventoryIfOutOfReach();
 
-	/** A stand-in body so other players can see this crew member until there's a character model (hidden from
-	 * its own player's eyes). */
-	void MakeStandInBody();
+	/** Listens for the player state's look changing. */
+	void WatchAppearance();
+	FDelegateHandle AppearanceWatch;
+	TWeakObjectPtr<class ARiptidePlayerState> WatchedState;
 
 	UFUNCTION(Server, Reliable)
 	void ServerClimbAboard();
@@ -333,6 +365,8 @@ private:
 	UPROPERTY(Replicated)
 	bool bBracing = false;
 
+	bool bSteadyFeet = false;
+
 	/** When the current knockdown ends, on the server's clock (in the past when not knocked down). */
 	UPROPERTY(Replicated)
 	double KnockdownEndTime = -1.0;
@@ -376,13 +410,6 @@ private:
 	float LadderRegrabBlock = 0.f;
 	float LadderGrace = 0.f;
 	float GrabRequestCooldown = 0.f;
-
-	/** The stand-in body others see. */
-	UPROPERTY(VisibleAnywhere, Category = "Crew")
-	TObjectPtr<UStaticMeshComponent> StandInBody;
-
-	UPROPERTY(VisibleAnywhere, Category = "Crew")
-	TObjectPtr<UStaticMeshComponent> StandInHead;
 
 	TSharedPtr<SRiptideInventory> InventoryWidget;
 	TSharedPtr<class SWidget> InventoryWidgetContainer;
