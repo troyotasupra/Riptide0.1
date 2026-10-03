@@ -26,14 +26,12 @@ Riptide runs from its source, on Windows or macOS, with Unreal Engine 5.7.
    - **macOS:** Unreal Engine 5.7 from the Epic Games Launcher, and Xcode (the version Epic lists for 5.7).
    - **Both:** Git with Git LFS (`git lfs install` once), and Steam for online play.
 2. **Get the game:** `git clone https://github.com/troyotasupra/Riptide0.1.git`, then `git lfs pull` inside it. The art and sounds come down through LFS.
-3. **First launch:** open `Riptide.uproject` in Unreal Engine 5.7 once and let it compile and finish opening.
-   - The first open builds the game's maps, boat, crew and materials, which takes several minutes.
-   - Close the editor when it's done.
-4. **Play:** use the launcher in `Tools/Launch/`. It brings the code up to date (quick when nothing has changed) and starts the game in its own window, on the main menu.
+3. **Play:** use the launcher in `Tools/Launch/`. It brings the code up to date, builds the game's content (maps, boat, crew, islands, items) when it needs to, and starts the game in its own window, on the main menu.
+   - The first launch, and the first after an update, takes several minutes while the content is built; after that it's quick.
    - **Windows:** `Play Riptide.bat`. Right-click it and choose Send to, Desktop (create shortcut) for a desktop icon.
    - **macOS:** `Play Riptide.command`. Double-click it in Finder; the first time, macOS may ask you to allow it in System Settings, Privacy & Security.
    - If Unreal Engine isn't in the default place, set `UE_ROOT` to its folder.
-5. **Updating:** `git pull` (and `git lfs pull`), then play as usual. After an update that changes the generated content, open the editor once to rebuild it.
+4. **Updating:** `git pull` (and `git lfs pull`), then play as usual: the launcher rebuilds whatever changed.
 
 For online play, start Steam first on every PC (see "Playing together"). Windows and Mac players can play together.
 
