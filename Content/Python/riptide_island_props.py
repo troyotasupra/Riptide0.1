@@ -317,6 +317,9 @@ def _dress(mesh, path, materials, nanite, solid, leafy=False, trunk=False):
         triangles = mesh.get_num_triangles(0)
         settings.set_editor_property("keep_percent_triangles", 0.2 if triangles > 500000 else 0.5 if triangles > 100000 else 1.0)
     tools.set_nanite_settings(mesh, settings, True)
+    if tools.get_nanite_settings(mesh).get_editor_property("enabled") != nanite:
+        # Trees once came through this with Nanite off and were drawn whole: a hundred million triangles a frame.
+        unreal.log_error(f"Riptide: {path.split('/')[-1]} did not take Nanite {'on' if nanite else 'off'}")
     if solid and not (trunk and _trunk_collision(mesh, path)):
         body = mesh.get_editor_property("body_setup")
         body.set_editor_property("collision_trace_flag", unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE)
@@ -444,11 +447,12 @@ def make_model_assets():
                 assets.delete_asset(path.split(".")[0])
                 continue
             slots = [str(s.get_editor_property("material_slot_name")) for s in obj.get_editor_property("static_materials")]
-            # Nanite for everything with weight to it (the tree alone is a million triangles); the small ferns,
-            # grass and twigs stay ordinary meshes.
-            heavy = obj.get_num_triangles(0) > 5000
+            # Nanite for everything with weight to it (a tree alone is a million triangles); the small ferns,
+            # grass, sorrel and shells stay ordinary meshes. Decided by what the model is, not by counting its
+            # triangles: a freshly imported mesh can still be building, and counted as nothing.
+            light = any(part in model for part in ("grass_", "fern_", "sorrel", "lambis"))
             tree = model in ("island_tree_02", "tree_small_02", "island_tree_01")
-            _dress(obj, path.split(".")[0], material_for, nanite=(kind == "rock" or heavy), leafy=(kind == "plant"),
+            _dress(obj, path.split(".")[0], material_for, nanite=not light, leafy=(kind == "plant"),
                    solid=(kind not in ("plant",) or tree), trunk=tree)
             box = obj.get_bounding_box()
             entry = {"path": path.split(".")[0], "kind": kind, "slots": slots,

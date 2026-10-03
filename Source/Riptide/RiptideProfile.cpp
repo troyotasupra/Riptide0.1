@@ -20,7 +20,6 @@ void URiptideProfileSubsystem::Tick(float DeltaTime)
 	{
 		return;
 	}
-	bEnabled = true;
 	Elapsed += DeltaTime;
 	if (Elapsed < 10.f)
 	{

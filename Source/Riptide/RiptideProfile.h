@@ -18,10 +18,9 @@ public:
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 	virtual void Tick(float DeltaTime) override;
 	virtual TStatId GetStatId() const override { RETURN_QUICK_DECLARE_CYCLE_STAT(URiptideProfileSubsystem, STATGROUP_Tickables); }
-	virtual bool IsTickable() const override { return bEnabled; }
+	virtual bool IsTickable() const override { return true; }
 
 private:
-	bool bEnabled = false;
 	float Elapsed = 0.f;
 	float SinceReport = 0.f;
 	int32 Frames = 0;
