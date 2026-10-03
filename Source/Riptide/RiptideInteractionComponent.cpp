@@ -1,5 +1,6 @@
 #include "RiptideInteractionComponent.h"
 #include "Camera/CameraComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "CollisionQueryParams.h"
 #include "Engine/World.h"
 #include "GameFramework/Controller.h"
@@ -126,10 +127,12 @@ bool URiptideInteractionComponent::UseFocused()
 
 void URiptideInteractionComponent::Fire(const FFocus& On)
 {
-	ServerInteract(On.Actor.Get(), On.Interaction.Verb, On.Hit.ImpactPoint, On.Hit.Item);
+	// The instance or slot the thing named, else what the trace hit (a planted thing's instance).
+	const int32 Item = On.Interaction.Item != INDEX_NONE ? On.Interaction.Item : On.Hit.Item;
+	ServerInteract(On.Actor.Get(), On.Hit.GetComponent(), On.Interaction.Verb, On.Hit.ImpactPoint, Item);
 }
 
-void URiptideInteractionComponent::ServerInteract_Implementation(AActor* Target, uint8 Verb, FVector_NetQuantize HitPoint, int32 Item)
+void URiptideInteractionComponent::ServerInteract_Implementation(AActor* Target, UPrimitiveComponent* Component, uint8 Verb, FVector_NetQuantize HitPoint, int32 Item)
 {
 	ARiptideCharacter* Who = Crew();
 	IRiptideInteractable* Thing = Cast<IRiptideInteractable>(Target);
@@ -148,6 +151,7 @@ void URiptideInteractionComponent::ServerInteract_Implementation(AActor* Target,
 	Hit.Location = HitPoint;
 	Hit.Item = Item;
 	Hit.HitObjectHandle = FActorInstanceHandle(Target);
+	Hit.Component = Component;      // which batch of planted things was hit, for the island's props
 	FRiptideInteraction Interaction;
 	if (!Thing->GetInteraction(Who, Hit, Interaction) || !Interaction.bEnabled)
 	{

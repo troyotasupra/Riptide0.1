@@ -156,11 +156,11 @@ def sea_points():
             "open sea": (bx + ox * 330.0, by + oy * 330.0)}
 
 
-def watch_sea(boat):
+def watch_sea(world):
     """Notes the sea's height at each watched point this frame."""
     seen = state.setdefault("sea", {})
     for name, (x, y) in sea_points().items():
-        z = boat.get_sea_surface_z(ue(x, y, 0.0)) / 100.0
+        z = unreal.RiptideSeaSubsystem.sea_surface_at(world, ue(x, y, 0.0)) / 100.0
         lo, hi = seen.get(name, (z, z))
         seen[name] = (min(lo, z), max(hi, z))
 
@@ -231,11 +231,10 @@ def tick(dt):
             pc.set_photo_mode(True)
             enter("settle", t)
         elif phase == "settle" and since <= 12.0:
-            if boats:
-                watch_sea(boats[0])
+            watch_sea(world)
         elif phase == "settle":
             sea_check(world)
-            shot(world, "01_from_the_boat")
+            shot(world, "01_washed_up")
             ground_check(world, list(unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideBoat)) + list(walkers))
             enter("fly", t)
         elif phase == "fly" and since > 0.5:

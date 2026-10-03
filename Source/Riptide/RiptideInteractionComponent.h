@@ -43,6 +43,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Interaction")
 	bool HasFocus() const { return Focus.IsSet(); }
 
+	/** Looks again right now and returns the prompt (tests that just changed what's carried or where they stand). */
+	UFUNCTION(BlueprintCallable, Category = "Interaction")
+	FText PeekPrompt() { Look(); return GetFocusedPrompt(); }
+
 	/** E pressed: uses the thing at once, or begins its hold. True if there was something to use. */
 	bool BeginUse();
 
@@ -59,7 +63,7 @@ public:
 
 	/** Asks the server to use Target. Clients call this through BeginUse; the server checks the reach. */
 	UFUNCTION(Server, Reliable)
-	void ServerInteract(AActor* Target, uint8 Verb, FVector_NetQuantize HitPoint, int32 Item);
+	void ServerInteract(AActor* Target, UPrimitiveComponent* Component, uint8 Verb, FVector_NetQuantize HitPoint, int32 Item);
 
 private:
 	FFocus Focus;

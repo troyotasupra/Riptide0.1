@@ -101,6 +101,8 @@ void SRiptideInventory::Construct(const FArguments& InArgs)
 	Container = InArgs._Container;
 	ContainerIndex = InArgs._ContainerIndex;
 	OnMove = InArgs._OnMove;
+	OnUse = InArgs._OnUse;
+	OnDrop = InArgs._OnDrop;
 	OnClose = InArgs._OnClose;
 	ForceVolatile(true);
 
@@ -404,16 +406,21 @@ FReply SRiptideInventory::OnMouseMove(const FGeometry& MyGeometry, const FPointe
 FReply SRiptideInventory::OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent)
 {
 	Mouse = FVector2f(MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition()));
-	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
-	{
-		return FReply::Handled();
-	}
 	const float Cell = CellSize(ScreenSize);
 	const TArray<FPanel> Panels = Layout(ScreenSize);
 	FIntPoint Under;
 	const FPanel* Panel = PanelAt(Panels, Mouse, Cell, Under);
 	const FRiptideItem* Item = Panel ? Panel->Storage->GetStorage(Panel->Index)->Grid.ItemAt(Under) : nullptr;
-	if (!Item)
+	if (MouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
+	{
+		// Right-click uses it: eat, drink, read, wear.
+		if (Item && !Panel->bContainer)
+		{
+			OnUse.ExecuteIfBound(Panel->Storage, Panel->Index, Item->Uid);
+		}
+		return FReply::Handled();
+	}
+	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton || !Item)
 	{
 		return FReply::Handled();
 	}
@@ -475,6 +482,20 @@ FReply SRiptideInventory::OnMouseButtonUp(const FGeometry& MyGeometry, const FPo
 FReply SRiptideInventory::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
 	const FKey Key = InKeyEvent.GetKey();
+	if (Key == EKeys::G && !Drag.bActive)
+	{
+		// G drops what the mouse is over onto the ground.
+		const float Cell = CellSize(ScreenSize);
+		const TArray<FPanel> Panels = Layout(ScreenSize);
+		FIntPoint Under;
+		const FPanel* Panel = PanelAt(Panels, Mouse, Cell, Under);
+		const FRiptideItem* Item = Panel ? Panel->Storage->GetStorage(Panel->Index)->Grid.ItemAt(Under) : nullptr;
+		if (Item && !Panel->bContainer)
+		{
+			OnDrop.ExecuteIfBound(Panel->Storage, Panel->Index, Item->Uid);
+		}
+		return FReply::Handled();
+	}
 	if (Key == EKeys::R && Drag.bActive)
 	{
 		// Turn it sideways, keeping the grabbed cell under the cursor.

@@ -574,6 +574,11 @@ class StartCay(Island):
             add("shell", x, y, scale=rng.uniform(0.7, 1.3), sink=0.004, tilt=rng.uniform(0.0, 30.0))
         for x, y, d, h in scatter(25, lambda x, y, d, h, sl: 0.3 < h < 2.2 and 1.0 < d < 24.0 and not rocky(x, y), 0.4, tries=200):
             add("shell", x, y, scale=rng.uniform(0.6, 1.2), sink=0.006, tilt=rng.uniform(0.0, 40.0))
+        # Loose stones along the rock shore's foot and the strand, and flint among them: the first tools' makings.
+        for x, y, d, h in scatter(45, lambda x, y, d, h, sl: 0.3 < h < 3.0 and 1.0 < d < 30.0 and (self.rock(x, y) > 0.2 or rng.random() < 0.25), 1.2, tries=200):
+            add("stone", x, y, scale=rng.uniform(0.8, 1.4), sink=0.01, tilt=rng.uniform(0.0, 25.0))
+        for x, y, d, h in scatter(28, lambda x, y, d, h, sl: 0.3 < h < 3.0 and 1.0 < d < 30.0 and (self.rock(x, y) > 0.2 or rng.random() < 0.25), 1.5, tries=200):
+            add("flint", x, y, scale=rng.uniform(0.9, 1.3), sink=0.005, tilt=rng.uniform(0.0, 30.0))
         # --- Driftwood along the high-tide line and on the spit.
         for x, y, d, h in scatter(6, lambda x, y, d, h, sl: 1.0 < h < 1.6 and 6.0 < d < 15.0 and not rocky(x, y), 5.0):
             add("log", x, y, scale=rng.uniform(0.7, 1.15), sink=0.12)

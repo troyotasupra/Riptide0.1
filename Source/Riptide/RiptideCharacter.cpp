@@ -16,6 +16,8 @@
 #include "Net/UnrealNetwork.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacterMovement.h"
+#include "RiptideCraftBook.h"
+#include "RiptideCraftingComponent.h"
 #include "RiptideCrewBody.h"
 #include "RiptideInteractionComponent.h"
 #include "RiptideItems.h"
@@ -23,7 +25,10 @@
 #include "RiptideInventoryWidget.h"
 #include "RiptideWorldItem.h"
 #include "RiptideSettings.h"
+#include "RiptideSea.h"
 #include "RiptideStorageComponent.h"
+#include "RiptideStructure.h"
+#include "RiptideSurvivalComponent.h"
 #include "Engine/GameViewportClient.h"
 #include "Widgets/SWeakWidget.h"
 
@@ -47,6 +52,8 @@ ARiptideCharacter::ARiptideCharacter(const FObjectInitializer& ObjectInitializer
 
 	Inventory = CreateDefaultSubobject<URiptideStorageComponent>(TEXT("Inventory"));
 	Interaction = CreateDefaultSubobject<URiptideInteractionComponent>(TEXT("Interaction"));
+	Crafting = CreateDefaultSubobject<URiptideCraftingComponent>(TEXT("Crafting"));
+	Survival = CreateDefaultSubobject<URiptideSurvivalComponent>(TEXT("Survival"));
 	BaseEyeHeight = 70.f;
 
 	bUseControllerRotationYaw = true;
@@ -185,6 +192,10 @@ void ARiptideCharacter::BuildInput()
 	DropAction = NewObject<UInputAction>(this, TEXT("IA_Drop"));
 	DropAction->ValueType = EInputActionValueType::Boolean;
 	WalkMapping->MapKey(DropAction, EKeys::G);
+	// B opens the crafting book.
+	CraftAction = NewObject<UInputAction>(this, TEXT("IA_Craft"));
+	CraftAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(CraftAction, EKeys::B);
 
 	InventoryAction = NewObject<UInputAction>(this, TEXT("IA_Inventory"));
 	InventoryAction->ValueType = EInputActionValueType::Boolean;
@@ -326,6 +337,7 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetBracing(false); SetSprinting(false); });
 		Input->BindAction(PunchAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnPunch);
 		Input->BindAction(DropAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnDropKey);
+		Input->BindAction(CraftAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnCraftKey);
 		Input->BindAction(InteractAction, ETriggerEvent::Completed, this, &ARiptideCharacter::OnInteractReleased);
 		Input->BindAction(InteractAction, ETriggerEvent::Canceled, this, &ARiptideCharacter::OnInteractReleased);
 		Input->BindAction(InteractAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInteract);
@@ -833,6 +845,20 @@ void ARiptideCharacter::OpenContainer(URiptideStorageComponent* Container, int32
 				Self->ServerMoveItem(From, FromIndex, Uid, To, ToIndex, X, Y, bRotated, Count);
 			}
 		}))
+		.OnUse(SRiptideInventory::FOnItem::CreateLambda([WeakThis](URiptideStorageComponent* From, int32 FromIndex, int32 Uid)
+		{
+			if (ARiptideCharacter* Self = WeakThis.Get(); Self && From == Self->Inventory)
+			{
+				Self->UseItem(FromIndex, Uid);
+			}
+		}))
+		.OnDrop(SRiptideInventory::FOnItem::CreateLambda([WeakThis](URiptideStorageComponent* From, int32 FromIndex, int32 Uid)
+		{
+			if (ARiptideCharacter* Self = WeakThis.Get(); Self && From == Self->Inventory)
+			{
+				Self->DropItem(FromIndex, Uid, 0);
+			}
+		}))
 		.OnClose(FSimpleDelegate::CreateLambda([WeakThis]()
 		{
 			if (ARiptideCharacter* Self = WeakThis.Get())
@@ -1259,6 +1285,154 @@ void ARiptideCharacter::ServerDropItem_Implementation(int32 StorageIndex, int32 
 	ARiptideWorldItem::Drop(GetWorld(), Taken, At, Forward * 250.f + FVector(0.f, 0.f, 120.f) + GetVelocity());
 }
 
+void ARiptideCharacter::UseItem(int32 StorageIndex, int32 Uid)
+{
+	ServerUseItem(StorageIndex, Uid);
+}
+
+void ARiptideCharacter::ServerUseItem_Implementation(int32 StorageIndex, int32 Uid)
+{
+	FRiptideStorage* Storage = Inventory->GetStorage(StorageIndex);
+	FRiptideItem* Item = Storage ? Storage->Grid.Get(Uid) : nullptr;
+	const FRiptideItemDef* Def = Item ? RiptideItems::Find(Item->Id) : nullptr;
+	if (!Def)
+	{
+		return;
+	}
+	switch (Def->Kind)
+	{
+	case ERiptideItemKind::Book:
+	case ERiptideItemKind::Page:
+		// Read: its recipes go into the crafting book. A page is used up; a book stays.
+		Crafting->Learn(Def->Teaches);
+		if (Def->Kind == ERiptideItemKind::Page)
+		{
+			Storage->Grid.Take(Uid, 1);
+		}
+		StartAction(ERiptideCrewAction::Reach);
+		break;
+	case ERiptideItemKind::Food:
+	case ERiptideItemKind::Drink:
+		// Eaten or drunk: one helping, or one sip of a canteen.
+		if (Def->Food.IsSet())
+		{
+			Survival->Consume(Def->Food->Food, Def->Food->Water, Def->Food->SicknessSeconds, Def->Food->SickChance);
+		}
+		if (Def->Food.IsSet() && Def->Food->Sips > 0 && Item->Charges > 0)
+		{
+			if (--Item->Charges <= 0 && !Def->Food->EmptiesTo.IsNone())
+			{
+				Item->Id = Def->Food->EmptiesTo;
+				Item->Charges = 0;
+			}
+		}
+		else
+		{
+			Storage->Grid.Take(Uid, 1);
+		}
+		StartAction(ERiptideCrewAction::Consume);
+		break;
+	case ERiptideItemKind::Kit:
+	{
+		// Placed on the ground a couple of metres ahead, facing you; the kit becomes the first stage of the thing.
+		const FRiptideStructureDef* StructureDef = RiptideStructures::Find(Def->Places);
+		if (!StructureDef)
+		{
+			return;
+		}
+		const FVector Forward = FRotator(0.f, GetControlRotation().Yaw, 0.f).Vector();
+		FVector At = GetActorLocation() + Forward * (120.f + StructureDef->FootprintRadius);
+		At.Z = URiptideSeaSubsystem::GroundHeightAt(this, At);
+		if (At.Z < 0.f && !StructureDef->bShore)
+		{
+			UE_LOG(LogTemp, Log, TEXT("Riptide: %s not placed: the ground there is under the sea (%.0f cm)"), *Def->Places.ToString(), At.Z);
+			return;
+		}
+		FTransform Where(FRotator(0.f, GetControlRotation().Yaw + 180.f, 0.f), At);
+		if (!ARiptideStructure::Place(GetWorld(), Def->Places, Where))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Riptide: %s could not be placed"), *Def->Places.ToString());
+			return;
+		}
+		Storage->Grid.Take(Uid, 1);
+		StartAction(ERiptideCrewAction::Reach);
+		break;
+	}
+	case ERiptideItemKind::Medical:
+		// A bandage or kit used on yourself; nothing to do with it at full health.
+		if (Def->Heal <= 0.f || Survival->GetHealth() >= 100.f)
+		{
+			return;
+		}
+		Survival->Heal(Def->Heal);
+		Storage->Grid.Take(Uid, 1);
+		StartAction(ERiptideCrewAction::Reach);
+		break;
+	default:
+		return;
+	}
+	Inventory->OnChanged.Broadcast();
+}
+
+void ARiptideCharacter::OnCraftKey(const FInputActionValue& Value)
+{
+	if (IsCraftBookOpen())
+	{
+		CloseCraftBook();
+	}
+	else if (!IsInventoryOpen() && !bManningHelm && !IsInSea() && !IsClimbing())
+	{
+		OpenCraftBook();
+	}
+}
+
+void ARiptideCharacter::OpenCraftBook()
+{
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !PC->IsLocalController() || IsCraftBookOpen() || !GEngine || !GEngine->GameViewport)
+	{
+		return;
+	}
+	TWeakObjectPtr<ARiptideCharacter> WeakThis(this);
+	CraftBook = SNew(SRiptideCraftBook)
+		.Crew(this)
+		.OnClose(FSimpleDelegate::CreateLambda([WeakThis]()
+		{
+			if (ARiptideCharacter* Self = WeakThis.Get())
+			{
+				Self->CloseCraftBook();
+			}
+		}));
+	CraftBookContainer = SNew(SWeakWidget).PossiblyNullContent(CraftBook);
+	GEngine->GameViewport->AddViewportWidgetContent(CraftBookContainer.ToSharedRef(), 10);
+	FInputModeUIOnly Mode;
+	Mode.SetWidgetToFocus(CraftBook);
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	PC->SetInputMode(Mode);
+	PC->SetShowMouseCursor(true);
+	GetCharacterMovement()->StopMovementImmediately();
+}
+
+void ARiptideCharacter::CloseCraftBook()
+{
+	if (GEngine && GEngine->GameViewport && CraftBookContainer.IsValid())
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(CraftBookContainer.ToSharedRef());
+	}
+	const bool bWasOpen = CraftBook.IsValid();
+	CraftBook.Reset();
+	CraftBookContainer.Reset();
+	if (!bWasOpen)
+	{
+		return;
+	}
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		PC->SetInputMode(FInputModeGameOnly());
+		PC->SetShowMouseCursor(false);
+	}
+}
+
 int32 ARiptideCharacter::GiveItem(FName Id, int32 Count)
 {
 	if (!HasAuthority() || !RiptideItems::Find(Id) || Count <= 0)
@@ -1423,6 +1597,15 @@ void ARiptideCharacter::DrawHud() const
 	if (IsInventoryOpen())
 	{
 		return;
+	}
+	// How the body is doing, until the real HUD exists: bars of ten, red when low.
+	if (Survival && IsPlayerControlled())
+	{
+		const FRiptideVitals& V = Survival->GetVitals();
+		auto Bar = [](float Value) { const int32 N = FMath::Clamp(FMath::RoundToInt(Value / 10.f), 0, 10); return FString::ChrN(N, TEXT('#')) + FString::ChrN(10 - N, TEXT('-')); };
+		const bool bLow = V.Health < 30.f || V.Hunger < 20.f || V.Thirst < 20.f;
+		GEngine->AddOnScreenDebugMessage(KeyBase + 8, 0.f, bLow ? FColor::Orange : FColor(200, 200, 200),
+			FString::Printf(TEXT("Health [%s]  Food [%s]  Water [%s]%s"), *Bar(V.Health), *Bar(V.Hunger), *Bar(V.Thirst), V.Sickness > 0.f ? TEXT("  Sick") : TEXT("")));
 	}
 	// The thing under the crosshair: what E does with it, and how far a hold has got.
 	if (Interaction && Interaction->HasFocus())

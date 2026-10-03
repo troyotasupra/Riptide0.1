@@ -288,7 +288,34 @@ def _trunk_collision(mesh, path):
         return False
 
 
-def _dress(mesh, path, materials, nanite, solid, leafy=False, trunk=False):
+# Plants the crew strip or pick that nobody bumps into: they get a box to look at, not leaves to walk through.
+HARVESTED_PLANTS = ("searsia_lucida", "shrub_sorrel_01", "shrub_04", "fern_02", "dry_branches_medium_01")
+
+
+def harvest_collision(mesh, path):
+    """A box round a harvestable plant so the crew's look-trace finds it (its leaves alone have nothing to hit).
+    The island props give such batches the RiptideHarvest profile: queries only, never a wall. True if set."""
+    try:
+        box = mesh.get_bounding_box()
+        size = unreal.Vector(max(box.max.x - box.min.x, 20.0), max(box.max.y - box.min.y, 20.0), max(box.max.z - box.min.z, 20.0))
+        elem = unreal.KBoxElem()
+        elem.set_editor_property("x", size.x * 0.7)
+        elem.set_editor_property("y", size.y * 0.7)
+        elem.set_editor_property("z", size.z)
+        elem.set_editor_property("center", unreal.Vector((box.max.x + box.min.x) / 2, (box.max.y + box.min.y) / 2, (box.max.z + box.min.z) / 2))
+        geom = unreal.KAggregateGeom()
+        geom.set_editor_property("box_elems", [elem])
+        body = mesh.get_editor_property("body_setup")
+        body.set_editor_property("agg_geom", geom)
+        body.set_editor_property("collision_trace_flag", unreal.CollisionTraceFlag.CTF_USE_SIMPLE_AS_COMPLEX)
+        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+        return True
+    except Exception as err:  # noqa: BLE001
+        unreal.log_warning(f"Riptide: no harvest box for {path.split('/')[-1]} ({err})")
+        return False
+
+
+def _dress(mesh, path, materials, nanite, solid, leafy=False, trunk=False, harvested=False):
     """A mesh's slots given their materials, Nanite on or off, and (for solid things) its own triangles to stand on,
     or for a tree (`trunk`) a capsule round its trunk. `leafy` tells Nanite to keep thin leaves from thinning away
     to nothing with distance."""
@@ -320,7 +347,9 @@ def _dress(mesh, path, materials, nanite, solid, leafy=False, trunk=False):
     if tools.get_nanite_settings(mesh).get_editor_property("enabled") != nanite:
         # Trees once came through this with Nanite off and were drawn whole: a hundred million triangles a frame.
         unreal.log_error(f"Riptide: {path.split('/')[-1]} did not take Nanite {'on' if nanite else 'off'}")
-    if solid and not (trunk and _trunk_collision(mesh, path)):
+    if harvested:
+        harvest_collision(mesh, path)
+    elif solid and not (trunk and _trunk_collision(mesh, path)):
         body = mesh.get_editor_property("body_setup")
         body.set_editor_property("collision_trace_flag", unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE)
     unreal.EditorAssetLibrary.set_metadata_tag(mesh, "RiptideVersion", PROPS_VERSION)
@@ -453,7 +482,7 @@ def make_model_assets():
             light = any(part in model for part in ("grass_", "fern_", "sorrel", "lambis"))
             tree = model in ("island_tree_02", "tree_small_02", "island_tree_01")
             _dress(obj, path.split(".")[0], material_for, nanite=not light, leafy=(kind == "plant"),
-                   solid=(kind not in ("plant",) or tree), trunk=tree)
+                   solid=(kind not in ("plant",) or tree), trunk=tree, harvested=model in HARVESTED_PLANTS)
             box = obj.get_bounding_box()
             entry = {"path": path.split(".")[0], "kind": kind, "slots": slots,
                      "min": [box.min.x, box.min.y, box.min.z], "max": [box.max.x, box.max.y, box.max.z],

@@ -25,7 +25,7 @@
 DEFINE_LOG_CATEGORY_STATIC(LogRiptideOnline, Log, All);
 
 const TCHAR* URiptideGameInstance::MenuMap = TEXT("/Game/Riptide/Maps/MainMenu");
-const TCHAR* URiptideGameInstance::GameMap = TEXT("/Game/Riptide/Maps/Ocean_Test");
+const TCHAR* URiptideGameInstance::GameMap = TEXT("/Game/Riptide/Maps/Island_Test");
 
 namespace
 {
@@ -281,7 +281,7 @@ void URiptideGameInstance::CreateSession()
 	Settings.bUseLobbiesIfAvailable = bSteam;
 	Settings.bAllowJoinViaPresence = true;
 	Settings.bAllowJoinViaPresenceFriendsOnly = bHostedFriendsOnly;
-	Settings.Set(SETTING_MAPNAME, FString(TEXT("Ocean_Test")), EOnlineDataAdvertisementType::ViaOnlineService);
+	Settings.Set(SETTING_MAPNAME, FString(TEXT("Island_Test")), EOnlineDataAdvertisementType::ViaOnlineService);
 	Settings.Set(KeyGame, FString(GameTag), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 	Settings.Set(KeyCallsign, GetCallsign(), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 	Settings.Set(KeyFriendsOnly, bHostedFriendsOnly, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);

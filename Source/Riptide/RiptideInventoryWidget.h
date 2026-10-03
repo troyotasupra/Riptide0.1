@@ -20,12 +20,16 @@ public:
 	/** From grid (component, index, item uid) to grid (component, index, cell X, Y, rotated), Count (0 = all).
 	 * X < 0 means "wherever it fits". */
 	DECLARE_DELEGATE_NineParams(FOnMove, URiptideStorageComponent*, int32, int32, URiptideStorageComponent*, int32, int32, int32, bool, int32);
+	/** An item (grid component, index, item uid) used (right-click: eaten, read, worn) or dropped (G over it). */
+	DECLARE_DELEGATE_ThreeParams(FOnItem, URiptideStorageComponent*, int32, int32);
 
 	SLATE_BEGIN_ARGS(SRiptideInventory) {}
 		SLATE_ARGUMENT(TWeakObjectPtr<URiptideStorageComponent>, Carrying)
 		SLATE_ARGUMENT(TWeakObjectPtr<URiptideStorageComponent>, Container)
 		SLATE_ARGUMENT(int32, ContainerIndex)
 		SLATE_EVENT(FOnMove, OnMove)
+		SLATE_EVENT(FOnItem, OnUse)
+		SLATE_EVENT(FOnItem, OnDrop)
 		SLATE_EVENT(FSimpleDelegate, OnClose)
 	SLATE_END_ARGS()
 
@@ -83,6 +87,8 @@ private:
 	TWeakObjectPtr<URiptideStorageComponent> Container;
 	int32 ContainerIndex = 0;
 	FOnMove OnMove;
+	FOnItem OnUse;
+	FOnItem OnDrop;
 	FSimpleDelegate OnClose;
 
 	TArray<FSlateRoundedBoxBrush> CardBrushes;     // by rarity

@@ -240,6 +240,29 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	int32 GiveItem(FName Id, int32 Count);
 
+	/** Uses a carried item: eats or drinks it, reads it (learning its recipes), or wears it. The server does it. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void UseItem(int32 StorageIndex, int32 Uid);
+
+	UFUNCTION(Server, Reliable)
+	void ServerUseItem(int32 StorageIndex, int32 Uid);
+
+	/** What this crew member can make, and the making under way. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	class URiptideCraftingComponent* GetCrafting() const { return Crafting; }
+
+	/** Hunger, thirst and health. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	class URiptideSurvivalComponent* GetSurvival() const { return Survival; }
+
+	/** The crafting book (B). Local player only. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void OpenCraftBook();
+
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void CloseCraftBook();
+	bool IsCraftBookOpen() const { return CraftBook.IsValid(); }
+
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void CloseInventory();
 	bool IsInventoryOpen() const { return InventoryWidget.IsValid(); }
@@ -256,6 +279,20 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Crew")
 	TObjectPtr<class URiptideInteractionComponent> Interaction;
+
+	UPROPERTY(VisibleAnywhere, Category = "Crew")
+	TObjectPtr<class URiptideCraftingComponent> Crafting;
+
+	UPROPERTY(VisibleAnywhere, Category = "Crew")
+	TObjectPtr<class URiptideSurvivalComponent> Survival;
+
+	TSharedPtr<class SRiptideCraftBook> CraftBook;
+	TSharedPtr<class SWidget> CraftBookContainer;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> CraftAction;
+
+	void OnCraftKey(const FInputActionValue& Value);
 
 	/** The container the inventory screen was opened with, if not a locker. */
 	TWeakObjectPtr<URiptideStorageComponent> OpenedContainer;

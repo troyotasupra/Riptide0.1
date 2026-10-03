@@ -14,7 +14,7 @@ import random
 
 from riptide_palm_mesh import Mesh, _add, _cross, _mul, _norm, _sub
 
-ITEM_MODELS_VERSION = "2"
+ITEM_MODELS_VERSION = "3"
 
 
 # --- Shapes ------------------------------------------------------------------------------------------------------
@@ -306,6 +306,233 @@ def build_crate():
     return m
 
 
+# --- The structures ----------------------------------------------------------------------------------------------
+# One model per build stage, SM_Structure_<type>_<stage>; the last stage is the finished thing (RiptideStructures.cpp).
+
+def merge(m, sub, at=(0.0, 0.0, 0.0), yaw=0.0):
+    """Adds another mesh into m, moved to `at` and turned by yaw radians."""
+    c, s = math.cos(yaw), math.sin(yaw)
+    offset = len(m.verts)
+    for p, n, uv in sub.verts:
+        m.verts.append(((at[0] + p[0] * c - p[1] * s, at[1] + p[0] * s + p[1] * c, at[2] + p[2]),
+                        (n[0] * c - n[1] * s, n[0] * s + n[1] * c, n[2]), uv))
+    for material, faces in sub.faces.items():
+        for a, b, d in faces:
+            m.tri(material, a + offset, b + offset, d + offset)
+
+
+def _stone(seed, size=1.0):
+    stone = Mesh()
+    lathe(stone, "Stone", [(0.0, 0.0), (0.06 * size, 0.025 * size), (0.065 * size, 0.055 * size), (0.045 * size, 0.085 * size), (0.0, 0.1 * size)],
+          sides=9, squash=(1.0, 0.8), bumps=0.12, seed=seed)
+    return stone
+
+
+def _stone_ring(m, count=9, radius=0.42):
+    for k in range(count):
+        a = 2.0 * math.pi * k / count
+        merge(m, _stone(61 + k, 1.0 + 0.2 * _hash(k, 1, 3)), (math.cos(a) * radius, math.sin(a) * radius, 0.0), a)
+
+
+def build_campfire_0():
+    # A patch scraped clear: two sticks laid across to mark it.
+    m = Mesh()
+    stick(m, "Driftwood", (-0.3, -0.05, 0.02), (0.3, 0.05, 0.02), 0.02, 0.015, sides=7, wobble=0.03, seed=71, steps=5)
+    stick(m, "Driftwood", (-0.05, 0.3, 0.02), (0.08, -0.3, 0.02), 0.018, 0.014, sides=7, wobble=0.03, seed=72, steps=5)
+    return m
+
+
+def build_campfire_1():
+    m = Mesh()
+    _stone_ring(m)
+    return m
+
+
+def build_campfire_2():
+    m = Mesh()
+    _stone_ring(m)
+    # Wood stood in a cone over a bed of smaller sticks.
+    for k in range(6):
+        a = 2.0 * math.pi * k / 6 + 0.3
+        stick(m, "Bark", (math.cos(a) * 0.26, math.sin(a) * 0.26, 0.02), (math.cos(a) * 0.03, math.sin(a) * 0.03, 0.42), 0.03, 0.02, sides=7, wobble=0.02, seed=81 + k, steps=4)
+    for k in range(4):
+        a = 2.0 * math.pi * k / 4 + 0.8
+        stick(m, "Driftwood", (math.cos(a) * 0.2, math.sin(a) * 0.2, 0.03), (-math.cos(a) * 0.2, -math.sin(a) * 0.2, 0.03), 0.015, 0.012, sides=6, wobble=0.03, seed=91 + k, steps=4)
+    return m
+
+
+def _thatch(m, start, end, width, count, seed):
+    """Fronds laid side by side along a slope: thin flat quads, lit from both sides."""
+    rng = random.Random(seed)
+    axis = _norm(_sub(end, start))
+    side = _norm(_cross(axis, (0.0, 0.0, 1.0)))
+    for i in range(count):
+        t = (i + 0.5) / count
+        off = _mul(side, (t - 0.5) * width)
+        a, b = _add(start, off), _add(end, off)
+        b = _add(b, _mul(axis, rng.uniform(-0.1, 0.1)))
+        w = width / count * 0.6
+        up = _norm(_cross(side, axis))
+        for sign in (1.0, -1.0):
+            n = _mul(up, sign)
+            z = 0.004 * sign
+            ids = [m.vert(_add(a, _add(_mul(side, -w), (0, 0, z))), n, (0, 0)), m.vert(_add(a, _add(_mul(side, w), (0, 0, z))), n, (1, 0)),
+                   m.vert(_add(b, _add(_mul(side, w), (0, 0, z))), n, (1, 1)), m.vert(_add(b, _add(_mul(side, -w), (0, 0, z))), n, (0, 1))]
+            if sign > 0:
+                m.quad("Frond", *ids)
+            else:
+                m.quad("Frond", ids[3], ids[2], ids[1], ids[0])
+
+
+def build_lean_to_0():
+    # Two forked uprights, a ridge pole, and a slope of sticks thatched with fronds. Open to -x.
+    m = Mesh()
+    for y in (-1.1, 1.1):
+        stick(m, "Bark", (0.0, y, 0.0), (0.0, y, 1.5), 0.045, 0.035, sides=8, wobble=0.01, seed=101 + int(y > 0), steps=4)
+    stick(m, "Bark", (0.0, -1.25, 1.52), (0.0, 1.25, 1.52), 0.04, 0.04, sides=8, wobble=0.0, seed=103, steps=3)
+    for k in range(7):
+        y = -1.05 + k * 0.35
+        stick(m, "Driftwood", (0.0, y, 1.5), (1.6, y, 0.02), 0.025, 0.02, sides=6, wobble=0.015, seed=110 + k, steps=4)
+    _thatch(m, (0.02, 0.0, 1.56), (1.68, 0.0, 0.08), 2.3, 22, seed=120)
+    return m
+
+
+def build_tent_0():
+    # Four pegs round the pitch.
+    m = Mesh()
+    for x, y in ((-1.0, -0.8), (1.0, -0.8), (-1.0, 0.8), (1.0, 0.8)):
+        stick(m, "Driftwood", (x, y, 0.0), (x * 0.95, y * 0.95, 0.25), 0.02, 0.012, sides=6, wobble=0.0, seed=131, steps=2)
+    return m
+
+
+def build_tent_1():
+    # The tarp spread flat, pegged.
+    m = build_tent_0()
+    for sign, z in ((1.0, 0.03), (-1.0, 0.02)):
+        ids = [m.vert((-1.1, -0.9, z), (0.0, 0.0, sign), (0, 0)), m.vert((1.1, -0.9, z), (0.0, 0.0, sign), (1, 0)),
+               m.vert((1.1, 0.9, z), (0.0, 0.0, sign), (1, 1)), m.vert((-1.1, 0.9, z), (0.0, 0.0, sign), (0, 1))]
+        m.quad("Canvas", *ids) if sign > 0 else m.quad("Canvas", ids[3], ids[2], ids[1], ids[0])
+    return m
+
+
+def build_tent_2():
+    # An A-frame: ridge pole on two crossed sticks, the tarp over it, guy ropes to the pegs.
+    m = build_tent_0()
+    for x in (-1.05, 1.05):
+        for sy in (-1.0, 1.0):
+            stick(m, "Driftwood", (x, sy * 0.75, 0.0), (x, 0.0, 1.25), 0.025, 0.02, sides=6, wobble=0.0, seed=141, steps=2)
+    stick(m, "Bark", (-1.2, 0.0, 1.27), (1.2, 0.0, 1.27), 0.03, 0.03, sides=7, wobble=0.0, seed=142, steps=2)
+    for sy in (-1.0, 1.0):
+        n_out = _norm((0.0, sy, 0.6))
+        for sign in (1.0, -1.0):
+            n = _mul(n_out, sign)
+            ids = [m.vert((-1.1, sy * 0.85, 0.02), n, (0, 0)), m.vert((1.1, sy * 0.85, 0.02), n, (1, 0)),
+                   m.vert((1.1, 0.0, 1.26), n, (1, 1)), m.vert((-1.1, 0.0, 1.26), n, (0, 1))]
+            m.quad("Canvas", *ids) if sign > 0 else m.quad("Canvas", ids[3], ids[2], ids[1], ids[0])
+    for x in (-1.1, 1.1):
+        for sy in (-1.0, 1.0):
+            m.tube("Rope", [(x, 0.0, 1.26), (x * 0.95 + (0.0 if x < 0 else 0.0), sy * 0.78, 0.22)], [0.006, 0.006], 5, v_per_metre=10.0)
+    return m
+
+
+def build_compost_bin_0():
+    m = Mesh()
+    for k in range(4):
+        a = math.pi / 2 * k
+        for z in (0.12, 0.3, 0.48, 0.66):
+            x, y = math.cos(a) * 0.45, math.sin(a) * 0.45
+            sx, sy = -math.sin(a), math.cos(a)
+            stick(m, "Driftwood", (x - sx * 0.5, y - sy * 0.5, z), (x + sx * 0.5, y + sy * 0.5, z), 0.03, 0.028, sides=6, wobble=0.0, seed=151 + k, steps=2)
+    for x, y in ((-0.45, -0.45), (0.45, -0.45), (0.45, 0.45), (-0.45, 0.45)):
+        stick(m, "Bark", (x, y, 0.0), (x, y, 0.8), 0.035, 0.03, sides=7, wobble=0.0, seed=160, steps=2)
+    return m
+
+
+def build_drying_rack_0():
+    m = Mesh()
+    for x in (-0.8, 0.8):
+        for sy in (-1.0, 1.0):
+            stick(m, "Driftwood", (x, sy * 0.45, 0.0), (x, 0.0, 1.5), 0.028, 0.022, sides=6, wobble=0.0, seed=171, steps=2)
+    for z in (1.5, 1.1):
+        stick(m, "Bark", (-0.95, 0.0, z), (0.95, 0.0, z), 0.03, 0.03, sides=7, wobble=0.0, seed=172, steps=2)
+    for x in (-0.5, -0.15, 0.2, 0.55):
+        m.tube("Rope", [(x, 0.0, 1.5), (x, 0.0, 1.2)], [0.005, 0.005], 5, v_per_metre=10.0)
+    return m
+
+
+def _sandbag(seed):
+    bag = Mesh()
+    lathe(bag, "Sand", [(0.0, 0.0), (0.2, 0.03), (0.24, 0.1), (0.2, 0.17), (0.0, 0.2)], sides=10, squash=(1.0, 0.6), bumps=0.05, seed=seed)
+    return bag
+
+
+def build_sandbag_wall_0():
+    m = Mesh()
+    stick(m, "Driftwood", (-1.0, 0.0, 0.02), (1.0, 0.0, 0.02), 0.02, 0.02, sides=6, wobble=0.0, seed=181, steps=2)
+    return m
+
+
+def build_sandbag_wall_1():
+    m = Mesh()
+    for x in (-0.3, 0.3):
+        merge(m, _sandbag(185), (x, 0.0, 0.0))
+    return m
+
+
+def build_sandbag_wall_2():
+    m = Mesh()
+    for x in (-0.6, 0.0, 0.6):
+        merge(m, _sandbag(186), (x, 0.0, 0.0))
+    for x in (-0.3, 0.3):
+        merge(m, _sandbag(187), (x, 0.0, 0.19))
+    return m
+
+
+def build_storage_crate_0():
+    m = Mesh()
+    box(m, "Wood", (0.9, 0.6, 0.55))
+    box(m, "Wood", (0.96, 0.66, 0.06), at=(0.0, 0.0, 0.55))
+    for x in (-0.3, 0.0, 0.3):
+        box(m, "Driftwood", (0.06, 0.62, 0.5), at=(x, 0.0, 0.03))
+    return m
+
+
+def build_raft_site_0():
+    # Two skids on the sand to lay the logs across.
+    m = Mesh()
+    for y in (-0.9, 0.9):
+        stick(m, "Driftwood", (-1.2, y, 0.04), (1.2, y, 0.04), 0.04, 0.04, sides=7, wobble=0.01, seed=191, steps=3)
+    return m
+
+
+def build_raft_site_1():
+    m = build_raft_site_0()
+    for k in range(6):
+        x = -1.0 + k * 0.4
+        stick(m, "Bark", (x, -1.3, 0.17), (x, 1.3, 0.17), 0.1, 0.09, sides=10, wobble=0.0, seed=201 + k, steps=3)
+    return m
+
+
+def build_raft_site_2():
+    m = build_raft_site_1()
+    for y in (-0.9, 0.0, 0.9):
+        stick(m, "Driftwood", (-1.25, y, 0.3), (1.25, y, 0.3), 0.04, 0.04, sides=7, wobble=0.0, seed=211, steps=3)
+        for x in (-1.0, -0.2, 0.6):
+            ring(m, "Rope", (x, y, 0.22), 0.14, 0.008, axis=(0.0, 1.0, 0.0), sides=6, segments=12)
+    return m
+
+
+STRUCTURES = {
+    "campfire_0": build_campfire_0, "campfire_1": build_campfire_1, "campfire_2": build_campfire_2,
+    "lean_to_0": build_lean_to_0,
+    "tent_0": build_tent_0, "tent_1": build_tent_1, "tent_2": build_tent_2,
+    "compost_bin_0": build_compost_bin_0, "drying_rack_0": build_drying_rack_0,
+    "sandbag_wall_0": build_sandbag_wall_0, "sandbag_wall_1": build_sandbag_wall_1, "sandbag_wall_2": build_sandbag_wall_2,
+    "storage_crate_0": build_storage_crate_0,
+    "raft_site_0": build_raft_site_0, "raft_site_1": build_raft_site_1, "raft_site_2": build_raft_site_2,
+}
+
+
 MODELS = {
     "stone": build_stone, "flint": build_flint, "coconut": build_coconut, "driftwood": build_driftwood, "log": build_log,
     "fiber": build_fiber, "rope": build_rope, "stone_hatchet": build_stone_hatchet, "oar": build_oar, "knife": build_knife,
@@ -319,17 +546,22 @@ FINISHES = {
     "Stone": ((0.42, 0.4, 0.36), 0.8, 0.0), "Flint": ((0.14, 0.14, 0.15), 0.35, 0.0), "Fiber": ((0.62, 0.52, 0.3), 0.9, 0.0),
     "Rope": ((0.5, 0.42, 0.28), 0.85, 0.0), "Husk": ((0.3, 0.19, 0.09), 0.85, 0.0), "Steel": ((0.5, 0.5, 0.52), 0.35, 1.0),
     "Plastic": ((0.08, 0.1, 0.12), 0.45, 0.0), "Canvas": ((0.3, 0.32, 0.22), 0.9, 0.0),
+    "Frond": ((0.42, 0.36, 0.14), 0.85, 0.0), "Sand": ((0.72, 0.66, 0.5), 0.95, 0.0),
 }
 
 
 def write_item_models(out_dir):
-    """Writes every model's OBJ into out_dir. Returns {id: path}."""
+    """Writes every item's and structure stage's OBJ into out_dir. Returns {asset name: path}."""
     os.makedirs(out_dir, exist_ok=True)
     written = {}
     for item_id, build in MODELS.items():
         path = os.path.join(out_dir, f"SM_Item_{item_id}.obj")
         build().write_obj(path, comment=f"Riptide item {item_id}, generated by riptide_item_models.py")
-        written[item_id] = path
+        written[f"SM_Item_{item_id}"] = path
+    for stage_id, build in STRUCTURES.items():
+        path = os.path.join(out_dir, f"SM_Structure_{stage_id}.obj")
+        build().write_obj(path, comment=f"Riptide structure {stage_id}, generated by riptide_item_models.py")
+        written[f"SM_Structure_{stage_id}"] = path
     return written
 
 
@@ -403,11 +635,11 @@ def make_item_assets():
         assets.delete_directory(ITEMS_PATH)
     written = write_item_models(os.path.join(saved, "Generated", "Items"))
     tasks = []
-    for item_id, obj in written.items():
+    for asset_name, obj in written.items():
         task = unreal.AssetImportTask()
         task.filename = obj
         task.destination_path = ITEMS_PATH
-        task.destination_name = f"SM_Item_{item_id}"
+        task.destination_name = asset_name
         task.automated = True
         task.replace_existing = True
         task.save = False
@@ -415,12 +647,13 @@ def make_item_assets():
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
     finishes = {slot: _finish_material(slot, unreal) for slot in FINISHES}
     tools = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
-    for item_id in written:
-        path = f"{ITEMS_PATH}/SM_Item_{item_id}"
+    for asset_name in written:
+        path = f"{ITEMS_PATH}/{asset_name}"
         mesh = unreal.load_asset(path)
         if not mesh:
-            unreal.log_error(f"Riptide: item model {item_id} failed to import")
+            unreal.log_error(f"Riptide: model {asset_name} failed to import")
             continue
+        item_id = asset_name.split("_", 2)[2]
         slots = mesh.get_editor_property("static_materials")
         for i, slot in enumerate(slots):
             name = str(slot.get_editor_property("material_slot_name"))
@@ -434,6 +667,13 @@ def make_item_assets():
         nanite = tools.get_nanite_settings(mesh)
         nanite.set_editor_property("enabled", False)
         tools.set_nanite_settings(mesh, nanite, True)
+        if asset_name.startswith("SM_Structure_"):
+            # Built things are walked round and into (under a lean-to): their own triangles are the collision.
+            body = mesh.get_editor_property("body_setup")
+            body.set_editor_property("collision_trace_flag", unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE)
+            assets.set_metadata_tag(mesh, "RiptideVersion", ITEM_MODELS_VERSION)
+            assets.save_asset(path, only_if_is_dirty=False)
+            continue
         box = mesh.get_bounding_box()
         shape = unreal.KBoxElem()
         shape.set_editor_property("center", (box.min + box.max) * 0.5)

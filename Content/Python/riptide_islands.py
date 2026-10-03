@@ -15,7 +15,7 @@ ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
 ISLAND_VERSIONS = {"StartCay": "13"}
 GREY_VERSION = "3"
-ISLAND_MAP_VERSION = "17"
+ISLAND_MAP_VERSION = "21"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
 # tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in
@@ -749,12 +749,15 @@ PROP_MESHES = {
     "fern": ("model", "fern_02", False), "grass": ("model", "grass_medium_01", False), "shell": ("model", "lambis_shell", False),
     "outcrop": ("model", "coast_rocks_05", True), "boulder": ("model", "boulder_01", True),
     "log": ("model", "dead_tree_trunk_02", True), "branch": ("model", "dry_branches_medium_01", False),
+    # Loose stones and flint to pick up: the items' own coded models (riptide_item_models.py).
+    "stone": ("item", "stone", False), "flint": ("item", "flint", False),
 }
 
 # Things that lie on the ground rather than grow from one point: they're laid to the ground's slope, then bedded in
 # until no part of their underside is above it. (kind: how much of its footprint must be bedded, the most of its
 # height that may be buried.) A piece that can't be bedded within that isn't placed.
-LYING = {"outcrop": (0.9, 0.7), "boulder": (0.7, 0.65), "log": (0.9, 0.6), "branch": (0.85, 0.8), "shell": (0.5, 0.35)}
+LYING = {"outcrop": (0.9, 0.7), "boulder": (0.7, 0.65), "log": (0.9, 0.6), "branch": (0.85, 0.8), "shell": (0.5, 0.35),
+         "stone": (0.5, 0.5), "flint": (0.5, 0.5)}
 
 
 def _bed_into_ground(island, mesh, prop, origin):
@@ -808,6 +811,8 @@ def _place_props(name, island, origin=(0.0, 0.0, 0.0)):
         source, which, solid = PROP_MESHES[prop["kind"]]
         if source == "palm":
             path = f"{riptide_island_props.PALMS_PATH}/{which}"
+        elif source == "item":
+            path = f"/Game/Riptide/Items/SM_Item_{which}"
         else:
             entries = catalogue.get(which, [])
             if not entries:
@@ -825,7 +830,7 @@ def _place_props(name, island, origin=(0.0, 0.0, 0.0)):
             if transform is None:
                 counts["(not placed: would float)"] = counts.get("(not placed: would float)", 0) + 1
                 continue
-            holder.add_prop(mesh, transform, solid)
+            holder.add_prop(mesh, transform, solid, prop["kind"])
             counts[prop["kind"]] = counts.get(prop["kind"], 0) + 1
             continue
         x, y = prop["x"], prop["y"]
@@ -838,7 +843,7 @@ def _place_props(name, island, origin=(0.0, 0.0, 0.0)):
         scale = prop["scale"]
         transform = unreal.Transform(location=unreal.Vector(origin[0] + y * 100.0, origin[1] + x * 100.0, origin[2] + z * 100.0),
                                      rotation=rotation, scale=unreal.Vector(scale, scale, scale))
-        holder.add_prop(mesh, transform, solid)
+        holder.add_prop(mesh, transform, solid, prop["kind"])
         counts[prop["kind"]] = counts.get(prop["kind"], 0) + 1
     unreal.log(f"Riptide: {name} planted: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
 
@@ -1137,10 +1142,11 @@ def _place_pond(name, island, origin=(0.0, 0.0, 0.0)):
     tools.set_nanite_settings(asset, nanite, True)
     unreal.EditorAssetLibrary.save_asset(f"{ISLANDS_PATH}/{name}/SM_{name}_Pond", only_if_is_dirty=False)
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-    actor = actors.spawn_actor_from_object(asset, unreal.Vector(origin[0] + y * 100.0, origin[1] + x * 100.0, origin[2] + z * 100.0))
+    # The pool is something to use: fill a canteen, or drink from it (RiptidePond.cpp).
+    actor = actors.spawn_actor_from_class(unreal.RiptidePond, unreal.Vector(origin[0] + y * 100.0, origin[1] + x * 100.0, origin[2] + z * 100.0))
     actor.set_actor_label(f"{name}_Pool")
     actor.set_folder_path(f"Islands/{name}")
-    actor.static_mesh_component.set_collision_profile_name("NoCollision")
+    actor.get_water().set_static_mesh(asset)
     unreal.log(f"Riptide: {name}'s pool lies at {z:.2f} m in the hollow")
 
 
@@ -1208,6 +1214,10 @@ def build_island_test_map(ns, rebuilt):
     sx, sy = bx + ox * BOAT_START_OFF_BEACH, by + oy * BOAT_START_OFF_BEACH
     # Unreal's X is north (the design's y), Y is east (the design's x).
     spawn(unreal.PlayerStart, (sy * 100.0, sx * 100.0, 150.0), yaw=math.degrees(math.atan2(-ox, -oy)))
+    # Where castaways wash up: a few metres up the beach, facing inland. With this in the map the crew start on
+    # foot with nothing (ARiptideGameMode); the boat start above is for dev mode and the boat tests.
+    lx, ly = bx - ox * 6.0, by - oy * 6.0
+    spawn(unreal.RiptideBeachStart, (ly * 100.0, lx * 100.0, max(island.height(lx, ly), 0.0) * 100.0 + 100.0), yaw=math.degrees(math.atan2(-ox, -oy)))
 
     levels.save_current_level()
     assets.set_metadata_tag(unreal.load_asset(ISLAND_MAP_PATH), "RiptideVersion", ISLAND_MAP_VERSION)

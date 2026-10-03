@@ -4,8 +4,10 @@
 #include "Kismet/GameplayStatics.h"
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
+#include "RiptideBeachStart.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
+#include "RiptideSea.h"
 #include "RiptideHUD.h"
 #include "RiptidePlayerState.h"
 #include "RiptidePlayerController.h"
@@ -68,27 +70,47 @@ FString ARiptideGameMode::InitNewPlayer(APlayerController* NewPlayerController, 
 
 APawn* ARiptideGameMode::SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot)
 {
-	ARiptideBoat* Boat = FindOrLaunchBoat(StartSpot);
 	UClass* PawnClass = GetDefaultPawnClassForController(NewPlayer);
-	if (!Boat || !PawnClass || !PawnClass->IsChildOf(ARiptideCharacter::StaticClass()))
+	if (!PawnClass || !PawnClass->IsChildOf(ARiptideCharacter::StaticClass()))
 	{
 		return Super::SpawnDefaultPawnFor_Implementation(NewPlayer, StartSpot);
 	}
-
-	// Each player gets their own spot on the deck, starting at the helm.
 	int32 Crew = 0;
 	for (TActorIterator<ARiptideCharacter> It(GetWorld()); It; ++It)
 	{
 		++Crew;
 	}
-	const FTransform Spot = Boat->GetDeckSpotTransform(Crew);
 	const float HalfHeight = PawnClass->GetDefaultObject<ARiptideCharacter>()->GetDefaultHalfHeight();
-	const FVector Location = Spot.GetLocation() + Spot.GetUnitAxis(EAxis::Z) * (HalfHeight + 2.f);
-
 	FActorSpawnParameters Params;
 	Params.Instigator = GetInstigator();
 	Params.ObjectFlags |= RF_Transient;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	// Castaways: a map with a beach start lands the crew on the sand, on foot, with nothing.
+	for (TActorIterator<ARiptideBeachStart> It(GetWorld()); It; ++It)
+	{
+		const FTransform Landing = It->GetLandingTransform(Crew);
+		FVector Location = Landing.GetLocation();
+		if (const URiptideSeaSubsystem* Sea = GetWorld()->GetSubsystem<URiptideSeaSubsystem>())
+		{
+			float Ground = 0.f;
+			if (Sea->GetGroundZ(Location, Ground))
+			{
+				Location.Z = FMath::Max(Ground, 0.f) + HalfHeight + 5.f;
+			}
+		}
+		return GetWorld()->SpawnActor<ARiptideCharacter>(PawnClass, Location, Landing.Rotator(), Params);
+	}
+
+	ARiptideBoat* Boat = FindOrLaunchBoat(StartSpot);
+	if (!Boat)
+	{
+		return Super::SpawnDefaultPawnFor_Implementation(NewPlayer, StartSpot);
+	}
+
+	// Each player gets their own spot on the deck, starting at the helm.
+	const FTransform Spot = Boat->GetDeckSpotTransform(Crew);
+	const FVector Location = Spot.GetLocation() + Spot.GetUnitAxis(EAxis::Z) * (HalfHeight + 2.f);
 	ARiptideCharacter* Character = GetWorld()->SpawnActor<ARiptideCharacter>(PawnClass, Location, FRotator(0.f, Spot.Rotator().Yaw, 0.f), Params);
 	if (Character)
 	{
