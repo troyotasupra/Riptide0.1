@@ -137,6 +137,72 @@ void URiptideCrewBodyComponent::SetAppearance(const FRiptideAppearance& Look)
 	bBuilt = true;
 	ColourAll();
 	UpdateRifle();
+	ApplyFirstPerson();
+}
+
+void URiptideCrewBodyComponent::SetFirstPersonView(bool bOn)
+{
+	if (bFirstPerson == bOn)
+	{
+		return;
+	}
+	bFirstPerson = bOn;
+	ApplyFirstPerson();
+	for (int32 i = 0; i < Parts.Num(); ++i)
+	{
+		ApplyOwnerVisibility(Parts[i], EPart(i));
+	}
+}
+
+void URiptideCrewBodyComponent::ApplyFirstPerson()
+{
+	const FName Head(TEXT("Head"));
+	if (!bFirstPerson)
+	{
+		if (HasBody() && GetBoneIndex(Head) != INDEX_NONE)
+		{
+			UnHideBoneByName(Head);
+		}
+		if (ShadowBody)
+		{
+			ShadowBody->DestroyComponent();
+			ShadowBody = nullptr;
+		}
+		return;
+	}
+	if (!HasBody())
+	{
+		return;
+	}
+	// The head (and everything parented to it) scales away for this machine's render; the shadow comes from the copy.
+	if (GetBoneIndex(Head) != INDEX_NONE)
+	{
+		HideBoneByName(Head, EPhysBodyOp::PBO_None);
+	}
+	if (!ShadowBody)
+	{
+		AActor* Owner = GetOwner();
+		ShadowBody = NewObject<USkeletalMeshComponent>(Owner ? static_cast<UObject*>(Owner) : static_cast<UObject*>(this), NAME_None, RF_Transient);
+		ShadowBody->SetupAttachment(this);
+		ShadowBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		ShadowBody->SetGenerateOverlapEvents(false);
+		ShadowBody->bUseBoundsFromLeaderPoseComponent = true;
+		ShadowBody->CastShadow = true;
+		ShadowBody->bCastHiddenShadow = true;
+		ShadowBody->SetOwnerNoSee(true);
+		ShadowBody->SetOnlyOwnerSee(false);
+		ShadowBody->SetVisibility(true);
+		ShadowBody->bRenderInMainPass = false;      // never drawn, only its shadow
+		if (GetWorld())
+		{
+			ShadowBody->RegisterComponentWithWorld(GetWorld());
+		}
+	}
+	if (ShadowBody->GetSkeletalMeshAsset() != GetSkeletalMeshAsset())
+	{
+		ShadowBody->SetSkeletalMeshAsset(GetSkeletalMeshAsset());
+	}
+	ShadowBody->SetLeaderPoseComponent(this, true);
 }
 
 USkeletalMeshComponent* URiptideCrewBodyComponent::PartComponent(EPart Part)
@@ -154,7 +220,7 @@ USkeletalMeshComponent* URiptideCrewBodyComponent::PartComponent(EPart Part)
 		Slot->SetGenerateOverlapEvents(false);
 		Slot->bUseBoundsFromLeaderPoseComponent = true;
 		Slot->CastShadow = true;
-		ApplyOwnerVisibility(Slot);
+		ApplyOwnerVisibility(Slot, Part);
 		if (GetWorld())
 		{
 			Slot->RegisterComponentWithWorld(GetWorld());
@@ -250,19 +316,23 @@ void URiptideCrewBodyComponent::SetHiddenFromOwner(bool bHide)
 	VisibilityBasedAnimTickOption = bHide ? EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones
 		: EVisibilityBasedAnimTickOption::OnlyTickPoseWhenRendered;
 	ApplyOwnerVisibility(this);
-	for (USkeletalMeshComponent* Part : Parts)
+	for (int32 i = 0; i < Parts.Num(); ++i)
 	{
-		ApplyOwnerVisibility(Part);
+		ApplyOwnerVisibility(Parts[i], EPart(i));
 	}
 	ApplyOwnerVisibility(Rifle);
 }
 
-void URiptideCrewBodyComponent::ApplyOwnerVisibility(UPrimitiveComponent* Component) const
+void URiptideCrewBodyComponent::ApplyOwnerVisibility(UPrimitiveComponent* Component, EPart Part) const
 {
 	if (Component)
 	{
-		Component->SetOwnerNoSee(bHiddenFromOwner);
-		Component->bCastHiddenShadow = bHiddenFromOwner;
+		// What's on the face (a beard, a scarf or balaclava) and what sits right under the chin (the vest's plates
+		// and the pack's straps) would fill its own player's view looking down: never shown to them.
+		const bool bOnTheFace = Part == EPart::Beard || Part == EPart::FaceCover || Part == EPart::Vest || Part == EPart::Pack
+			|| (bFirstPerson && (Part == EPart::Hair || Part == EPart::Headgear));
+		Component->SetOwnerNoSee(bHiddenFromOwner || bOnTheFace);
+		Component->bCastHiddenShadow = bHiddenFromOwner || bOnTheFace;
 	}
 }
 

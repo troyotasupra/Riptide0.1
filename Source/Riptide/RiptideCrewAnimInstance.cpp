@@ -17,13 +17,29 @@ namespace
 	enum EClip : int32
 	{
 		Idle, Walk, Jog, CrouchIdle, CrouchWalk, JumpStart, JumpLoop, JumpLand, SwimIdle, SwimForward, ClimbUp, Rail,
-		Knockback, GetUp, RifleReady, ClipCount
+		Knockback, GetUp, RifleReady, Sprint, PunchJab, PunchCross, ReachOut, Consume, PickUp, Chop, Harvest, Throw, ClipCount
+	};
+
+	// The one-shot actions (ERiptideCrewAction, in order after None): the clip each plays over the upper body, how
+	// long it runs (0 for the clip's own length), and whether it loops while held.
+	struct FActionClip { int32 Clip; float Seconds; bool bLoop; };
+	const FActionClip ActionClips[] = {
+		{ Idle, 0.f, false },          // None
+		{ PunchJab, 0.f, false },
+		{ PunchCross, 0.f, false },
+		{ ReachOut, 0.f, false },
+		{ Consume, 0.f, false },
+		{ PickUp, 0.f, false },
+		{ Chop, 0.f, true },
+		{ Harvest, 0.f, false },
+		{ Throw, 0.f, false },
 	};
 
 	// How fast each clip's feet travel over the ground at its own speed (cm/s), measured from the clips (the
 	// distance a planted foot slides back over its stance): walking and running play faster or slower to match.
 	constexpr float WalkClipSpeed = 105.f;
 	constexpr float JogClipSpeed = 320.f;
+	constexpr float SprintClipSpeed = 520.f;
 	constexpr float CrouchClipSpeed = 70.f;
 
 	// The animations' rig: its legs (thigh + shin) are 82.9 cm, and its pelvis height is for those.
@@ -91,6 +107,15 @@ const TArray<TPair<FString, FString>>& URiptideCrewAnimInstance::GetClipTable()
 		{ TEXT("A_Knockback"), TEXT("UAL2/Hit_Knockback") },
 		{ TEXT("A_GetUp"), TEXT("UAL2/LayToIdle") },
 		{ TEXT("A_RifleReady"), TEXT("UAL1/Pistol_Idle_Loop") },
+		{ TEXT("A_Sprint"), TEXT("UAL1/Sprint_Loop") },
+		{ TEXT("A_PunchJab"), TEXT("UAL1/Punch_Jab") },
+		{ TEXT("A_PunchCross"), TEXT("UAL1/Punch_Cross") },
+		{ TEXT("A_Reach"), TEXT("UAL1/Interact") },
+		{ TEXT("A_Consume"), TEXT("UAL2/Consume") },
+		{ TEXT("A_PickUp"), TEXT("UAL1/PickUp_Table") },
+		{ TEXT("A_Chop"), TEXT("UAL2/TreeChopping_Loop") },
+		{ TEXT("A_Harvest"), TEXT("UAL2/Farm_Harvest") },
+		{ TEXT("A_Throw"), TEXT("UAL2/OverhandThrow") },
 	};
 	check(Table.Num() == ClipCount);
 	return Table;
@@ -157,6 +182,9 @@ void URiptideCrewAnimInstance::GatherCharacter(ARiptideCharacter* Crew, float De
 	N.Direction = N.Speed > 5.f ? FMath::RadiansToDegrees(FMath::Atan2(Local.Y, Local.X)) : 0.f;
 	N.VerticalSpeed = Velocity.Z;
 	N.bCrouched = Crew->bIsCrouched;
+	N.bSprinting = Crew->IsSprinting();
+	N.Action = uint8(Crew->GetAction());
+	N.ActionTime = Crew->GetActionTime();
 	N.AimPitch = FRotator::NormalizeAxis(Crew->GetBaseAimRotation().Pitch);
 
 	const bool bFalling = Move && Move->IsFalling() && !Crew->IsInSea() && !Crew->IsClimbing();
@@ -255,12 +283,27 @@ void FRiptideCrewAnimProxy::Update(float DeltaSeconds)
 	if (WalkClip && JogClip)
 	{
 		const float JogW = FMath::Clamp((SmoothedSpeed - 160.f) / 140.f, 0.f, 1.f);
+		const float SprintW = FMath::Clamp((SmoothedSpeed - 380.f) / 160.f, 0.f, 1.f);
+		const UAnimSequence* SprintClip = Clips.IsValidIndex(Sprint) ? Clips[Sprint] : nullptr;
 		const float Speed = FMath::Max(SmoothedSpeed, 40.f);
+		const float RunCycles = FMath::Lerp(Speed / JogClipSpeed / JogClip->GetPlayLength(),
+			SprintClip ? Speed / SprintClipSpeed / SprintClip->GetPlayLength() : Speed / JogClipSpeed / JogClip->GetPlayLength(), SprintW);
 		const float Cycles = In.bCrouched
 			? Speed / CrouchClipSpeed / (Clips[CrouchWalk] ? Clips[CrouchWalk]->GetPlayLength() : 2.f)
-			: FMath::Lerp(Speed / WalkClipSpeed / WalkClip->GetPlayLength(), Speed / JogClipSpeed / JogClip->GetPlayLength(), JogW);
+			: FMath::Lerp(Speed / WalkClipSpeed / WalkClip->GetPlayLength(), RunCycles, JogW);
 		StridePhase = FMath::Frac(StridePhase + (bBackwards ? -1.f : 1.f) * Cycles * DeltaSeconds + 1.f);
 	}
+	// The action over the upper body fades in and out round its clip.
+	const bool bActing = In.Action > 0 && In.Action < UE_ARRAY_COUNT(ActionClips);
+	float ActionGoal = 0.f;
+	if (bActing)
+	{
+		const FActionClip& Act = ActionClips[In.Action];
+		const UAnimSequence* Clip = Clips.IsValidIndex(Act.Clip) ? Clips[Act.Clip] : nullptr;
+		const float Length = Act.Seconds > 0.f ? Act.Seconds : Clip ? Clip->GetPlayLength() : 0.f;
+		ActionGoal = Act.bLoop || In.ActionTime < Length - 0.1f ? 1.f : 0.f;
+	}
+	ActionWeight = FMath::FInterpConstantTo(ActionWeight, ActionGoal, DeltaSeconds, 1.f / 0.12f);
 	const float SwimGoal = FMath::Clamp((In.Speed - 40.f) / 110.f, 0.f, 1.f);
 	SwimWeight = FMath::FInterpTo(SwimWeight, SwimGoal, DeltaSeconds, 4.f);
 	SwimPhase = FMath::Frac(SwimPhase + DeltaSeconds * FMath::Clamp(In.Speed / 110.f, 0.7f, 1.4f) / 1.33f);
@@ -406,13 +449,23 @@ void FRiptideCrewAnimProxy::Locomotion(FPoseContext& Out) const
 	else
 	{
 		const float JogW = FMath::Clamp((S - 160.f) / 140.f, 0.f, 1.f);
+		const float SprintW = FMath::Clamp((S - 380.f) / 160.f, 0.f, 1.f);
 		const UAnimSequence* WalkClip = Clips[Walk];
 		const UAnimSequence* JogClip = Clips[Jog];
+		const UAnimSequence* SprintClip = Clips.IsValidIndex(Sprint) ? Clips[Sprint] : nullptr;
 		Sample(Walk, StridePhase * (WalkClip ? WalkClip->GetPlayLength() : 1.f), true, Moving);
 		if (JogW > 0.01f)
 		{
 			FPoseContext Running(Out);
 			Sample(Jog, StridePhase * (JogClip ? JogClip->GetPlayLength() : 1.f), true, Running);
+			if (SprintW > 0.01f && SprintClip)
+			{
+				// Flat out: the sprint over the jog.
+				FPoseContext Sprinting(Out);
+				Sample(Sprint, StridePhase * SprintClip->GetPlayLength(), true, Sprinting);
+				float RW = 1.f - SprintW;
+				BlendInto(Running, RW, Sprinting, SprintW);
+			}
 			float W = 1.f - JogW;
 			BlendInto(Moving, W, Running, JogW);
 		}
@@ -714,6 +767,23 @@ bool FRiptideCrewAnimProxy::Evaluate(FPoseContext& Output)
 	{
 		Output.ResetToRefPose();
 		return true;
+	}
+
+	// An action (a punch, a reach for something, eating) plays over the upper body while the legs carry on.
+	if (ActionWeight > 0.01f && In.Action > 0 && In.Action < UE_ARRAY_COUNT(ActionClips))
+	{
+		const FActionClip& Act = ActionClips[In.Action];
+		FPoseContext Acting(Output);
+		Sample(Act.Clip, In.ActionTime, Act.bLoop, Acting);
+		FPoseContext Result(Output);
+		TArray<float> Upper = UpperBody;
+		for (float& W : Upper)
+		{
+			W *= ActionWeight;
+		}
+		FAnimationPoseData A(Output), Bp(Acting), R(Result);
+		FAnimationRuntime::BlendTwoPosesTogetherPerBone(A, Bp, Upper, R);
+		Output.Pose.CopyBonesFrom(Result.Pose);
 	}
 
 	// The clips' hips are at the height for their rig's legs: raised or lowered for this body's.

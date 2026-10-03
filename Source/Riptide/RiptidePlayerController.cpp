@@ -26,7 +26,9 @@
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
 #include "RiptideDevPanel.h"
+#include "RiptideItems.h"
 #include "RiptideSprayComponent.h"
+#include "RiptideWorldItem.h"
 #include "RiptideVoice.h"
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
@@ -918,6 +920,61 @@ void ARiptidePlayerController::SetGodMode(bool bOn)
 		Crew->SetSteadyFeet(bOn);
 	}
 	DevNote(bOn ? TEXT("God mode on: the deck never throws you, and the tank never empties") : TEXT("God mode off"));
+#endif
+}
+
+void ARiptidePlayerController::Give(const FString& Item, int32 Count)
+{
+#if RIPTIDE_WITH_DEV_MODE
+	ARiptideCharacter* Crew = GetCrewMember();
+	const FName Id(*Item.ToLower());
+	if (!CanUseDevMode() || !Crew || !Crew->HasAuthority())
+	{
+		DevNote(TEXT("Give: dev mode only, on the machine running the game"), FColor::Orange);
+		return;
+	}
+	if (!RiptideItems::Find(Id))
+	{
+		DevNote(FString::Printf(TEXT("No item called %s (type Items for the list)"), *Item), FColor::Orange);
+		return;
+	}
+	const int32 Left = Crew->GiveItem(Id, FMath::Max(Count, 1));
+	DevNote(FString::Printf(TEXT("Gave %d %s%s"), FMath::Max(Count, 1), *Item, Left > 0 ? TEXT(" (some on the ground: no room)") : TEXT("")));
+#endif
+}
+
+void ARiptidePlayerController::Spawn(const FString& Item, int32 Count)
+{
+#if RIPTIDE_WITH_DEV_MODE
+	ARiptideCharacter* Crew = GetCrewMember();
+	const FName Id(*Item.ToLower());
+	if (!CanUseDevMode() || !Crew || !Crew->HasAuthority())
+	{
+		DevNote(TEXT("Spawn: dev mode only, on the machine running the game"), FColor::Orange);
+		return;
+	}
+	if (!RiptideItems::Find(Id))
+	{
+		DevNote(FString::Printf(TEXT("No item called %s (type Items for the list)"), *Item), FColor::Orange);
+		return;
+	}
+	const FVector Forward = GetControlRotation().Vector();
+	const FVector At = (DevCamera ? DevCamera->GetActorLocation() : Crew->GetActorLocation() + FVector(0.f, 0.f, 60.f)) + Forward * 150.f;
+	ARiptideWorldItem::Drop(GetWorld(), FRiptideItemGrid::NewStack(Id, FMath::Max(Count, 1)), At, Forward * 80.f);
+	DevNote(FString::Printf(TEXT("Dropped %d %s"), FMath::Max(Count, 1), *Item));
+#endif
+}
+
+void ARiptidePlayerController::Items()
+{
+#if RIPTIDE_WITH_DEV_MODE
+	FString All;
+	for (const FRiptideItemDef& Def : RiptideItems::All())
+	{
+		All += (All.IsEmpty() ? TEXT("") : TEXT(", ")) + Def.Id.ToString();
+	}
+	UE_LOG(LogRiptideDev, Display, TEXT("Items: %s"), *All);
+	DevNote(FString::Printf(TEXT("%d items; the list is in the log (Items:)"), RiptideItems::All().Num()));
 #endif
 }
 

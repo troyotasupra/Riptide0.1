@@ -3,8 +3,10 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "Kismet/KismetRenderingLibrary.h"
+#include "RiptideCharacter.h"
 #include "RiptideItemIcons.h"
 #include "RiptideItems.h"
+#include "RiptideStorageComponent.h"
 #include "Dom/JsonObject.h"
 #include "Misc/FileHelper.h"
 #include "Serialization/JsonSerializer.h"
@@ -132,6 +134,39 @@ int32 URiptideDataLibrary::TakeAllIcons(const UObject* WorldContextObject)
 		}
 	}
 	return Taken;
+}
+
+int32 URiptideDataLibrary::CountCarried(const ARiptideCharacter* Crew, FName Id)
+{
+	const URiptideStorageComponent* Inventory = Crew ? Crew->GetInventory() : nullptr;
+	int32 Total = 0;
+	for (int32 Grid = 0; Inventory && Grid < Inventory->Num(); ++Grid)
+	{
+		if (const FRiptideStorage* Storage = Inventory->GetStorage(Grid))
+		{
+			Total += Storage->Grid.CountOf(Id);
+		}
+	}
+	return Total;
+}
+
+int32 URiptideDataLibrary::FirstCarriedUid(const ARiptideCharacter* Crew, FName Id)
+{
+	const URiptideStorageComponent* Inventory = Crew ? Crew->GetInventory() : nullptr;
+	for (int32 Grid = 0; Inventory && Grid < Inventory->Num(); ++Grid)
+	{
+		if (const FRiptideStorage* Storage = Inventory->GetStorage(Grid))
+		{
+			for (const FRiptideItem& Item : Storage->Grid.Items)
+			{
+				if (Item.Id == Id)
+				{
+					return Item.Uid;
+				}
+			}
+		}
+	}
+	return 0;
 }
 
 bool URiptideDataLibrary::SaveIcon(const UObject* WorldContextObject, FName Id, const FString& Path)

@@ -13,6 +13,21 @@ class URiptideStorageComponent;
 class SRiptideInventory;
 struct FInputActionValue;
 
+/** A one-shot action a crew member's upper body performs over whatever the legs are doing. */
+UENUM(BlueprintType)
+enum class ERiptideCrewAction : uint8
+{
+	None,
+	PunchJab,
+	PunchCross,
+	Reach,          // a hand out to use or take something
+	Consume,        // eating or drinking
+	PickUp,
+	Chop,           // swinging a hatchet, while held
+	Harvest,
+	Throw,
+};
+
 /**
  * A crew member on foot, in first person.
  *
@@ -133,6 +148,31 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsKnockedDown() const;
 
+	/** Running flat out (Shift, away from any handhold). */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsSprinting() const { return bSprinting && !bIsCrouched; }
+
+	/** Sprints (or stops) as if Shift were held. For tests and AI. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetSprinting(bool bRun);
+
+	/** The upper-body action under way, and seconds into it (on every machine). */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	ERiptideCrewAction GetAction() const;
+	float GetActionTime() const;
+
+	/** Starts an action (a punch, a reach, a swing) now; the server tells everyone. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void StartAction(ERiptideCrewAction NewAction);
+
+	/** Stops a held action (chopping). */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void StopAction();
+
+	/** Throws a punch with alternating hands. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void Punch();
+
 	/** Seconds since the last knockdown began (large if there's never been one), on every machine. */
 	float GetKnockdownElapsed() const;
 
@@ -178,6 +218,28 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void OpenInventory(int32 Locker);
 
+	/** Opens the inventory screen with any container's grid alongside (a bag on the ground, a crate). Local player only. */
+	void OpenContainer(URiptideStorageComponent* Container, int32 Index);
+
+	/** The server telling this player's machine to open a container it has just used. */
+	UFUNCTION(Client, Reliable)
+	void ClientOpenContainer(URiptideStorageComponent* Container, int32 Index);
+
+	/** Looks at and uses things in the world (IRiptideInteractable). */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	class URiptideInteractionComponent* GetInteraction() const { return Interaction; }
+
+	/** Drops Count of a carried stack (all of it when 0) on the ground in front (the server does it). Players use G. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void DropItem(int32 StorageIndex, int32 Uid, int32 Count);
+
+	UFUNCTION(Server, Reliable)
+	void ServerDropItem(int32 StorageIndex, int32 Uid, int32 Count);
+
+	/** Puts Count of item Id straight into the pockets or pack, whatever doesn't fit on the ground. Server only. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	int32 GiveItem(FName Id, int32 Count);
+
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void CloseInventory();
 	bool IsInventoryOpen() const { return InventoryWidget.IsValid(); }
@@ -191,6 +253,19 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Crew")
 	TObjectPtr<URiptideStorageComponent> Inventory;
+
+	UPROPERTY(VisibleAnywhere, Category = "Crew")
+	TObjectPtr<class URiptideInteractionComponent> Interaction;
+
+	/** The container the inventory screen was opened with, if not a locker. */
+	TWeakObjectPtr<URiptideStorageComponent> OpenedContainer;
+	int32 OpenedContainerIndex = INDEX_NONE;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> DropAction;
+
+	void OnDropKey(const FInputActionValue& Value);
+	void OnInteractReleased(const FInputActionValue& Value);
 
 	/** How far (cm) from the eyes a locker's lid can be looked at and opened. */
 	UPROPERTY(EditAnywhere, Category = "Crew")
@@ -364,6 +439,34 @@ private:
 
 	UPROPERTY(Replicated)
 	bool bBracing = false;
+
+	UPROPERTY(Replicated)
+	bool bSprinting = false;
+
+	/** The action under way and when it began on the server's clock (so every machine plays it in step). */
+	UPROPERTY(Replicated)
+	ERiptideCrewAction Action = ERiptideCrewAction::None;
+
+	UPROPERTY(Replicated)
+	double ActionStartTime = -100.0;
+
+	bool bNextPunchIsCross = false;
+
+	UFUNCTION(Server, Reliable)
+	void ServerSetSprinting(bool bRun);
+
+	UFUNCTION(Server, Reliable)
+	void ServerStartAction(ERiptideCrewAction NewAction);
+
+	void OnPunch(const FInputActionValue& Value);
+	void OnCrouchKey(const FInputActionValue& Value);
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> PunchAction;
+
+	/** Running flat out, cm/s. */
+	UPROPERTY(EditAnywhere, Category = "Crew")
+	float SprintSpeed = 600.f;
 
 	bool bSteadyFeet = false;
 

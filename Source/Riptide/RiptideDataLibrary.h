@@ -30,6 +30,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Riptide|Data", meta = (WorldContext = "WorldContextObject"))
 	static int32 TakeAllIcons(const UObject* WorldContextObject);
 
+	/** How many of item Id a crew member carries across every grid, and the uid of the first stack of it (0 if
+	 * none). For tests. */
+	UFUNCTION(BlueprintPure, Category = "Riptide|Data")
+	static int32 CountCarried(const class ARiptideCharacter* Crew, FName Id);
+
+	UFUNCTION(BlueprintPure, Category = "Riptide|Data")
+	static int32 FirstCarriedUid(const class ARiptideCharacter* Crew, FName Id);
+
 	/** Writes one item's inventory picture to a PNG at Path (a full file path). For looking at them. */
 	UFUNCTION(BlueprintCallable, Category = "Riptide|Data", meta = (WorldContext = "WorldContextObject"))
 	static bool SaveIcon(const UObject* WorldContextObject, FName Id, const FString& Path);

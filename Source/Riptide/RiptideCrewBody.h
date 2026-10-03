@@ -55,6 +55,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void SetHiddenFromOwner(bool bHide);
 
+	/** The owner's own first-person view of this body: the head and what's on it aren't drawn for them (the camera
+	 * is inside it), while a shadow-only copy keeps the whole figure's shadow on the ground. Others see all of it. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetFirstPersonView(bool bOn);
+
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsFirstPersonView() const { return bFirstPerson; }
+
 	/** What the animation shows now (for tests). */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	ERiptideCrewAnimState GetAnimState() const;
@@ -88,14 +96,22 @@ private:
 	/** The material to draw a slot with, with this look's colours set (one dynamic instance per material). */
 	UMaterialInterface* Coloured(UMaterialInterface* Material);
 	void ColourAll();
-	void ApplyOwnerVisibility(UPrimitiveComponent* Component) const;
+	void ApplyOwnerVisibility(UPrimitiveComponent* Component, EPart Part = EPart::Count) const;
 	void UpdateRifle();
+	/** Hides the head for the owner and keeps the shadow copy in step with the body (after a rebuild). */
+	void ApplyFirstPerson();
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<USkeletalMeshComponent>> Parts;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMeshComponent> Rifle;
+
+	/** The whole body again, drawn for nobody, there only for its shadow in the owner's first-person view. */
+	UPROPERTY(Transient)
+	TObjectPtr<USkeletalMeshComponent> ShadowBody;
+
+	bool bFirstPerson = false;
 
 	/** Dynamic instances by the material they were made from. */
 	UPROPERTY(Transient)

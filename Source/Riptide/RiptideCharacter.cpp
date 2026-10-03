@@ -17,8 +17,11 @@
 #include "RiptideBoat.h"
 #include "RiptideCharacterMovement.h"
 #include "RiptideCrewBody.h"
+#include "RiptideInteractionComponent.h"
+#include "RiptideItems.h"
 #include "RiptidePlayerState.h"
 #include "RiptideInventoryWidget.h"
+#include "RiptideWorldItem.h"
 #include "RiptideSettings.h"
 #include "RiptideStorageComponent.h"
 #include "Engine/GameViewportClient.h"
@@ -43,6 +46,7 @@ ARiptideCharacter::ARiptideCharacter(const FObjectInitializer& ObjectInitializer
 	FirstPersonCamera->bUsePawnControlRotation = true;
 
 	Inventory = CreateDefaultSubobject<URiptideStorageComponent>(TEXT("Inventory"));
+	Interaction = CreateDefaultSubobject<URiptideInteractionComponent>(TEXT("Interaction"));
 	BaseEyeHeight = 70.f;
 
 	bUseControllerRotationYaw = true;
@@ -71,13 +75,15 @@ ARiptideCharacter::ARiptideCharacter(const FObjectInitializer& ObjectInitializer
 	// A body nobody is controlling (its player away driving the boat, or a crew member whose player has left) still
 	// stands on the deck and rides along with it.
 	Move->bRunPhysicsWithNoController = true;
+	Move->GetNavAgentPropertiesRef().bCanCrouch = true;
+	Move->SetCrouchedHalfHeight(58.f);
 
 	// The body (built from the player's look in ApplyAppearance): feet on the bottom of the capsule, turned to face
-	// forward (the model faces its own +Y). Its own player never sees it (it would fill the first-person view),
-	// only its shadow; everyone else does.
+	// forward (the model faces its own +Y). Its own player sees it too, looking down: the camera sits at its eyes
+	// (Tick), and only what's on the face (glasses, a scarf) is kept out of the view.
 	URiptideCrewBodyComponent* Body = GetCrewBody();
 	Body->SetRelativeLocationAndRotation(FVector(0.f, 0.f, -88.f), FRotator(0.f, -90.f, 0.f));
-	Body->SetHiddenFromOwner(true);
+	Body->SetHiddenFromOwner(false);
 }
 
 URiptideCrewBodyComponent* ARiptideCharacter::GetCrewBody() const
@@ -92,6 +98,9 @@ void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ARiptideCharacter, bManningHelm);
 	DOREPLIFETIME(ARiptideCharacter, OverboardCount);
 	DOREPLIFETIME(ARiptideCharacter, bBracing);
+	DOREPLIFETIME(ARiptideCharacter, bSprinting);
+	DOREPLIFETIME(ARiptideCharacter, Action);
+	DOREPLIFETIME(ARiptideCharacter, ActionStartTime);
 	DOREPLIFETIME(ARiptideCharacter, KnockdownEndTime);
 	DOREPLIFETIME(ARiptideCharacter, LadderState);
 	DOREPLIFETIME(ARiptideCharacter, LadderFeetZ);
@@ -167,6 +176,15 @@ void ARiptideCharacter::BuildInput()
 	WalkMapping->MapKey(BraceAction, EKeys::Gamepad_LeftShoulder);
 	WalkMapping->MapKey(InteractAction, EKeys::E);
 	WalkMapping->MapKey(InteractAction, EKeys::Gamepad_FaceButton_Left);
+	// A punch: the left mouse button (or the right trigger), empty-handed.
+	PunchAction = NewObject<UInputAction>(this, TEXT("IA_Punch"));
+	PunchAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(PunchAction, EKeys::LeftMouseButton);
+	WalkMapping->MapKey(PunchAction, EKeys::Gamepad_RightTrigger);
+	// G drops the first thing in the pockets on the ground.
+	DropAction = NewObject<UInputAction>(this, TEXT("IA_Drop"));
+	DropAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(DropAction, EKeys::G);
 
 	InventoryAction = NewObject<UInputAction>(this, TEXT("IA_Inventory"));
 	InventoryAction->ValueType = EInputActionValueType::Boolean;
@@ -301,9 +319,15 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 		Input->BindAction(JumpAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnJump);
 		Input->BindAction(JumpAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnSwimUp);
 		Input->BindAction(DiveAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnDive);
-		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Started, [this](const FInputActionValue&) { SetBracing(true); });
-		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetBracing(false); });
-		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetBracing(false); });
+		Input->BindAction(DiveAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnCrouchKey);
+		// Shift: hold on to a handhold if one is near, otherwise run.
+		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Started, [this](const FInputActionValue&) { SetBracing(true); SetSprinting(true); });
+		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetBracing(false); SetSprinting(false); });
+		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetBracing(false); SetSprinting(false); });
+		Input->BindAction(PunchAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnPunch);
+		Input->BindAction(DropAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnDropKey);
+		Input->BindAction(InteractAction, ETriggerEvent::Completed, this, &ARiptideCharacter::OnInteractReleased);
+		Input->BindAction(InteractAction, ETriggerEvent::Canceled, this, &ARiptideCharacter::OnInteractReleased);
 		Input->BindAction(InteractAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInteract);
 		Input->BindAction(InventoryAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInventoryKey);
 	}
@@ -726,6 +750,15 @@ void ARiptideCharacter::OnMovementModeChanged(EMovementMode PrevMovementMode, ui
 
 void ARiptideCharacter::OnInteract(const FInputActionValue& Value)
 {
+	// Whatever is under the crosshair comes first: a thing on the ground, a plant, a fire. A hand goes out to it.
+	if (!IsInSea() && !IsClimbing() && !IsKnockedDown() && !bManningHelm && !IsInventoryOpen())
+	{
+		StartAction(ERiptideCrewAction::Reach);
+		if (Interaction && Interaction->BeginUse())
+		{
+			return;
+		}
+	}
 	if (IsAtLadder())
 	{
 		TryClimbAboard();
@@ -768,16 +801,30 @@ int32 ARiptideCharacter::GetLockerInReach() const
 
 void ARiptideCharacter::OpenInventory(int32 Locker)
 {
+	OpenContainer(Locker != INDEX_NONE && HomeBoat ? HomeBoat->GetLockers() : nullptr, Locker);
+	OpenLocker = Locker;
+}
+
+void ARiptideCharacter::ClientOpenContainer_Implementation(URiptideStorageComponent* Container, int32 Index)
+{
+	OpenContainer(Container, Index);
+}
+
+void ARiptideCharacter::OpenContainer(URiptideStorageComponent* Container, int32 Index)
+{
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	if (!PC || !PC->IsLocalController() || IsInventoryOpen() || !GEngine || !GEngine->GameViewport)
 	{
 		return;
 	}
+	OpenedContainer = Container;
+	OpenedContainerIndex = Container ? Index : INDEX_NONE;
+	OpenLocker = INDEX_NONE;
 	TWeakObjectPtr<ARiptideCharacter> WeakThis(this);
 	InventoryWidget = SNew(SRiptideInventory)
 		.Carrying(Inventory)
-		.Container(Locker != INDEX_NONE && HomeBoat ? HomeBoat->GetLockers() : nullptr)
-		.ContainerIndex(Locker)
+		.Container(Container)
+		.ContainerIndex(Container ? Index : INDEX_NONE)
 		.OnMove(SRiptideInventory::FOnMove::CreateLambda([WeakThis](URiptideStorageComponent* From, int32 FromIndex, int32 Uid,
 			URiptideStorageComponent* To, int32 ToIndex, int32 X, int32 Y, bool bRotated, int32 Count)
 		{
@@ -793,7 +840,6 @@ void ARiptideCharacter::OpenInventory(int32 Locker)
 				Self->CloseInventory();
 			}
 		}));
-	OpenLocker = Locker;
 	InventoryWidgetContainer = SNew(SWeakWidget).PossiblyNullContent(InventoryWidget);
 	GEngine->GameViewport->AddViewportWidgetContent(InventoryWidgetContainer.ToSharedRef(), 10);
 	FInputModeUIOnly Mode;
@@ -814,6 +860,8 @@ void ARiptideCharacter::CloseInventory()
 	InventoryWidget.Reset();
 	InventoryWidgetContainer.Reset();
 	OpenLocker = INDEX_NONE;
+	OpenedContainer.Reset();
+	OpenedContainerIndex = INDEX_NONE;
 	if (!bWasOpen)
 	{
 		return;
@@ -923,6 +971,12 @@ bool ARiptideCharacter::CanReach(const URiptideStorageComponent* Storage, int32 
 	{
 		// By distance from the eyes (the server doesn't know exactly where a client is looking).
 		return FVector::Dist(Storage->GetWorldPoint(Index), FirstPersonCamera->GetComponentLocation()) <= LockerReach * 1.4f;
+	}
+	// Anything else usable in the world (a bag on the ground, a crate): within reach of it.
+	if (Storage && Storage->GetStorage(Index) && Storage->GetOwner() && Cast<IRiptideInteractable>(Storage->GetOwner()))
+	{
+		const float Reach = Interaction ? Interaction->Reach : 260.f;
+		return FVector::Dist(Storage->GetOwner()->GetActorLocation(), FirstPersonCamera->GetComponentLocation()) <= Reach * 1.6f;
 	}
 	return false;
 }
@@ -1068,6 +1122,166 @@ void ARiptideCharacter::ServerSetBracing_Implementation(bool bHold)
 	bBracing = bHold;
 }
 
+// --- Sprinting, crouching, actions ---
+
+void ARiptideCharacter::SetSprinting(bool bRun)
+{
+	bSprinting = bRun;
+	if (!HasAuthority())
+	{
+		ServerSetSprinting(bRun);
+	}
+}
+
+void ARiptideCharacter::ServerSetSprinting_Implementation(bool bRun)
+{
+	bSprinting = bRun;
+}
+
+void ARiptideCharacter::OnCrouchKey(const FInputActionValue& Value)
+{
+	// C (or Ctrl) dives in the water (held: OnDive); on your feet it crouches, and again stands up.
+	if (IsInSea() || IsClimbing() || IsKnockedDown() || bManningHelm)
+	{
+		return;
+	}
+	if (bIsCrouched)
+	{
+		UnCrouch();
+	}
+	else
+	{
+		Crouch();
+	}
+}
+
+ERiptideCrewAction ARiptideCharacter::GetAction() const
+{
+	return Action;
+}
+
+float ARiptideCharacter::GetActionTime() const
+{
+	return float(ServerNow() - ActionStartTime);
+}
+
+void ARiptideCharacter::StartAction(ERiptideCrewAction NewAction)
+{
+	// Shown at once on this machine; the server's word reaches everyone else.
+	Action = NewAction;
+	ActionStartTime = ServerNow();
+	if (!HasAuthority())
+	{
+		ServerStartAction(NewAction);
+	}
+}
+
+void ARiptideCharacter::ServerStartAction_Implementation(ERiptideCrewAction NewAction)
+{
+	Action = NewAction;
+	ActionStartTime = ServerNow();
+}
+
+void ARiptideCharacter::StopAction()
+{
+	StartAction(ERiptideCrewAction::None);
+}
+
+void ARiptideCharacter::Punch()
+{
+	if (IsInSea() || IsClimbing() || IsKnockedDown() || bManningHelm || IsInventoryOpen())
+	{
+		return;
+	}
+	// Not over a punch still being thrown (either clip is under a second).
+	if ((Action == ERiptideCrewAction::PunchJab || Action == ERiptideCrewAction::PunchCross) && GetActionTime() < 0.45f)
+	{
+		return;
+	}
+	StartAction(bNextPunchIsCross ? ERiptideCrewAction::PunchCross : ERiptideCrewAction::PunchJab);
+	bNextPunchIsCross = !bNextPunchIsCross;
+}
+
+void ARiptideCharacter::OnPunch(const FInputActionValue& Value)
+{
+	Punch();
+}
+
+void ARiptideCharacter::OnInteractReleased(const FInputActionValue& Value)
+{
+	if (Interaction)
+	{
+		Interaction->EndUse();
+	}
+}
+
+// --- Things on the ground ---
+
+void ARiptideCharacter::OnDropKey(const FInputActionValue& Value)
+{
+	if (IsInventoryOpen() || IsInSea() || IsClimbing() || IsKnockedDown() || bManningHelm)
+	{
+		return;
+	}
+	// The first stack in the pockets, then the pack.
+	for (int32 Grid = 0; Grid < Inventory->Num(); ++Grid)
+	{
+		const FRiptideStorage* Storage = Inventory->GetStorage(Grid);
+		if (Storage && Storage->Grid.Items.Num() > 0)
+		{
+			ServerDropItem(Grid, Storage->Grid.Items[0].Uid, 0);
+			StartAction(ERiptideCrewAction::Throw);
+			return;
+		}
+	}
+}
+
+void ARiptideCharacter::DropItem(int32 StorageIndex, int32 Uid, int32 Count)
+{
+	ServerDropItem(StorageIndex, Uid, Count);
+}
+
+void ARiptideCharacter::ServerDropItem_Implementation(int32 StorageIndex, int32 Uid, int32 Count)
+{
+	FRiptideStorage* Storage = Inventory->GetStorage(StorageIndex);
+	if (!Storage || !Storage->Grid.Get(Uid))
+	{
+		return;
+	}
+	const FRiptideItem Taken = Storage->Grid.Take(Uid, Count);
+	if (Taken.Count <= 0)
+	{
+		return;
+	}
+	Inventory->OnChanged.Broadcast();
+	const FVector Forward = GetControlRotation().Vector();
+	const FVector At = FirstPersonCamera->GetComponentLocation() + Forward * 60.f;
+	ARiptideWorldItem::Drop(GetWorld(), Taken, At, Forward * 250.f + FVector(0.f, 0.f, 120.f) + GetVelocity());
+}
+
+int32 ARiptideCharacter::GiveItem(FName Id, int32 Count)
+{
+	if (!HasAuthority() || !RiptideItems::Find(Id) || Count <= 0)
+	{
+		return Count;
+	}
+	int32 Left = Count;
+	for (int32 Grid = 0; Grid < Inventory->Num() && Left > 0; ++Grid)
+	{
+		if (FRiptideStorage* Storage = Inventory->GetStorage(Grid))
+		{
+			Left = Storage->Grid.Add(Id, Left);
+		}
+	}
+	Inventory->OnChanged.Broadcast();
+	if (Left > 0)
+	{
+		const FVector At = GetActorLocation() + GetControlRotation().Vector() * 90.f;
+		ARiptideWorldItem::Drop(GetWorld(), FRiptideItemGrid::NewStack(Id, Left), At, FVector(0.f, 0.f, 50.f));
+	}
+	return Left;
+}
+
 bool ARiptideCharacter::IsBraced() const
 {
 	if (bManningHelm)
@@ -1081,8 +1295,8 @@ void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
 {
 	UCharacterMovementComponent* Move = GetCharacterMovement();
 	StaggerCooldown -= DeltaSeconds;
-	// Holding on slows you to a shuffle; down on the deck you can't move at all.
-	Move->MaxWalkSpeed = IsKnockedDown() ? 0.f : IsBraced() ? BracedWalkSpeed : 350.f;
+	// Holding on slows you to a shuffle; down on the deck you can't move at all; flat out is a sprint.
+	Move->MaxWalkSpeed = IsKnockedDown() ? 0.f : IsBraced() ? BracedWalkSpeed : IsSprinting() ? SprintSpeed : 350.f;
 
 	// Feel the deck: how hard the point under the feet is accelerating (beyond gravity). The body lags behind it:
 	// thrown aft when the boat surges, outward in a hard turn, and down onto the knees when the bow slams.
@@ -1144,11 +1358,17 @@ void ARiptideCharacter::Tick(float DeltaSeconds)
 	{
 		UpdateBalance(DeltaSeconds);
 	}
-	// Knocked down: the view drops to the deck and comes back up as you get to your feet.
-	const float EyeZ = IsKnockedDown() ? 5.f : 70.f;
-	FVector Cam = FirstPersonCamera->GetRelativeLocation();
-	Cam.Z = FMath::FInterpTo(Cam.Z, EyeZ, DeltaSeconds, IsKnockedDown() ? 9.f : 3.f);
-	FirstPersonCamera->SetRelativeLocation(Cam);
+	// The view is from the body's own eyes: it crouches, bobs, falls and gets up with the animation. The body's own
+	// player doesn't see its head from inside it.
+	if (URiptideCrewBodyComponent* Crew = GetCrewBody())
+	{
+		Crew->SetFirstPersonView(IsLocallyControlled() && IsPlayerControlled());
+	}
+	if (const USkeletalMeshComponent* Body = GetMesh(); Body && Body->DoesSocketExist(TEXT("Head")) && !bManningHelm)
+	{
+		const FVector Eyes = Body->GetSocketLocation(TEXT("Head")) + FVector(0.f, 0.f, 8.f) + FRotator(0.f, GetControlRotation().Yaw, 0.f).Vector() * 14.f;
+		FirstPersonCamera->SetWorldLocation(Eyes);
+	}
 
 	UpdateLadder(DeltaSeconds);
 	if (IsInSea())
@@ -1185,7 +1405,8 @@ float ARiptideCharacter::GetKnockdownElapsed() const
 void ARiptideCharacter::CloseInventoryIfOutOfReach()
 {
 	if (IsInventoryOpen() && (IsInSea() || IsClimbing() || bManningHelm
-		|| (OpenLocker != INDEX_NONE && (!IsValid(HomeBoat) || !CanReach(HomeBoat->GetLockers(), OpenLocker)))))
+		|| (OpenLocker != INDEX_NONE && (!IsValid(HomeBoat) || !CanReach(HomeBoat->GetLockers(), OpenLocker)))
+		|| (OpenedContainerIndex != INDEX_NONE && !CanReach(OpenedContainer.Get(), OpenedContainerIndex))))
 	{
 		CloseInventory();
 	}
@@ -1202,6 +1423,18 @@ void ARiptideCharacter::DrawHud() const
 	if (IsInventoryOpen())
 	{
 		return;
+	}
+	// The thing under the crosshair: what E does with it, and how far a hold has got.
+	if (Interaction && Interaction->HasFocus())
+	{
+		const FRiptideInteraction& Use = Interaction->GetFocus().Interaction;
+		FString Line = Use.bEnabled ? FString::Printf(TEXT("E  %s"), *Use.Prompt.ToString()) : Use.WhyNot.ToString();
+		if (Use.HoldSeconds > 0.f && Use.bEnabled)
+		{
+			const int32 Done = FMath::RoundToInt(Interaction->GetHoldFraction() * 10.f);
+			Line += FString::Printf(TEXT("  [%s%s]"), *FString::ChrN(Done, TEXT('#')), *FString::ChrN(10 - Done, TEXT('-')));
+		}
+		GEngine->AddOnScreenDebugMessage(KeyBase + 7, 0.f, Use.bEnabled ? FColor::White : FColor(180, 180, 180), Line);
 	}
 	if (IsOnLadder() && IsValid(HomeBoat))
 	{

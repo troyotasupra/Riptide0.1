@@ -42,6 +42,10 @@ struct FRiptideCrewAnimInputs
 	float Direction = 0.f;
 	float VerticalSpeed = 0.f;
 	bool bCrouched = false;
+	bool bSprinting = false;
+	/** A one-shot action over the upper body (ERiptideCrewAction as a number; 0 none) and seconds into it. */
+	uint8 Action = 0;
+	float ActionTime = 0.f;
 	/** Where the crew member looks, up (+) or down (degrees): the upper body and head follow it. */
 	float AimPitch = 0.f;
 	/** Turns the whole body about the vertical (degrees), on the ladder to face it whichever way its player looks. */
@@ -96,6 +100,7 @@ private:
 	float LegYaw = 0.f;           // the legs turned toward the way they walk, smoothed (degrees)
 	float SmoothedSpeed = 0.f;
 	float SwimWeight = 0.f;       // idle to stroking, smoothed
+	float ActionWeight = 0.f;     // how much of the upper-body action shows, fading in and out
 
 	/** Bone indices in the current bone container (rebuilt when it changes), and which bones are upper body. */
 	uint16 CachedSerial = MAX_uint16;
