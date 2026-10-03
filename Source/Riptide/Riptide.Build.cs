@@ -16,7 +16,9 @@ public class Riptide : ModuleRules
 			// The radio's and loudhailer's sound (band-pass and drive on voices, URiptideVoiceComponent).
 			"AudioExtensions", "Synthesis",
 			// Two-bone IK for the crew's hands and feet on the ladder (URiptideCrewAnimInstance).
-			"AnimationCore"
+			"AnimationCore",
+			// The item table written out for the model generator (URiptideDataLibrary).
+			"Json", "JsonUtilities"
 		});
 	}
 }

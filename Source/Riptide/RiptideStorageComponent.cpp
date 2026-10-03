@@ -120,13 +120,13 @@ bool URiptideStorageComponent::MoveItem(URiptideStorageComponent* From, int32 Fr
 		// Sent across: top up matching stacks there, then wherever the rest fits. Nothing is touched unless there's
 		// room for at least some of it, and whatever doesn't fit stays where it was, as the same item.
 		const bool bRoom = Target->Grid.Items.ContainsByPredicate([&](const FRiptideItem& Other)
-			{ return Other.Id == Item.Id && Def && Other.Count < Def->Stack; });
+			{ return Other.CanMergeWith(Item) && Def && Other.Count < Def->Stack; });
 		int32 SpaceX, SpaceY;
 		bool bSpaceRot;
 		if (!bSameGrid && (bRoom || Target->Grid.FindSpace(Item.Id, SpaceX, SpaceY, bSpaceRot)))
 		{
 			FRiptideItem Taken = Source->Grid.Take(Uid, Moving);
-			const int32 Left = Target->Grid.Add(Taken.Id, Taken.Count);
+			const int32 Left = Target->Grid.AddStack(Taken);
 			if (Left > 0)
 			{
 				if (FRiptideItem* Still = Source->Grid.Get(Uid))
@@ -173,7 +173,7 @@ bool URiptideStorageComponent::MoveItem(URiptideStorageComponent* From, int32 Fr
 	else if (const FRiptideItem* Onto = Target->Grid.SingleOverlap(Item.Id, X, Y, bRotated, Ignore))
 	{
 		// Dropped on a stack of the same thing: top it up.
-		if (Def && Onto->Id == Item.Id && Onto->Uid != Uid && Onto->Count < Def->Stack)
+		if (Def && Onto->CanMergeWith(Item) && Onto->Uid != Uid && Onto->Count < Def->Stack)
 		{
 			const int32 OntoUid = Onto->Uid;
 			const int32 Room = FMath::Min(Moving, Def->Stack - Onto->Count);

@@ -2,7 +2,10 @@
 
 #include "Fonts/FontMeasure.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
 #include "Rendering/DrawElements.h"
+#include "RiptideItemIcons.h"
 #include "RiptideItems.h"
 #include "RiptideStorageComponent.h"
 #include "Styling/CoreStyle.h"
@@ -209,7 +212,10 @@ SRiptideInventory::FTarget SRiptideInventory::FindTarget(const TArray<FPanel>& P
 		? Grid.SingleOverlap(Drag.Id, Target.Cell.X, Target.Cell.Y, Drag.bRotated, Ignore) : nullptr)
 	{
 		const FRiptideItemDef* Def = RiptideItems::Find(Drag.Id);
-		Target.State = Def && Onto->Id == Drag.Id && Onto->Count < Def->Stack ? FTarget::Merge : FTarget::Blocked;
+		const FRiptideStorage* DragFrom = Drag.Storage ? Drag.Storage->GetStorage(Drag.Index) : nullptr;
+		const FRiptideItem* Dragged = DragFrom ? DragFrom->Grid.Get(Drag.Uid) : nullptr;
+		const bool bSameStack = Onto->Id == Drag.Id && (!Dragged || Onto->CanMergeWith(*Dragged));
+		Target.State = Def && bSameStack && Onto->Count < Def->Stack ? FTarget::Merge : FTarget::Blocked;
 	}
 	else
 	{
@@ -231,13 +237,34 @@ void SRiptideInventory::PaintItem(FSlateWindowElementList& Out, int32 Layer, con
 	FSlateDrawElement::MakeBox(Out, Layer, G.ToPaintGeometry(Size - FVector2f(4.f), FSlateLayoutTransform(Pos + FVector2f(2.f))),
 		&CardBrushes[Rarity], ESlateDrawEffect::None, Fill);
 	FillRect(Out, Layer + 1, G, Pos + FVector2f(4.f, Size.Y * 0.55f), FVector2f(Size.X - 8.f, Size.Y * 0.45f - 4.f), FLinearColor(Colour.R, Colour.G, Colour.B, 0.18f * Alpha));
-	const FSlateFontInfo NameFont = Font(10, true);
+	// The item's picture, taken from its model, over the card; its name along the bottom.
+	const FSlateBrush* Icon = nullptr;
+	if (const URiptideStorageComponent* Owner = Carrying.Get())
+	{
+		if (const UWorld* World = Owner->GetWorld())
+		{
+			if (UGameInstance* Game = World->GetGameInstance())
+			{
+				if (URiptideItemIconSubsystem* Icons = Game->GetSubsystem<URiptideItemIconSubsystem>())
+				{
+					Icon = Icons->Icon(Id);
+				}
+			}
+		}
+	}
+	const FSlateFontInfo NameFont = Font(Icon ? 9 : 10, true);
 	const TArray<FString> Lines = Wrap(Def ? Def->Name.ToString() : Id.ToString(), NameFont, Size.X - 10.f);
 	const float LineH = NameFont.Size * 1.35f;
-	float Y = Pos.Y + (Size.Y - LineH * Lines.Num()) * 0.5f;
-	for (const FString& Line : Lines)
+	if (Icon)
 	{
-		Text(Out, Layer + 2, G, Line, NameFont, FVector2f(Pos.X + Size.X * 0.5f, Y), FLinearColor(0.92f, 0.94f, 0.96f, Alpha), true);
+		const float Side = FMath::Min(Size.X, Size.Y) - 8.f - LineH;
+		FSlateDrawElement::MakeBox(Out, Layer + 2, G.ToPaintGeometry(FVector2f(Side, Side), FSlateLayoutTransform(Pos + FVector2f((Size.X - Side) * 0.5f, 4.f))),
+			Icon, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, Alpha));
+	}
+	float Y = Icon ? Pos.Y + Size.Y - LineH * FMath::Min(Lines.Num(), 2) - 2.f : Pos.Y + (Size.Y - LineH * Lines.Num()) * 0.5f;
+	for (int32 i = 0; i < Lines.Num() && (!Icon || i < 2); ++i)
+	{
+		Text(Out, Layer + 3, G, Lines[i], NameFont, FVector2f(Pos.X + Size.X * 0.5f, Y), FLinearColor(0.92f, 0.94f, 0.96f, Alpha), true);
 		Y += LineH;
 	}
 	if (Count > 1)
