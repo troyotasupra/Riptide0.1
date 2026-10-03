@@ -1164,6 +1164,13 @@ def build_island_test_map(ns, rebuilt):
     if assets.does_asset_exist(ISLAND_MAP_PATH):
         if not rebuilt and assets.get_metadata_tag(unreal.load_asset(ISLAND_MAP_PATH), "RiptideVersion") == ISLAND_MAP_VERSION:
             return
+    # Without a renderer (-nullrhi, as the automated tests run) the water zone's camera-following tessellation divides
+    # by a zero render size and takes the editor down. The map, old or missing, is left for the next launch that draws;
+    # the boat tests don't use it.
+    if "-nullrhi" in unreal.SystemLibrary.get_command_line().lower().split():
+        unreal.log("Riptide: no renderer: the island test map is (re)built on the next launch that draws")
+        return
+    if assets.does_asset_exist(ISLAND_MAP_PATH):
         assets.delete_asset(ISLAND_MAP_PATH)
 
     unreal.log("Riptide: building the island test map")

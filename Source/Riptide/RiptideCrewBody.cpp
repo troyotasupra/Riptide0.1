@@ -154,6 +154,10 @@ void URiptideCrewBodyComponent::SetFirstPersonView(bool bOn)
 		return;
 	}
 	bFirstPerson = bOn;
+	// A player's own body is posed every frame, on screen or not: looking up takes it out of view, but its shadow
+	// on the ground (and the state other code reads from it) must keep moving.
+	VisibilityBasedAnimTickOption = bOn || bHiddenFromOwner ? EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones
+		: EVisibilityBasedAnimTickOption::OnlyTickPoseWhenRendered;
 	ApplyFirstPerson();
 	for (int32 i = 0; i < Parts.Num(); ++i)
 	{
@@ -341,7 +345,7 @@ void URiptideCrewBodyComponent::SetHiddenFromOwner(bool bHide)
 {
 	bHiddenFromOwner = bHide;
 	// Its own player never sees the body, but its shadow on the deck still moves with it: posed every frame.
-	VisibilityBasedAnimTickOption = bHide ? EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones
+	VisibilityBasedAnimTickOption = bHide || bFirstPerson ? EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones
 		: EVisibilityBasedAnimTickOption::OnlyTickPoseWhenRendered;
 	ApplyOwnerVisibility(this);
 	for (int32 i = 0; i < Parts.Num(); ++i)
@@ -449,8 +453,10 @@ ERiptideCrewAnimState URiptideCrewBodyComponent::GetAnimState() const
 
 FString URiptideCrewBodyComponent::DescribeParts() const
 {
+	// In EPart's order.
 	static const TCHAR* Names[] = { TEXT("Uniform"), TEXT("Boots"), TEXT("Gloves"), TEXT("Hair"), TEXT("Beard"), TEXT("Headgear"),
-		TEXT("FaceCover"), TEXT("Vest"), TEXT("Pack") };
+		TEXT("FaceCover"), TEXT("Vest"), TEXT("Pack"), TEXT("Shirt"), TEXT("Shorts"), TEXT("Footwear") };
+	static_assert(UE_ARRAY_COUNT(Names) == int32(EPart::Count), "a name for every part");
 	FString Out = FString::Printf(TEXT("Body=%s"), GetSkeletalMeshAsset() ? *GetSkeletalMeshAsset()->GetName() : TEXT("none"));
 	for (int32 i = 0; i < Parts.Num() && i < int32(UE_ARRAY_COUNT(Names)); ++i)
 	{

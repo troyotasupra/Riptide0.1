@@ -60,6 +60,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void SetFirstPersonView(bool bOn);
 
+	/** Poses the body every frame even off screen (as a player's own body always is); for tests without a renderer. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetAlwaysPosed(bool bAlways)
+	{
+		VisibilityBasedAnimTickOption = bAlways || bFirstPerson || bHiddenFromOwner ? EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones
+			: EVisibilityBasedAnimTickOption::OnlyTickPoseWhenRendered;
+	}
+
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsFirstPersonView() const { return bFirstPerson; }
 

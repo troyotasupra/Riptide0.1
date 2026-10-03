@@ -306,7 +306,7 @@ protected:
 
 	/** How far (cm) from the eyes a locker's lid can be looked at and opened. */
 	UPROPERTY(EditAnywhere, Category = "Crew")
-	float LockerReach = 230.f;
+	float LockerReach = 250.f;
 
 	virtual void BeginPlay() override;
 
