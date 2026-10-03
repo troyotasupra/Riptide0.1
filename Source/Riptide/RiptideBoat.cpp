@@ -733,7 +733,15 @@ void ARiptideBoat::SetUpLockers()
 	Stock(SternPort, TEXT("rope"), 10);
 	Stock(SternStarboard, TEXT("tool_kit"), 1);
 	Stock(SternStarboard, TEXT("cleaning_kit"), 1);
+	Stock(SternStarboard, TEXT("knife"), 1);
+	Stock(SternStarboard, TEXT("lighter"), 1);
+	Stock(SternStarboard, TEXT("fishing_rod"), 1);
+	Stock(SternStarboard, TEXT("lure"), 3);
 	Stock(Anchor, TEXT("rope"), 20);
+	Stock(Anchor, TEXT("paracord"), 2);
+	Stock(Anchor, TEXT("tarp"), 1);
+	Stock(Forward, TEXT("machete"), 1);
+	Stock(Forward, TEXT("canteen"), 1);
 }
 
 namespace

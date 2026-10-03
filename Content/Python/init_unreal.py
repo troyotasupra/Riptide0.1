@@ -1591,6 +1591,13 @@ def _set_up_project():
     except Exception as err:  # noqa: BLE001 - never block the editor from opening
         unreal.log_error(f"Riptide: could not build the boat model: {err}")
 
+    # The items' models (riptide_item_models.py), from the C++ item table.
+    try:
+        import riptide_item_models
+        riptide_item_models.make_item_assets()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build the item models: {err}")
+
     # The islands and their test map (riptide_islands.py), using the sea and sky built here.
     try:
         import riptide_islands
