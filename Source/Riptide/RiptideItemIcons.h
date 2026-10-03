@@ -35,7 +35,12 @@ private:
 	{
 		TObjectPtr<UTextureRenderTarget2D> Target;
 		FSlateBrush Brush;
+		/** When it was last photographed, and how many times (see Icon: retaken while shaders may be compiling). */
+		double TakenAt = 0.0;
+		int32 Takes = 0;
 	};
+	/** Photographs Mesh into Entry's target. */
+	void Photograph(FEntry& Entry, UStaticMesh* Mesh);
 	TMap<FName, FEntry> Icons;
 
 	UPROPERTY()

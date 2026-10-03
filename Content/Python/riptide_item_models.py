@@ -14,7 +14,7 @@ import random
 
 from riptide_palm_mesh import Mesh, _add, _cross, _mul, _norm, _sub
 
-ITEM_MODELS_VERSION = "3"
+ITEM_MODELS_VERSION = "4"
 
 
 # --- Shapes ------------------------------------------------------------------------------------------------------
@@ -548,6 +548,12 @@ FINISHES = {
     "Plastic": ((0.08, 0.1, 0.12), 0.45, 0.0), "Canvas": ((0.3, 0.32, 0.22), 0.9, 0.0),
     "Frond": ((0.42, 0.36, 0.14), 0.85, 0.0), "Sand": ((0.72, 0.66, 0.5), 0.95, 0.0),
 }
+
+
+# The rest of the items (riptide_item_catalog.py, which uses the shapes above).
+import riptide_item_catalog  # noqa: E402 - after the shapes it imports from here
+MODELS.update(riptide_item_catalog.CATALOG)
+FINISHES.update(riptide_item_catalog.FINISHES)
 
 
 def write_item_models(out_dir):
