@@ -86,6 +86,19 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Voice")
 	bool IsPushingToTalk() const { return bPushToTalk; }
 
+	/** The microphones this machine has, by device name (the settings menu's list). */
+	UFUNCTION(BlueprintCallable, Category = "Voice")
+	static TArray<FString> ListMicrophones();
+
+	/** Points the voice capture at the microphone the settings name (empty: the system's default). Works once the
+	 * player has started talking at least once (that's when the capture exists). True if it was taken. */
+	UFUNCTION(BlueprintCallable, Category = "Voice", meta = (WorldContext = "WorldContext"))
+	static bool ApplyMicrophone(const UObject* WorldContext);
+
+	/** How loud the microphone is right now while talking, 0..1 (0 when not capturing). For the mic test. */
+	UFUNCTION(BlueprintPure, Category = "Voice", meta = (WorldContext = "WorldContext"))
+	static float MicrophoneLevel(const UObject* WorldContext);
+
 	/** Turns the radio's channel knob (while holding the mic, or at the helm). */
 	UFUNCTION(BlueprintCallable, Category = "Voice")
 	void ChangeChannel(int32 Delta);

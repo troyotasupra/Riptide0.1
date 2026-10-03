@@ -41,6 +41,10 @@ public:
 	UPROPERTY(BlueprintReadWrite, Category = "Settings")
 	float AmbientVolume = 1.f;
 
+	/** The microphone to talk into, by its device name; empty for the system's default. */
+	UPROPERTY(BlueprintReadWrite, Category = "Settings")
+	FString Microphone;
+
 	/** The player's settings, loaded from disk the first time (defaults if there are none yet). Never null. */
 	UFUNCTION(BlueprintPure, Category = "Settings")
 	static URiptideSettingsSave* Get();

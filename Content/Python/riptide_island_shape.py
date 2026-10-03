@@ -363,14 +363,17 @@ class StartCay(Island):
         floor, reef). Whatever is left over is sand."""
         d = self.coast_distance(x, y)
         r = smoothstep(0.35, 0.7, self.rock(x, y))
-        # Dark weathered rock: anything steep, and the rock shore's cliff from just under the water to its lip.
-        steep = smoothstep(24.0, 36.0, slope) if h > -3.0 else 0.0
+        # Dark weathered rock: only what is really steep (the bluff's risers), and the rock shore's cliff from just
+        # under the water to its lip. Gentle slopes stay sand: painting them dark made a black band round the hill.
+        steep = smoothstep(31.0, 42.0, slope) if h > -3.0 else 0.0
         cliff = r * smoothstep(-16.0, -6.0, d) * (1.0 - smoothstep(-1.5, 0.5, d))
         rock = max(steep, cliff)
-        # Pale coral rock: the bench behind the cliff, and the tops of the bluff and the point.
-        bench = r * smoothstep(-0.5, 1.5, d) * (1.0 - smoothstep(12.0, 20.0, d))
+        # Pale coral rock: a narrow lip behind the cliff, and outcrops breaking through the sand on the bluff and
+        # the point, in patches rather than a sheet over the whole top.
+        lip = r * smoothstep(-0.5, 0.5, d) * (1.0 - smoothstep(2.5, 5.0, d))
         tops = max(smoothstep(0.25, 0.5, self._knoll(x, y)), smoothstep(0.35, 0.6, self._mound(x, y, self.point, self.POINT_RADIUS)))
-        coral = max(bench, tops if d > 0.0 else 0.0) * (1.0 - rock)
+        patches = tops * smoothstep(0.5, 0.68, fbm(x / 5.5, y / 5.5, 31)) * smoothstep(8.0, 20.0, slope + 10.0 * fbm(x / 3.0, y / 3.0, 33))
+        coral = max(lip, patches if d > 0.0 else 0.0) * (1.0 - rock)
         grove = smoothstep(19.0, 27.0, d) * smoothstep(1.7, 2.1, h) * (1.0 - rock) * (1.0 - coral)
         reef = smoothstep(0.3, 0.9, h - self._profile(d, self.rock(x, y))) if d < -40.0 else 0.0
         return rock, coral, grove, reef
@@ -625,7 +628,7 @@ class StartCay(Island):
                 return "reef"
             return "rock" if (r > 0.6 and -d < 14.0) else "shallows"
         on_knoll = self._knoll(x, y) > 0.3 or self._mound(x, y, self.point, self.POINT_RADIUS) > 0.45
-        if slope > 32.0 or (r > 0.6 and d < 12.0) or (on_knoll and slope > 16.0):
+        if slope > 32.0 or (r > 0.6 and d < 4.0) or (on_knoll and slope > 24.0):
             return "rock"
         if h < 0.35:
             return "wet_sand"
@@ -674,7 +677,7 @@ def walk_check(island, start, step=1.0, limit=None):
 # --- Surfaces ----------------------------------------------------------------------------------------------------
 
 SURFACE_MAP_HALF = 256      # the surface map covers this far each way from the island's centre, metres
-SURFACE_MAP_STEP = 1.0      # metres per pixel
+SURFACE_MAP_STEP = 0.5      # metres per pixel (a metre showed as steps where sand meets the hill)
 
 
 def write_png(path, width, height, rows, alpha=False):
@@ -709,7 +712,7 @@ def write_surface_map(island, path):
             for c in range(4):
                 planes[c][iy * n + ix] = weights[c]
     # Softened by a metre, so no surface ends in a hard line.
-    planes = [_blur(p, n, 1) for p in planes]
+    planes = [_blur(p, n, max(1, int(round(1.0 / step)))) for p in planes]
     rows = [[tuple(int(max(0.0, min(1.0, planes[c][iy * n + ix])) * 255.0 + 0.5) for c in range(4)) for ix in range(n)]
             for iy in range(n)]
     write_png(path, n, n, rows, alpha=True)

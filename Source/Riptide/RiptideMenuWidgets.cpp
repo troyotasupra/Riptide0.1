@@ -8,6 +8,8 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "Rendering/DrawElements.h"
 #include "RiptideSettings.h"
+#include "RiptideVoice.h"
+#include "GameFramework/PlayerController.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBox.h"
@@ -589,6 +591,37 @@ void SRiptideSettingsPanel::Construct(const FArguments& InArgs)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)[ Volume(&URiptideSettingsSave::MasterVolume, LOCTEXT("Master", "Master volume")) ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)[ Volume(&URiptideSettingsSave::EffectsVolume, LOCTEXT("Effects", "Effects: the boat, the water")) ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)[ Volume(&URiptideSettingsSave::AmbientVolume, LOCTEXT("Ambient", "Ambience: the sea")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Section(LOCTEXT("VoiceSection", "Voice (V to talk)")) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+		[
+			// The microphone: the system's default, or any the machine has, round in a ring.
+			SNew(SRiptideStepper)
+			.Label(LOCTEXT("Microphone", "Microphone"))
+			.Value_Lambda([S]() { return S->Microphone.IsEmpty() ? LOCTEXT("DefaultMic", "System default") : FText::FromString(S->Microphone); })
+			.OnStep_Lambda([this, S](int32 Dir)
+			{
+				if (Microphones.IsEmpty())
+				{
+					Microphones = URiptideVoiceComponent::ListMicrophones();
+				}
+				TArray<FString> Choices;
+				Choices.Add(TEXT(""));
+				Choices.Append(Microphones);
+				const int32 Now = FMath::Max(0, Choices.IndexOfByKey(S->Microphone));
+				S->Microphone = Choices[Wrap(Now + Dir, Choices.Num())];
+				URiptideVoiceComponent::ApplyMicrophone(WorldContext.Get());
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
+		[
+			// Say something: the bar shows what the microphone hears. Nobody else hears the test.
+			SNew(SRiptideStepper)
+			.Label(LOCTEXT("MicTest", "Microphone test"))
+			.Value_Lambda([this]() { return bMicTest ? LOCTEXT("MicTesting", "Listening: speak") : LOCTEXT("MicTestOff", "Off"); })
+			.Fraction_Lambda([this]() { return TOptional<float>(bMicTest ? FMath::Clamp(URiptideVoiceComponent::MicrophoneLevel(WorldContext.Get()) * 6.f, 0.f, 1.f) : 0.f); })
+			.OnStep_Lambda([this](int32) { SetMicTest(!bMicTest); })
+			.OnSetFraction_Lambda([this](float) { SetMicTest(!bMicTest); })
+		]
 		+ SVerticalBox::Slot().AutoHeight()[ Section(LOCTEXT("GraphicsSection", "Graphics")) ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f)
 		[
@@ -758,8 +791,34 @@ void SRiptideSettingsPanel::ResetToDefaults()
 	}
 }
 
+APlayerController* SRiptideSettingsPanel::LocalPlayer() const
+{
+	UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldContext.Get(), EGetWorldErrorMode::ReturnNull) : nullptr;
+	return World ? World->GetFirstPlayerController() : nullptr;
+}
+
+void SRiptideSettingsPanel::SetMicTest(bool bOn)
+{
+	APlayerController* PC = LocalPlayer();
+	if (bOn == bMicTest || !PC)
+	{
+		return;
+	}
+	bMicTest = bOn;
+	if (bOn)
+	{
+		PC->StartTalking();
+		URiptideVoiceComponent::ApplyMicrophone(PC);
+	}
+	else
+	{
+		PC->StopTalking();
+	}
+}
+
 void SRiptideSettingsPanel::Close()
 {
+	SetMicTest(false);
 	URiptideSettingsSave::Get()->Save();
 	if (UGameUserSettings* G = Graphics())
 	{

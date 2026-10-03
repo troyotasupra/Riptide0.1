@@ -18,7 +18,19 @@ public class Riptide : ModuleRules
 			// Two-bone IK for the crew's hands and feet on the ladder (URiptideCrewAnimInstance).
 			"AnimationCore",
 			// The item table written out for the model generator (URiptideDataLibrary).
-			"Json", "JsonUtilities"
+			"Json", "JsonUtilities",
+			// Listing the microphones for the settings menu and pointing the voice capture at one
+			// (URiptideVoiceComponent::ListMicrophones, ApplyMicrophone).
+			"AudioCaptureCore", "Voice"
 		});
+		// The microphone list needs the platform's capture backend loaded (as the AudioCapture plugin does it).
+		if (Target.Platform.IsInGroup(UnrealPlatformGroup.Windows))
+		{
+			PrivateDependencyModuleNames.Add("AudioCaptureWasapi");
+		}
+		else if (Target.Platform == UnrealTargetPlatform.Mac)
+		{
+			PrivateDependencyModuleNames.Add("AudioCaptureRtAudio");
+		}
 	}
 }

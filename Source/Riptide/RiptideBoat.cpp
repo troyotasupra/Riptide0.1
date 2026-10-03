@@ -267,14 +267,14 @@ ARiptideBoat::ARiptideBoat()
 	SearchlightBeam->SetupAttachment(SearchlightHead);
 	SearchlightBeam->SetRelativeLocation(FVector(13.f, 0.f, 0.f));
 	SearchlightBeam->SetIntensityUnits(ELightUnits::Candelas);
-	SearchlightBeam->SetIntensity(250000.f);
+	SearchlightBeam->SetIntensity(120000.f);
 	SearchlightBeam->SetAttenuationRadius(25000.f);
 	SearchlightBeam->SetInnerConeAngle(2.5f);
 	SearchlightBeam->SetOuterConeAngle(6.f);
 	SearchlightBeam->SetLightColor(FLinearColor(1.f, 0.96f, 0.88f));
 	// No shadows: at a searchlight's grazing angle the sea shadows its own lit patch and the beam never shows.
 	SearchlightBeam->SetCastShadows(false);
-	SearchlightBeam->SetVolumetricScatteringIntensity(1.5f);
+	SearchlightBeam->SetVolumetricScatteringIntensity(8.f);
 	SearchlightBeam->SetVisibility(false);
 	SearchlightModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_Searchlight.SM_Searchlight")));
 	LampOnMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Riptide/Materials/MI_Boat_LampOn.MI_Boat_LampOn")));
@@ -1364,7 +1364,7 @@ void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ARiptideBoat, MotorOutputPort);
 	DOREPLIFETIME(ARiptideBoat, MotorOutputStarboard);
 	DOREPLIFETIME(ARiptideBoat, Helmsman);
-	DOREPLIFETIME(ARiptideBoat, bSearchlightOn);
+	DOREPLIFETIME(ARiptideBoat, SearchlightLevel);
 	DOREPLIFETIME(ARiptideBoat, bNavLightsOn);
 	DOREPLIFETIME(ARiptideBoat, bDeckLightsOn);
 	DOREPLIFETIME(ARiptideBoat, SearchlightYaw);
@@ -1640,9 +1640,14 @@ FTransform ARiptideBoat::GetDeckSpotTransform(int32 Index) const
 
 void ARiptideBoat::SetSearchlightOn(bool bOn)
 {
+	SetSearchlightLevel(bOn ? 2 : 0);
+}
+
+void ARiptideBoat::SetSearchlightLevel(uint8 Level)
+{
 	if (HasAuthority())
 	{
-		bSearchlightOn = bOn;
+		SearchlightLevel = FMath::Min<uint8>(Level, 2);
 		ApplyLights();
 	}
 }
@@ -1669,7 +1674,7 @@ void ARiptideBoat::ServerToggleLight_Implementation(uint8 Which)
 {
 	switch (Which)
 	{
-	case 0: SetSearchlightOn(!bSearchlightOn); break;
+	case 0: SetSearchlightLevel(SearchlightLevel == 0 ? 2 : SearchlightLevel - 1); break;   // off, full, dim, off
 	case 1: SetNavLightsOn(!bNavLightsOn); break;
 	default: SetDeckLightsOn(!bDeckLightsOn); break;
 	}
@@ -1698,14 +1703,25 @@ void ARiptideBoat::OnRep_Lights()
 
 void ARiptideBoat::ApplyLights()
 {
-	SearchlightBeam->SetVisibility(bSearchlightOn);
+	// Off, dimmed (a working light to see the deck and the water close by), or full (a beam a long way out).
+	SearchlightBeam->SetVisibility(SearchlightLevel > 0);
+	SearchlightBeam->SetIntensity(SearchlightLevel >= 2 ? 120000.f : 18000.f);
 	const int32 LampIndex = SearchlightHead->GetMaterialIndex(TEXT("Lamp"));
 	if (LampIndex != INDEX_NONE)
 	{
-		UMaterialInterface* Lens = bSearchlightOn ? LampOnMaterial.Get() : LampOffMaterial.Get();
-		if (Lens)
+		if (SearchlightLevel > 0 && LampOnMaterial.Get())
 		{
-			SearchlightHead->SetMaterial(LampIndex, Lens);
+			if (!LampLitLens)
+			{
+				LampLitLens = UMaterialInstanceDynamic::Create(LampOnMaterial.Get(), this);
+			}
+			// The lens itself blazes: seen from in front it should be the brightest thing on the boat.
+			LampLitLens->SetScalarParameterValue(TEXT("Glow"), SearchlightLevel >= 2 ? 600.f : 120.f);
+			SearchlightHead->SetMaterial(LampIndex, LampLitLens);
+		}
+		else if (LampOffMaterial.Get())
+		{
+			SearchlightHead->SetMaterial(LampIndex, LampOffMaterial.Get());
 		}
 	}
 	MastheadLight->SetVisibility(bNavLightsOn);
@@ -2365,7 +2381,7 @@ void ARiptideBoat::DrawDebugHud() const
 	{
 		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, IsHelmViewOnMic()
 			? (MicHolder && MicHolder == Helmsman ? TEXT("E  Hang up the mic      Hold right mouse  Aim the searchlight      H  Tuning readout") : TEXT("E  Take the radio mic      Hold right mouse  Aim the searchlight      H  Tuning readout"))
-			: TEXT("E  Leave the helm      Hold right mouse  Aim the searchlight (L on/off)      Look at the radio mic + E  Take it      H  Tuning readout"));
+			: TEXT("E  Leave the helm      Hold right mouse  Aim the searchlight (L: full, dim, off)      Look at the radio mic + E  Take it      H  Tuning readout"));
 	}
 	if (!bShowDebugHud)
 	{

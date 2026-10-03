@@ -13,9 +13,9 @@ ISLANDS_PATH = "/Game/Riptide/Islands"
 MATERIALS_PATH = "/Game/Riptide/Materials"
 ISLAND_MAP_PATH = "/Game/Riptide/Maps/Island_Test"
 
-ISLAND_VERSIONS = {"StartCay": "13"}
+ISLAND_VERSIONS = {"StartCay": "14"}
 GREY_VERSION = "3"
-ISLAND_MAP_VERSION = "21"
+ISLAND_MAP_VERSION = "22"
 
 # Waves reach full size in water this deep, in cm, and die away toward the shore (the plugin's fall-off: about a
 # tenth of full size in half a metre of water, a fifth in 1 m, two fifths in 2 m, two thirds in 4 m, nearly all in

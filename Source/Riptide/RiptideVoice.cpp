@@ -13,9 +13,15 @@
 #include "InputMappingContext.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
+#include "AudioCaptureCore.h"
+#include "Interfaces/VoiceCapture.h"
+#include "OnlineSubsystemUtils.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
 #include "RiptidePlayerController.h"
+#include "RiptideSettings.h"
+#include "VoiceEngineImpl.h"
+#include "VoiceInterfaceImpl.h"
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundEffectSource.h"
 #include "SourceEffects/SourceEffectFilter.h"
@@ -186,11 +192,109 @@ void URiptideVoiceComponent::SetPushToTalk(bool bDown)
 	if (bDown)
 	{
 		PC->StartTalking();
+		ApplyMicrophone(this);
 	}
 	else
 	{
 		PC->StopTalking();
 	}
+}
+
+// --- The microphone ---
+
+namespace
+{
+	/** The online voice engine keeps its capture device to itself (protected, twice over); these reach it the C++
+	 * way: a derived type may read its base's protected members, and nothing is ever constructed. */
+	struct FRiptideEnginePeek : public FVoiceEngineImpl
+	{
+		static IVoiceCapture* CaptureOf(IVoiceEngine* Engine)
+		{
+			FRiptideEnginePeek* Impl = static_cast<FRiptideEnginePeek*>(static_cast<FVoiceEngineImpl*>(Engine));
+			return Impl && Impl->GetVoiceCapture().IsValid() ? Impl->GetVoiceCapture().Get() : nullptr;
+		}
+	};
+
+	struct FRiptideVoicePeek : public FOnlineVoiceImpl
+	{
+		static IVoiceCapture* CaptureOf(IOnlineVoice* Voice)
+		{
+			if (!Voice)
+			{
+				return nullptr;
+			}
+			const IVoiceEnginePtr& Engine = static_cast<FRiptideVoicePeek*>(static_cast<FOnlineVoiceImpl*>(Voice))->VoiceEngine;
+			return FRiptideEnginePeek::CaptureOf(Engine.Get());
+		}
+	};
+
+	IVoiceCapture* LocalCapture(const UObject* WorldContext)
+	{
+		UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull) : nullptr;
+		IOnlineSubsystem* Online = World ? Online::GetSubsystem(World) : nullptr;
+		return Online ? FRiptideVoicePeek::CaptureOf(Online->GetVoiceInterface().Get()) : nullptr;
+	}
+
+	/** Which microphone the capture was last pointed at, so it isn't re-opened on every press. */
+	FString AppliedMicrophone = TEXT("\x01unset");
+}
+
+TArray<FString> URiptideVoiceComponent::ListMicrophones()
+{
+	TArray<FString> Names;
+	Audio::FAudioCapture Capture;
+	TArray<Audio::FCaptureDeviceInfo> Devices;
+	Capture.GetCaptureDevicesAvailable(Devices);
+	for (const Audio::FCaptureDeviceInfo& Device : Devices)
+	{
+		if (!Device.DeviceName.IsEmpty() && Device.InputChannels > 0)
+		{
+			Names.AddUnique(Device.DeviceName);
+		}
+	}
+	return Names;
+}
+
+bool URiptideVoiceComponent::ApplyMicrophone(const UObject* WorldContext)
+{
+	IVoiceCapture* Capture = LocalCapture(WorldContext);
+	if (!Capture)
+	{
+		return false;
+	}
+	const FString& Wanted = URiptideSettingsSave::Get()->Microphone;
+	if (Wanted == AppliedMicrophone)
+	{
+		return true;
+	}
+	const bool bWasCapturing = Capture->IsCapturing();
+	bool bTaken = Capture->ChangeDevice(Wanted, UVOIPStatics::GetVoiceSampleRate(), UVOIPStatics::GetVoiceNumChannels());
+	if (!bTaken && !Wanted.IsEmpty())
+	{
+		// A microphone that's gone: back to the system's default rather than silence.
+		UE_LOG(LogTemp, Warning, TEXT("Riptide: microphone '%s' not found; using the default"), *Wanted);
+		bTaken = Capture->ChangeDevice(TEXT(""), UVOIPStatics::GetVoiceSampleRate(), UVOIPStatics::GetVoiceNumChannels());
+	}
+	if (bTaken)
+	{
+		AppliedMicrophone = Wanted;
+		if (bWasCapturing && !Capture->IsCapturing())
+		{
+			Capture->Start();
+		}
+	}
+	return bTaken;
+}
+
+float URiptideVoiceComponent::MicrophoneLevel(const UObject* WorldContext)
+{
+	const IVoiceCapture* Capture = LocalCapture(WorldContext);
+	if (!Capture)
+	{
+		return 0.f;
+	}
+	const float Amplitude = Capture->GetCurrentAmplitude();
+	return Amplitude < 0.f ? 0.f : FMath::Clamp(Amplitude, 0.f, 1.f);
 }
 
 ARiptideBoat* URiptideVoiceComponent::RadioInReach() const
