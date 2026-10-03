@@ -809,6 +809,52 @@ bool FRiptideCrewAnimProxy::Evaluate(FPoseContext& Output)
 			CS.SafeSetCSBoneTransforms({ FBoneTransform(Spine, T) });
 		}
 	}
+	// Posture: the clips hunch, more the faster they go (walking carried the head 37 cm ahead of the hips, sprinting
+	// 48 cm, the neck craned well forward). On their feet the upper body is eased back so the head rides no further
+	// ahead of the hips than a person's would: a few centimetres standing, more running, more again crouched. Most of
+	// it comes from the lower spine; then the neck is held back from jutting, the head turned to keep the gaze level.
+	if (Upright > 0.01f)
+	{
+		const FCompactPoseBoneIndex Hips = B(TEXT("pelvis")), Neck = B(TEXT("neck_01")), Skull = B(TEXT("Head"));
+		if (Hips.IsValid() && Neck.IsValid() && Skull.IsValid())
+		{
+			const float Run = FMath::Clamp(SmoothedSpeed / 600.f, 0.f, 1.f);
+			const float Allowed = In.bCrouched ? 28.f : FMath::Lerp(6.f, 26.f, Run);
+			const TPair<const TCHAR*, float> Shares[] = { { TEXT("spine_01"), 0.35f }, { TEXT("spine_02"), 0.35f }, { TEXT("spine_03"), 0.3f } };
+			float EasedBack = 0.f;
+			for (int32 Pass = 0; Pass < 2; ++Pass)
+			{
+				const FVector Lean = CS.GetComponentSpaceTransform(Skull).GetLocation() - CS.GetComponentSpaceTransform(Hips).GetLocation();
+				const float Ahead = FVector::DotProduct(Lean, BodyForward);
+				const float Height = FMath::Max(20.f, Lean.Z);
+				if (Ahead <= Allowed)
+				{
+					break;
+				}
+				const float Back = FMath::RadiansToDegrees(FMath::Atan2(Ahead - Allowed, Height)) * Upright;
+				for (const auto& Share : Shares)
+				{
+					TurnBone(CS, B(Share.Key), FQuat(BodyLeft, FMath::DegreesToRadians(Back * Share.Value)));
+				}
+				EasedBack += Back;
+			}
+			// The spine taking the head back with it would tip the face up: it's turned back down by as much, so the
+			// eyes look where the clip had them looking (a straighter back, not a chin in the air).
+			if (EasedBack > 0.f)
+			{
+				TurnBone(CS, Skull, FQuat(BodyLeft, FMath::DegreesToRadians(-EasedBack)));
+			}
+			// The neck: no more than 22 degrees off upright (standing it's about 18).
+			const FVector NeckLine = CS.GetComponentSpaceTransform(Skull).GetLocation() - CS.GetComponentSpaceTransform(Neck).GetLocation();
+			const float NeckTilt = FMath::RadiansToDegrees(FMath::Atan2(FVector::DotProduct(NeckLine, BodyForward), FMath::Max(1.f, NeckLine.Z)));
+			if (NeckTilt > 22.f)
+			{
+				const float Lift = (NeckTilt - 22.f) * 0.9f * Upright;
+				TurnBone(CS, Neck, FQuat(BodyLeft, FMath::DegreesToRadians(Lift)));
+				TurnBone(CS, Skull, FQuat(BodyLeft, FMath::DegreesToRadians(-Lift * 0.7f)));
+			}
+		}
+	}
 	// Looking up and down: the chest, neck and head share the look's pitch (only on their feet: swimming,
 	// climbing or down on the deck the pose is the clip's).
 	const float Pitch = FMath::Clamp(In.AimPitch, -70.f, 70.f) * Upright;
