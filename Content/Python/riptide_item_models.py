@@ -14,7 +14,7 @@ import random
 
 from riptide_palm_mesh import Mesh, _add, _cross, _mul, _norm, _sub
 
-ITEM_MODELS_VERSION = "1"
+ITEM_MODELS_VERSION = "2"
 
 
 # --- Shapes ------------------------------------------------------------------------------------------------------
@@ -430,12 +430,21 @@ def make_item_assets():
             else:
                 unreal.log_warning(f"Riptide: item {item_id} slot '{name}' has no finish")
         mesh.set_editor_property("static_materials", slots)
-        # Small things: no Nanite, and a simple hull so they can fall and settle as physics bodies.
+        # Small things: no Nanite, and a box round the whole thing as its physics body, so it can fall and settle.
         nanite = tools.get_nanite_settings(mesh)
         nanite.set_editor_property("enabled", False)
         tools.set_nanite_settings(mesh, nanite, True)
-        tools.remove_collisions(mesh)
-        tools.add_simple_collisions(mesh, unreal.ScriptCollisionShapeType.NDOP10_X)
+        box = mesh.get_bounding_box()
+        shape = unreal.KBoxElem()
+        shape.set_editor_property("center", (box.min + box.max) * 0.5)
+        shape.set_editor_property("x", max(box.max.x - box.min.x, 2.0))
+        shape.set_editor_property("y", max(box.max.y - box.min.y, 2.0))
+        shape.set_editor_property("z", max(box.max.z - box.min.z, 2.0))
+        geom = unreal.KAggregateGeom()
+        geom.set_editor_property("box_elems", [shape])
+        body = mesh.get_editor_property("body_setup")
+        body.set_editor_property("agg_geom", geom)
+        body.set_editor_property("collision_trace_flag", unreal.CollisionTraceFlag.CTF_USE_SIMPLE_AND_COMPLEX)
         assets.set_metadata_tag(mesh, "RiptideVersion", ITEM_MODELS_VERSION)
         assets.save_asset(path, only_if_is_dirty=False)
     unreal.log(f"Riptide: {len(written)} item models ready; {len(missing)} of {len(ids)} items have no model yet: {', '.join(missing)}")

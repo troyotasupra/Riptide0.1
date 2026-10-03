@@ -87,9 +87,10 @@ def finish():
 def tick(dt):
     state["ticks"] += 1
     try:
-        if state["ticks"] == 20:
+        # The editor is left to settle after the imports before the map is swapped (swapping at once crashed it).
+        if state["ticks"] == 240:
             unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level("/Game/Riptide/Maps/Island_Test")
-        if state["ticks"] == 60:
+        if state["ticks"] == 420:
             unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).editor_request_begin_play()
         world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
         if not world or state["done"]:
