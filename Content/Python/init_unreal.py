@@ -912,23 +912,25 @@ def make_boat_assets():
 # skeleton under /Game/Riptide/Characters. URiptideCrewBodyComponent loads them by path. Bump CREW_VERSION when
 # riptide_crew_mesh.py or the recipe here changes, so every machine rebuilds them on its next launch.
 CHARACTERS_PATH = "/Game/Riptide/Characters"
-CREW_VERSION = "8"
+CREW_VERSION = "11"
 CREW_MATERIALS = f"{CHARACTERS_PATH}/Materials"
 
-# Textures from the packs: (asset name, file under SourceAssets/Characters/Quaternius, kind)
+# Textures: (asset name, file under SourceAssets/Characters, kind). The bodies' are MakeHuman's (CC0, see
+# Docs/CREDITS.md); the beard's are Quaternius's.
+CREW_HAIR_STYLES = ("short04", "short01", "long01", "braid01")
 CREW_TEXTURES = [
-    ("T_CrewMale_Base", "BaseCharacters/T_Superhero_Male_Dark.png", "colour"),
-    ("T_CrewMale_Normal", "BaseCharacters/T_Superhero_Male_Normal.png", "normal"),
-    ("T_CrewMale_Rough", "BaseCharacters/T_Superhero_Male_Roughness.png", "data"),
-    ("T_CrewFemale_Base", "BaseCharacters/T_Superhero_Female_Dark_BaseColor.png", "colour"),
-    ("T_CrewFemale_Normal", "BaseCharacters/T_Superhero_Female_Normal.png", "normal"),
-    ("T_CrewFemale_Rough", "BaseCharacters/T_Superhero_Female_Roughness.png", "data"),
-    ("T_CrewHair1_Base", "Hair/T_Hair_1_BaseColor.png", "colour"),
-    ("T_CrewHair1_Normal", "Hair/T_Hair_1_Normal.png", "normal"),
-    ("T_CrewHair2_Base", "Hair/T_Hair_2_BaseColor.png", "colour"),
-    ("T_CrewHair2_Normal", "Hair/T_Hair_2_Normal.png", "normal"),
-    ("T_CrewEye", "BaseCharacters/T_Eye_Brown.png", "colour"),
-]
+    ("T_CrewMale_Base", "MakeHuman/Male/middleage_lightskinned_male_diffuse.png", "colour"),
+    ("T_CrewFemale_Base", "MakeHuman/Female/middleage_lightskinned_female_diffuse.png", "colour"),
+    ("T_CrewBrows_Male", "MakeHuman/Male/eyebrow001.png", "colour"),
+    ("T_CrewBrows_Female", "MakeHuman/Female/eyebrow006.png", "colour"),
+    ("T_CrewLashes", "MakeHuman/Male/eyelashes01.png", "colour"),
+    ("T_CrewTeeth", "MakeHuman/Male/teeth.png", "colour"),
+    ("T_CrewEye", "MakeHuman/Male/brown_eye.png", "colour"),
+    ("T_CrewHair1_Base", "Quaternius/Hair/T_Hair_1_BaseColor.png", "colour"),
+    ("T_CrewHair1_Normal", "Quaternius/Hair/T_Hair_1_Normal.png", "normal"),
+    ("T_CrewHair2_Base", "Quaternius/Hair/T_Hair_2_BaseColor.png", "colour"),
+    ("T_CrewHair2_Normal", "Quaternius/Hair/T_Hair_2_Normal.png", "normal"),
+] + [("T_CrewHair_" + style, f"MakeHuman/Male/{style}_diffuse.png", "colour") for style in CREW_HAIR_STYLES]
 
 # A tiny noise library for the crew's materials' HLSL (value noise and fBm, self-contained so it compiles the same
 # on every platform), wrapped in a struct: a Custom node's code can't declare functions, but it can declare a struct
@@ -1059,6 +1061,10 @@ CREW_OTHER_SLOTS = {
     "Uniform": "MI_CrewCamo", "Camo": "MI_CrewCamo", "Lens": "MI_CrewLens_Sun", "ClearLens": "MI_CrewLens_Clear",
     "Hair1": "MI_CrewHair1", "Hair2": "MI_CrewHair2", "MI_Hair_1": "MI_CrewHair1", "MI_Hair_2": "MI_CrewHair2",
     "MI_Eyes": "M_CrewEyes", "MI_Superhero_Male": "MI_CrewSkin_Male", "MI_Superhero_Female": "MI_CrewSkin_Female",
+    # MakeHuman's bodies (Tools/mh_export.py names the slots).
+    "Skin_Male": "MI_CrewSkin_Male", "Skin_Female": "MI_CrewSkin_Female", "Eyes": "M_CrewEyes",
+    "Brows_Male": "MI_CrewBrows_Male", "Brows_Female": "MI_CrewBrows_Female", "Lashes": "MI_CrewLashes", "Teeth": "MI_CrewTeeth",
+    "Hair_short04": "MI_CrewHair_short04", "Hair_short01": "MI_CrewHair_short01", "Hair_long01": "MI_CrewHair_long01", "Hair_braid01": "MI_CrewHair_braid01",
 }
 
 
@@ -1133,25 +1139,35 @@ def _make_crew_materials(textures):
     mel = unreal.MaterialEditingLibrary
 
     mat, g = _new_material("M_CrewSkin")
+    # MakeHuman's skin photos have no normal or roughness maps: skin is smooth-ish and a little shiny.
     base = g.texture("BaseTex", textures["T_CrewMale_Base"])
-    nrm = g.texture("NormalTex", textures["T_CrewMale_Normal"])
-    rough = g.texture("RoughTex", textures["T_CrewMale_Rough"])
     tone = g.vector("SkinTone", (0.56, 0.32, 0.2))
     g.out(g.custom(_SKIN_HLSL, _F3, [("Tex", base, "RGB"), ("Tone", tone, "")]), mp.MP_BASE_COLOR)
-    g.out(nrm, mp.MP_NORMAL, "RGB")
-    g.out(rough, mp.MP_ROUGHNESS, "G")
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.55), mp.MP_ROUGHNESS)
     spec = g.node(unreal.MaterialExpressionConstant, r=0.35)
     g.out(spec, mp.MP_SPECULAR)
     _finish_material(mat)
 
     mat, g = _new_material("M_CrewHair")
+    # Hair cards: the photo's alpha cuts the strands out.
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    mat.set_editor_property("two_sided", True)
     base = g.texture("BaseTex", textures["T_CrewHair1_Base"])
-    nrm = g.texture("NormalTex", textures["T_CrewHair1_Normal"])
     colour = g.vector("HairColour", (0.03, 0.02, 0.015))
     g.out(g.custom(_HAIR_HLSL, _F3, [("Tex", base, "RGB"), ("Colour", colour, "")]), mp.MP_BASE_COLOR)
-    g.out(nrm, mp.MP_NORMAL, "RGB")
+    g.out(base, mp.MP_OPACITY_MASK, "A")
     g.out(g.node(unreal.MaterialExpressionConstant, r=0.6), mp.MP_ROUGHNESS)
     g.out(g.node(unreal.MaterialExpressionConstant, r=0.3), mp.MP_SPECULAR)
+    _finish_material(mat)
+
+    mat, g = _new_material("M_CrewCutout")
+    # Eyebrows, eyelashes, teeth: a photo with its alpha, as it comes.
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    mat.set_editor_property("two_sided", True)
+    base = g.texture("BaseTex", textures["T_CrewLashes"])
+    g.out(base, mp.MP_BASE_COLOR, "RGB")
+    g.out(base, mp.MP_OPACITY_MASK, "A")
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.7), mp.MP_ROUGHNESS)
     _finish_material(mat)
 
     mat, g = _new_material("M_CrewEyes")
@@ -1218,12 +1234,16 @@ def _make_crew_materials(textures):
         unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
         return mi
 
-    instance("MI_CrewSkin_Male", "M_CrewSkin", textures_={"BaseTex": textures["T_CrewMale_Base"], "NormalTex": textures["T_CrewMale_Normal"],
-                                                          "RoughTex": textures["T_CrewMale_Rough"]})
-    instance("MI_CrewSkin_Female", "M_CrewSkin", textures_={"BaseTex": textures["T_CrewFemale_Base"], "NormalTex": textures["T_CrewFemale_Normal"],
-                                                            "RoughTex": textures["T_CrewFemale_Rough"]})
+    instance("MI_CrewSkin_Male", "M_CrewSkin", textures_={"BaseTex": textures["T_CrewMale_Base"]})
+    instance("MI_CrewSkin_Female", "M_CrewSkin", textures_={"BaseTex": textures["T_CrewFemale_Base"]})
     for k in ("1", "2"):
-        instance("MI_CrewHair" + k, "M_CrewHair", textures_={"BaseTex": textures[f"T_CrewHair{k}_Base"], "NormalTex": textures[f"T_CrewHair{k}_Normal"]})
+        instance("MI_CrewHair" + k, "M_CrewHair", textures_={"BaseTex": textures[f"T_CrewHair{k}_Base"]})
+    for style in CREW_HAIR_STYLES:
+        instance("MI_CrewHair_" + style, "M_CrewHair", textures_={"BaseTex": textures["T_CrewHair_" + style]})
+    instance("MI_CrewBrows_Male", "M_CrewCutout", textures_={"BaseTex": textures["T_CrewBrows_Male"]})
+    instance("MI_CrewBrows_Female", "M_CrewCutout", textures_={"BaseTex": textures["T_CrewBrows_Female"]})
+    instance("MI_CrewLashes", "M_CrewCutout", textures_={"BaseTex": textures["T_CrewLashes"]})
+    instance("MI_CrewTeeth", "M_CrewCutout", textures_={"BaseTex": textures["T_CrewTeeth"]})
     instance("MI_CrewCamo", "M_CrewCamo")
     instance("MI_CrewLens_Sun", "M_CrewLens", scalars={"Opacity": 0.88}, vectors={"Tint": (0.012, 0.01, 0.008)})
     instance("MI_CrewLens_Clear", "M_CrewLens", scalars={"Opacity": 0.3}, vectors={"Tint": (0.05, 0.045, 0.035)})
@@ -1298,7 +1318,8 @@ def make_crew_assets():
         assets.delete_directory(CHARACTERS_PATH)
 
     project = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())
-    source = os.path.join(project, "SourceAssets", "Characters", "Quaternius")
+    source = os.path.join(project, "SourceAssets", "Characters")
+    quaternius = os.path.join(source, "Quaternius")
     out_dir = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()), "Generated", "Crew")
     generated, rifle_obj = riptide_crew_mesh.build_all(source, out_dir, log=unreal.log)
 
@@ -1332,12 +1353,12 @@ def make_crew_assets():
     # The bodies (the male one first: its skeleton becomes the crew's), copied under the asset names they get.
     import shutil
     skeleton = None
-    for body, src in (("Male", "Superhero_Male_FullBody"), ("Female", "Superhero_Female_FullBody")):
+    for body, src in (("Male", "Male_FullBody"), ("Female", "Female_FullBody")):
         folder = os.path.join(out_dir, body)
         name = "SK_Crew" + body
-        with open(os.path.join(source, "BaseCharacters", src + ".gltf")) as f:
+        with open(os.path.join(source, "MakeHuman", body, src + ".gltf")) as f:
             doc = f.read()
-        shutil.copyfile(os.path.join(source, "BaseCharacters", src + ".bin"), os.path.join(folder, src + ".bin"))
+        shutil.copyfile(os.path.join(source, "MakeHuman", body, src + ".bin"), os.path.join(folder, src + ".bin"))
         with open(os.path.join(folder, name + ".gltf"), "w") as f:
             f.write(doc)
         _interchange_import(os.path.join(folder, name + ".gltf"), f"{CHARACTERS_PATH}/{body}", skeleton)
@@ -1346,6 +1367,13 @@ def make_crew_assets():
             if not unreal.RiptideCrewLibrary.set_up_crew_skeleton(skeleton):
                 unreal.log_error("Riptide: could not set up the crew skeleton's retargeting")
             assets.save_asset(skeleton.get_path_name().split(".")[0], only_if_is_dirty=False)
+        # The same body without its head, for the player's own view (URiptideCrewBodyComponent::ApplyFirstPerson).
+        with open(os.path.join(source, "MakeHuman", body, src + "_FP.gltf")) as f:
+            doc = f.read()
+        shutil.copyfile(os.path.join(source, "MakeHuman", body, src + "_FP.bin"), os.path.join(folder, src + "_FP.bin"))
+        with open(os.path.join(folder, name + "_FP.gltf"), "w") as f:
+            f.write(doc)
+        _interchange_import(os.path.join(folder, name + "_FP.gltf"), f"{CHARACTERS_PATH}/{body}", skeleton)
         for k, (mesh_name, gltf) in enumerate(generated[body].items()):
             _interchange_import(gltf, f"{CHARACTERS_PATH}/{body}", skeleton)
             if k % 8 == 7:
@@ -1364,7 +1392,7 @@ def make_crew_assets():
     unreal.SystemLibrary.collect_garbage()
     import_dir = f"{CHARACTERS_PATH}/Animations/Import"
     for lib in ("UAL1", "UAL2"):
-        _interchange_import(os.path.join(source, "Animations", lib + "_Standard.glb"), import_dir, skeleton, animations=True)
+        _interchange_import(os.path.join(quaternius, "Animations", lib + "_Standard.glb"), import_dir, skeleton, animations=True)
         unreal.SystemLibrary.collect_garbage()
     for name, origin in clips:
         lib, clip = origin.split("/")

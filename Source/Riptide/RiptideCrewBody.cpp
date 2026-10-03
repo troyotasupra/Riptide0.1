@@ -156,10 +156,30 @@ void URiptideCrewBodyComponent::SetFirstPersonView(bool bOn)
 
 void URiptideCrewBodyComponent::ApplyFirstPerson()
 {
+	if (!HasBody())
+	{
+		return;
+	}
+	// For this machine's own view the body is drawn without its head, closed at the neck (SK_Crew<Body>_FP), so
+	// looking down shows a chest and not the inside of a funnel; the shadow comes from a copy with the whole body.
+	const FString Folder = BodyFolder(Appearance);
+	const TCHAR* BaseName = Folder == TEXT("Female") ? TEXT("SK_CrewFemale") : TEXT("SK_CrewMale");
+	USkeletalMesh* Whole = LoadCrewAsset<USkeletalMesh>(Folder, BaseName);
+	USkeletalMesh* Headless = LoadCrewAsset<USkeletalMesh>(Folder, *(FString(BaseName) + TEXT("_FP")));
+	USkeletalMesh* Want = bFirstPerson && Headless ? Headless : Whole;
+	if (Want && GetSkeletalMeshAsset() != Want)
+	{
+		EmptyOverrideMaterials();
+		SetSkeletalMeshAsset(Want);
+		for (int32 i = 0; i < Want->GetMaterials().Num(); ++i)
+		{
+			SetMaterial(i, Coloured(Want->GetMaterials()[i].MaterialInterface));
+		}
+	}
 	const FName Head(TEXT("Head"));
 	if (!bFirstPerson)
 	{
-		if (HasBody() && GetBoneIndex(Head) != INDEX_NONE)
+		if (GetBoneIndex(Head) != INDEX_NONE)
 		{
 			UnHideBoneByName(Head);
 		}
@@ -170,13 +190,9 @@ void URiptideCrewBodyComponent::ApplyFirstPerson()
 		}
 		return;
 	}
-	if (!HasBody())
+	if (!Headless && GetBoneIndex(Head) != INDEX_NONE)
 	{
-		return;
-	}
-	// The head (and everything parented to it) scales away for this machine's render; the shadow comes from the copy.
-	if (GetBoneIndex(Head) != INDEX_NONE)
-	{
+		// No head-less body built yet: the head scales away instead.
 		HideBoneByName(Head, EPhysBodyOp::PBO_None);
 	}
 	if (!ShadowBody)
@@ -198,9 +214,9 @@ void URiptideCrewBodyComponent::ApplyFirstPerson()
 			ShadowBody->RegisterComponentWithWorld(GetWorld());
 		}
 	}
-	if (ShadowBody->GetSkeletalMeshAsset() != GetSkeletalMeshAsset())
+	if (Whole && ShadowBody->GetSkeletalMeshAsset() != Whole)
 	{
-		ShadowBody->SetSkeletalMeshAsset(GetSkeletalMeshAsset());
+		ShadowBody->SetSkeletalMeshAsset(Whole);
 	}
 	ShadowBody->SetLeaderPoseComponent(this, true);
 }

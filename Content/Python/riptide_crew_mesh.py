@@ -1403,9 +1403,10 @@ def hat_line(fit, az):
 
 
 def build_hair(fit, hair_path, female, hat=False):
-    """A Quaternius hairstyle (made for the female head) refitted to this body's head: carried by the head joint,
-    scaled to the head's size, and kept just outside the scalp. With hat, everything above the hat line is pressed
-    down onto the scalp so headgear sits over it (long hair still hangs below)."""
+    """A hairstyle (made for the head of `female`, a Fit; the body's own when it's MakeHuman's) refitted to this
+    body's head: carried by the head joint, scaled to the head's size, and kept just outside the scalp. With hat,
+    everything above the hat line is pressed down onto the scalp so headgear sits over it (long hair still hangs
+    below)."""
     g = Gltf(hair_path)
     hr = Rig(g)
     hair = Body(g, fit.rig)
@@ -1414,9 +1415,10 @@ def build_hair(fit, hair_path, female, hat=False):
     sx = (fit.head_hi[0] - fit.head_lo[0]) / (female.head_hi[0] - female.head_lo[0])
     sy = (fit.head_hi[1] - fit.eye_y) / (female.head_hi[1] - female.eye_y)
     sz = (fit.head_hi[2] - fit.head_lo[2]) / (female.head_hi[2] - female.head_lo[2])
-    # Its material slot keeps the source's texture set: "Hair1" or "Hair2" (MI_Hair_1 / MI_Hair_2).
+    # Its material slot: MakeHuman hair carries its own ("Hair_<style>"); Quaternius's keeps its texture set,
+    # "Hair1" or "Hair2" (MI_Hair_1 / MI_Hair_2).
     source = g.json["materials"][g.json["meshes"][0]["primitives"][0]["material"]]["name"]
-    slot = "Hair2" if source.endswith("2") else "Hair1"
+    slot = source if source.startswith("Hair_") else "Hair2" if source.endswith("2") else "Hair1"
     m = SkinMesh()
     for p, n, uv, s in zip(hair.pos, hair.nrm, hair.uv, hair.skin):
         d = sub(mat_apply(to_head, p), fit.head_c)
@@ -2204,22 +2206,19 @@ def build_rifle():
 
 # --- Everything --------------------------------------------------------------------------------------------------------
 
-# (asset name, source hair file per body: (male, female))
-HAIRSTYLES = {
-    "SK_Hair_Buzzed": ("Hair_Buzzed", "Hair_BuzzedFemale"),
-    "SK_Hair_Parted": ("Hair_SimpleParted", "Hair_SimpleParted"),
-    "SK_Hair_Long": ("Hair_Long", "Hair_Long"),
-    "SK_Hair_Buns": ("Hair_Buns", "Hair_Buns"),
-}
+# The hairstyles: each body has its own fitted file of each (Tools/mh_export.py writes them).
+HAIRSTYLES = ("SK_Hair_Buzzed", "SK_Hair_Parted", "SK_Hair_Long", "SK_Hair_Buns")
 
 
 def build_all(source_dir, out_dir, log=print):
-    """Generates every crew mesh for both bodies into out_dir/<Body>/. Returns {body: {asset name: .gltf path}} and
-    the rifle's OBJ path."""
-    base = os.path.join(source_dir, "BaseCharacters")
-    hair_dir = os.path.join(source_dir, "Hair")
-    female = Fit(os.path.join(base, "Superhero_Female_FullBody.gltf"), "Female")
-    male = Fit(os.path.join(base, "Superhero_Male_FullBody.gltf"), "Male")
+    """Generates every crew mesh for both bodies into out_dir/<Body>/. The bodies and hair are MakeHuman's
+    (source_dir/MakeHuman, see Tools/mh_export.py); the beard is Quaternius's, refitted. Returns
+    {body: {asset name: .gltf path}} and the rifle's OBJ path."""
+    base = os.path.join(source_dir, "MakeHuman")
+    female = Fit(os.path.join(base, "Female", "Female_FullBody.gltf"), "Female")
+    male = Fit(os.path.join(base, "Male", "Male_FullBody.gltf"), "Male")
+    beard_file = os.path.join(source_dir, "Quaternius", "Hair", "Hair_Beard.gltf")
+    beard_fit = Fit(os.path.join(source_dir, "Quaternius", "BaseCharacters", "Superhero_Female_FullBody.gltf"), "BeardFit")
     result = {}
     for fit in (male, female):
         folder = os.path.join(out_dir, fit.name)
@@ -2245,11 +2244,11 @@ def build_all(source_dir, out_dir, log=print):
         meshes["SK_AssaultPack_OverPlate"] = build_pack(fit, usurf, "assault", back_out, over)
         meshes["SK_HydrationPack"] = build_pack(fit, usurf, "hydration")
         meshes["SK_HydrationPack_OverPlate"] = build_pack(fit, usurf, "hydration", back_out, over)
-        for name, (m_file, f_file) in HAIRSTYLES.items():
-            path = os.path.join(hair_dir, (m_file if fit is male else f_file) + ".gltf")
-            meshes[name] = build_hair(fit, path, female)
-            meshes[name + "_Hat"] = build_hair(fit, path, female, hat=True)
-        meshes["SK_Beard"] = build_hair(fit, os.path.join(hair_dir, "Hair_Beard.gltf"), female)
+        for name in HAIRSTYLES:
+            path = os.path.join(base, fit.name, name + ".gltf")
+            meshes[name] = build_hair(fit, path, fit)
+            meshes[name + "_Hat"] = build_hair(fit, path, fit, hat=True)
+        meshes["SK_Beard"] = build_hair(fit, beard_file, beard_fit)
         result[fit.name] = {}
         for name, mesh in meshes.items():
             path = os.path.join(folder, name + ".gltf")

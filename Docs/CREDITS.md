@@ -82,3 +82,11 @@ The patrol skiff and outboard are our own, generated in code (`Content/Python/ri
 ## Engine content
 
 The ocean, the wake simulation and its boat force (`BP_FluidSim_01`, `M_Fluid_Sim_Force_Boat_Component`, `T_BoatForceFoam`), the churn's foam texture (`T_WaterFlow_01_Foam_Tiled`) and the placeholder shapes come with Unreal Engine (the Water plugin and engine basic shapes).
+
+## Characters (`SourceAssets/Characters/MakeHuman/`)
+
+Bodies made with [MakeHuman Community 1.2.0](http://www.makehumancommunity.org) and written out by `C:\Claude	ools\makehuman\mh_export.py` (a headless script over MakeHuman's own libraries). Everything MakeHuman ships or produces is CC0: the base mesh, the game-engine rig, the skin, eye, eyebrow, eyelash, teeth and hair meshes and their textures.
+
+| Folder in the repo | What | Source |
+|---|---|---|
+| `Male/`, `Female/` | `<Body>_FullBody.gltf` (body, eyes, eyebrows, eyelashes, teeth on the game-engine rig) and `SK_Hair_*.gltf` (short04, short01, long01, braid01), with their textures (`middleage_lightskinned_*_diffuse.png`, `brown_eye.png`, `eyebrow*.png`, `eyelashes01.png`, `teeth.png`, `*_diffuse.png`) | MakeHuman 1.2.0 bundled assets, CC0 |
