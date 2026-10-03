@@ -912,7 +912,7 @@ def make_boat_assets():
 # skeleton under /Game/Riptide/Characters. URiptideCrewBodyComponent loads them by path. Bump CREW_VERSION when
 # riptide_crew_mesh.py or the recipe here changes, so every machine rebuilds them on its next launch.
 CHARACTERS_PATH = "/Game/Riptide/Characters"
-CREW_VERSION = "11"
+CREW_VERSION = "12"
 CREW_MATERIALS = f"{CHARACTERS_PATH}/Materials"
 
 # Textures: (asset name, file under SourceAssets/Characters, kind). The bodies' are MakeHuman's (CC0, see
@@ -985,7 +985,7 @@ _CLOTH_NORMAL_HLSL = _NOISE_HLSL + (
 #   Weave 0 nylon (Cordura), 1 webbing, 2 knit ribs, 3 velcro loop, 4 smooth (rubber, plastic, metal), 5 shemagh
 #   check, 6 boot leather, 7 glove
 _GEAR_HLSL = _NOISE_HLSL + (
-    "float3 base = lerp(Fixed.rgb, Gear.rgb, UseGear); base = lerp(base, Boot.rgb, UseBoot); base *= Tint;\n"
+    "float3 base = lerp(Fixed.rgb, Gear.rgb, UseGear); base = lerp(base, Boot.rgb, UseBoot); base = lerp(base, Cloth.rgb, UseCloth); base *= Tint;\n"
     "float3 P = float3(UV * 10.0, 0.0);\n"
     "float w = Weave;\n"
     "if (w < 0.5) {\n"
@@ -1048,6 +1048,10 @@ CREW_GEAR_SLOTS = {
     "GloveGuard": (1, 0, 0.45, (0.1, 0.1, 0.1), 4, 0.5, 0.0),
     "Furniture": (1, 0, 0.9, (0.1, 0.1, 0.1), 4, 0.6, 0.0),
     "Boot": (0, 1, 1.0, (0.1, 0.1, 0.1), 6, 0.62, 0.0),
+    # The castaway clothes: cloth in the look's colour (UseCloth, set below), wood for the clogs.
+    "Shirt": (0, 0, 1.0, (0.8, 0.8, 0.8), 0, 0.9, 0.0),
+    "Shorts": (0, 0, 1.0, (0.5, 0.45, 0.3), 0, 0.88, 0.0),
+    "Clog": (0, 0, 1.0, (0.36, 0.24, 0.12), 4, 0.55, 0.0),
     "Mount": (0, 0, 1.0, (0.035, 0.036, 0.038), 4, 0.42, 0.5),
     "Trim": (0, 0, 1.0, (0.02, 0.02, 0.02), 4, 0.75, 0.0),
     "Polymer": (0, 0, 1.0, (0.03, 0.03, 0.032), 4, 0.55, 0.0),
@@ -1199,6 +1203,7 @@ def _make_crew_materials(textures):
     ins = [("Gear", g.vector("GearColour", (0.22, 0.12, 0.05)), ""), ("Boot", g.vector("BootColour", (0.1, 0.06, 0.03)), ""),
            ("Fixed", g.vector("FixedColour", (0.1, 0.1, 0.1)), ""), ("UseGear", g.scalar("UseGear", 1.0), ""),
            ("UseBoot", g.scalar("UseBoot", 0.0), ""), ("Tint", g.scalar("Tint", 1.0), ""), ("Weave", weave, ""),
+           ("Cloth", g.vector("ClothColour", (0.8, 0.8, 0.8)), ""), ("UseCloth", g.scalar("UseCloth", 0.0), ""),
            ("UV", uv, ""), ("VC", vc, "")]
     g.out(g.custom(_GEAR_HLSL, _F3, ins), mp.MP_BASE_COLOR)
     g.out(g.custom(_GEAR_ROUGH_HLSL, _F1, [("Rough", g.scalar("Roughness", 0.8), ""), ("Weave", weave, ""), ("VC", vc, "")]), mp.MP_ROUGHNESS)
@@ -1249,7 +1254,8 @@ def _make_crew_materials(textures):
     instance("MI_CrewLens_Clear", "M_CrewLens", scalars={"Opacity": 0.3}, vectors={"Tint": (0.05, 0.045, 0.035)})
     for slot, (use_gear, use_boot, tint, fixed, weave, rough, metal) in CREW_GEAR_SLOTS.items():
         instance("MI_CrewGear_" + slot, "M_CrewGear", scalars={"UseGear": use_gear, "UseBoot": use_boot, "Tint": tint, "Weave": weave,
-                                                              "Roughness": rough, "Metallic": metal}, vectors={"FixedColour": fixed})
+                                                              "Roughness": rough, "Metallic": metal, "UseCloth": 1.0 if slot in ("Shirt", "Shorts") else 0.0},
+                 vectors={"FixedColour": fixed})
 
 
 def _crew_material_for(slot):

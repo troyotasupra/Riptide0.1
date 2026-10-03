@@ -1100,14 +1100,14 @@ def build_boots(fit):
     sole_h, heel_h = SOLE_H * s, HEEL_H * s
     # The last, in fractions of its length from the heel's back: (where along it, half width, height of the upper
     # over the sole); a closed shoe from the rounded toe to the heel counter.
-    LAST = [(1.00, 1.5, 2.2), (0.96, 3.4, 3.5), (0.88, 4.6, 4.3), (0.74, 5.3, 4.8), (0.60, 5.0, 5.3), (0.47, 4.7, 6.3),
-            (0.36, 4.5, 7.6), (0.24, 4.4, 8.6), (0.13, 4.0, 8.4), (0.05, 2.9, 6.6), (0.00, 0.9, 3.0)]
+    LAST = [(1.00, 1.3, 1.5), (0.96, 3.0, 2.6), (0.88, 4.2, 3.5), (0.74, 4.9, 4.2), (0.60, 4.7, 5.0), (0.47, 4.5, 6.1),
+            (0.36, 4.3, 7.4), (0.24, 4.2, 8.4), (0.13, 3.8, 8.2), (0.05, 2.7, 6.4), (0.00, 0.9, 3.0)]
     # The shaft: (height over the floor, half width, half depth), rising out of the shoe round the ankle.
     SHAFT = [(5.5, 3.6, 4.4), (8.0, 4.2, 5.2), (10.5, 4.6, 5.7), (13.5, 4.6, 5.5), (17.0, 4.7, 5.5), (19.5, 4.8, 5.6), (21.6, 4.9, 5.8)]
     POWER = 2.6   # the cross-section: a superellipse, flat underneath and across the instep, rounded at the sides
     m = SkinMesh()
     blue, red, green = (0.0, 0.0, 1.0, 1.0), (1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0)
-    white = (1.0, 1.0, 1.0, 1.0)
+    leather = (0.0, 0.0, 0.0, 1.0)
 
     for side in (1.0, -1.0):
         name = "l" if side > 0 else "r"
@@ -1136,8 +1136,8 @@ def build_boots(fit):
             w, h = w * s, h * s
             slab = [p for p in foot_pts if abs(p[2] - z) < 1.5]
             if slab:
-                w = max(w, max(abs(p[0] - cx) for p in slab) + 1.0)
-                h = max(h, max(p[1] for p in slab) - sole_top(z) + 1.0)
+                w = max(w, max(abs(p[0] - cx) for p in slab) + 0.6)
+                h = max(h, max(p[1] for p in slab) - sole_top(z) + 0.6)
             skin = {jb: 0.7, jf: 0.3} if f >= 0.74 else {jf: 1.0}
             shoe.append(((cx, sole_top(z) + h, z), a, (0.0, 1.0, 0.0), w, h, skin, "cap" if f >= 0.8 else "heel" if f <= 0.3 else "vamp"))
         shaft = []
@@ -1187,7 +1187,7 @@ def build_boots(fit):
                     v = base + i * 28 + k
                     p, n, uv, col, sk = m.verts[v]
                     behind = p[2] < ankle_z - 1.5 * s
-                    col = blue if sec[6] == "cap" or (sec[6] == "heel" and behind) else white
+                    col = blue if sec[6] == "cap" or (sec[6] == "heel" and behind) else leather
                     m.verts[v] = (p, n, uv, col, sk)
             return rows
 
@@ -1217,10 +1217,10 @@ def build_boots(fit):
         n_steps = 36
         for k in range(n_steps + 1):
             z = z0 + last_len * k / n_steps
-            outline.append((cx + half_w(z) + 0.5 * s, z))
+            outline.append((cx + half_w(z) + 0.3 * s, z))
         for k in range(n_steps, -1, -1):
             z = z0 + last_len * k / n_steps
-            outline.append((cx - half_w(z) - 0.5 * s, z))
+            outline.append((cx - half_w(z) - 0.3 * s, z))
         outline = _densify(outline, 1.2)
         cz = z0 + 0.5 * last_len
         lugged = [(cx + (x - cx) * (1.0 if i % 2 == 0 else 0.982), cz + (z - cz) * (1.0 if i % 2 == 0 else 0.99)) for i, (x, z) in enumerate(outline)]
@@ -2204,6 +2204,184 @@ def build_rifle():
     return m
 
 
+# --- Castaway clothes: a t-shirt, shorts and beach footwear ---------------------------------------------------------
+# What the crew start in. Cut from the body like the uniform (pushed out and smoothed into cloth), or built on the
+# feet. Material slots: "Shirt" and "Shorts" (cloth in the chosen colour), "Strap" (webbing), "Boot" (leather),
+# "Sole" (rubber), "Clog" (wood).
+
+
+def body_surface(fit):
+    """The body's own skin as a Surface, for pressing straps onto it."""
+    w = fit.welded
+    return Surface(w.points, w.tris(), w.skins, w.normals)
+
+
+def build_tshirt(fit):
+    """A t-shirt: the torso from a round neck to just below the waist, sleeves to the middle of the upper arm,
+    hemmed at the neck, sleeves and bottom."""
+    w, rig = fit.welded, fit.rig
+    neck = fit.neck
+    shoulder_x = rig.pos("upperarm_l")[0]
+    sleeve_x = shoulder_x + 0.42 * (rig.pos("lowerarm_l")[0] - shoulder_x)
+    hem_y = fit.pelvis[1] - 7.0 * fit.scale
+
+    def keep_point(p):
+        # A round neck, lower at the front; the sleeves end on the upper arm; the hem sits on the hips.
+        collar = neck[1] - 0.5 - 4.5 * smoothstep(-2.0, 7.0, p[2] - neck[2]) + 20.0 * smoothstep(7.0, 12.0, abs(p[0]))
+        return p[1] < collar and abs(p[0]) < sleeve_x and p[1] > hem_y
+    keep = {g for g, p in enumerate(w.points) if keep_point(p)
+            and not w.body.dominant(w.members[g][0]).startswith(FOOT_BONES + HAND_BONES + ("Head", "lowerarm", "calf", "thigh"))}
+    pts = inflate(w, keep, lambda g: 1.0, smooth_iters=7, min_offset=lambda g: 0.5, smooth_weight=0.55)
+    m = SkinMesh()
+    surf, _ = _mesh_from_points(m, w, pts, w.tris(), "Shirt")
+    for loop in boundary_loops(surf.tris):
+        c = mul(sum_points([surf.points[v] for v in loop]), 1.0 / len(loop))
+        if c[1] > fit.shoulder_y - 8.0 and abs(c[0]) < 12.0:
+            hem(m, surf, loop, lambda p: norm((0.0, -1.0, 0.0)), 1.4, 0.3, "Shirt", tuck=0.2)       # the neck band
+        elif abs(c[0]) > shoulder_x + 2.0:
+            side = 1.0 if c[0] > 0 else -1.0
+            hem(m, surf, loop, lambda p, s=side: (-s, 0.0, 0.0), 2.0, 0.35, "Shirt", tuck=0.3)      # the sleeve hems
+        else:
+            hem(m, surf, loop, lambda p: (0.0, 1.0, 0.0), 2.2, 0.3, "Shirt", tuck=0.3)              # the bottom hem
+    return m
+
+
+def build_shorts(fit):
+    """Shorts: from the waist to just above the knee, with a waistband and hemmed legs."""
+    w, rig = fit.welded, fit.rig
+    knee_y = rig.pos("calf_l")[1]
+    waist_y = fit.pelvis[1] + 7.0 * fit.scale
+    leg_y = knee_y + 9.0 * fit.scale
+
+    def keep_point(g, p):
+        bone = w.body.dominant(w.members[g][0])
+        return leg_y < p[1] < waist_y and (bone.startswith(("pelvis", "thigh", "spine_01")) or (p[1] < fit.pelvis[1] + 2.0 and abs(p[0]) < 24.0))
+    keep = {g for g, p in enumerate(w.points) if keep_point(g, p)}
+    pts = inflate(w, keep, lambda g: 1.1, smooth_iters=7, min_offset=lambda g: 0.6, smooth_weight=0.55)
+    m = SkinMesh()
+    surf, _ = _mesh_from_points(m, w, pts, w.tris(), "Shorts")
+    for loop in boundary_loops(surf.tris):
+        c = mul(sum_points([surf.points[v] for v in loop]), 1.0 / len(loop))
+        if c[1] > fit.pelvis[1]:
+            hem(m, surf, loop, lambda p: (0.0, -1.0, 0.0), 3.0, 0.5, "Shorts", tuck=0.2)     # the waistband
+        else:
+            hem(m, surf, loop, lambda p: (0.0, 1.0, 0.0), 2.0, 0.3, "Shorts", tuck=0.3)      # the leg hems
+    return m
+
+
+def _foot_outline(fit, side, welt):
+    """A foot's footprint on the floor, widened by welt cm: densified outline, its centre, and the foot's bones."""
+    rig, b = fit.rig, fit.body
+    name = "l" if side > 0 else "r"
+    floor = min(p[1] for p in b.pos)
+    foot_pts = [p for v, p in enumerate(b.pos) if p[0] * side > 0 and b.weight_on(v, ["foot_" + name, "ball_" + name]) > 0.5]
+    hull = _hull2d([(p[0], p[2]) for p in foot_pts if p[1] < floor + 3.5])
+    cx = sum(x for x, _ in hull) / len(hull)
+    cz = sum(z for _, z in hull) / len(hull)
+    ring = _densify([(cx + (x - cx) * (1.0 + welt / 5.0) + (welt * 0.6 if x > cx else -welt * 0.6), cz + (z - cz) * (1.0 + welt / 12.0)) for x, z in hull], 1.0)
+    return ring, (cx, cz), floor, foot_pts, name
+
+
+def _sole(m, fit, side, thick, welt=0.5, material="Sole", heel=0.0):
+    """A flat sole under one foot, thick cm, with a raised heel if heel > 0. Returns (outline, centre, floor, foot
+    points, side name, top height function)."""
+    ring, (cx, cz), floor, foot_pts, name = _foot_outline(fit, side, welt)
+    jf, jb = fit.rig.index["foot_" + name], fit.rig.index["ball_" + name]
+    ball_z = fit.rig.pos("ball_" + name)[2]
+    skin = lambda q: {jb: 0.6, jf: 0.4} if q[2] > ball_z - 2.0 else {jf: 1.0}
+
+    def top(z):
+        return floor + thick + heel * (1.0 - smoothstep(ball_z - 9.0, ball_z - 3.0, z))
+    bottom = [(x, floor + 0.05, z) for x, z in ring]
+    upper = [(x, top(z), z) for x, z in ring]
+    m.grid([bottom, upper], material, skin, outward_hint=lambda q: (cx, q[1], cz), close_rows=True)
+    m.fan(bottom, material, skin, lambda q: add(q, (0.0, 3.0, 0.0)))
+    m.fan(upper, material, skin, lambda q: add(q, (0.0, -3.0, 0.0)))
+    return ring, (cx, cz), floor, foot_pts, name, top
+
+
+def _strap_over(m, surf, fit, side, z, width, thick, material, lift=0.5, span=1.0):
+    """A strap across the foot at depth z, from the sole's edge on one side over the foot to the other, pressed to
+    the skin and lifted off it."""
+    name = "l" if side > 0 else "r"
+    foot_x = fit.rig.pos("foot_" + name)[0]
+    b = fit.body
+    near = [p for p in b.pos if abs(p[2] - z) < 2.0 and abs(p[0] - foot_x) < 9.0 and p[1] < 14.0]
+    if not near:
+        return
+    lo_x, hi_x = min(p[0] for p in near) - 0.3, max(p[0] for p in near) + 0.3
+    path, normals = [], []
+    for k in range(13):
+        t = k / 12.0
+        x = lo_x + (hi_x - lo_x) * t
+        column = [p for p in near if abs(p[0] - x) < 0.9]
+        y = max(p[1] for p in column) if column else 1.0
+        # Down the sides the strap wraps round to the sole.
+        edge = 1.0 - smoothstep(0.0, 0.12, min(t, 1.0 - t))
+        p, n, _ = surf.closest((x, y * (1.0 - edge) + 1.2 * edge, z), 6.0)
+        path.append(add(p, mul(n, lift)))
+        normals.append(n)
+    skin_of = lambda q: surf.closest(q, 8.0)[2]
+    m.strap(path, normals, width, thick, material, skin_of)
+
+
+def build_slides(fit):
+    """Slides: a thick flat sole with one broad strap over the instep."""
+    m = SkinMesh()
+    surf = body_surface(fit)
+    for side in (1.0, -1.0):
+        ring, centre, floor, foot_pts, name, top = _sole(m, fit, side, 2.2, welt=0.6)
+        ball_z = fit.rig.pos("ball_" + name)[2]
+        _strap_over(m, surf, fit, side, ball_z - 1.0, 4.5, 0.5, "Strap", lift=0.55)
+    return m
+
+
+def build_sandals(fit):
+    """Sandals: a thinner sole, a toe strap, an instep strap and a strap round the heel."""
+    m = SkinMesh()
+    surf = body_surface(fit)
+    for side in (1.0, -1.0):
+        ring, (cx, cz), floor, foot_pts, name, top = _sole(m, fit, side, 1.6, welt=0.4)
+        rig = fit.rig
+        ball_z = rig.pos("ball_" + name)[2]
+        ankle = rig.pos("foot_" + name)
+        _strap_over(m, surf, fit, side, ball_z + 3.0, 2.2, 0.35, "Boot", lift=0.45)
+        _strap_over(m, surf, fit, side, ball_z - 4.5, 2.4, 0.35, "Boot", lift=0.45)
+        # Round the heel at ankle-bone height, from one side of the sole to the other.
+        y = floor + 5.5 * fit.scale
+        path, normals = [], []
+        for k in range(15):
+            ang = -0.5 * math.pi + math.pi * k / 14.0      # from one side, round the back, to the other
+            x, z = ankle[0] + 6.0 * math.sin(ang), ankle[2] - 7.0 * math.cos(ang) + 1.0
+            p, n, _ = surf.closest((x, y, z), 8.0)
+            path.append(add(p, mul(n, 0.45)))
+            normals.append(n)
+        m.strap(path, normals, 1.8, 0.35, "Boot", lambda q: surf.closest(q, 8.0)[2])
+    return m
+
+
+def build_clogs(fit):
+    """Clogs: a thick wooden sole, a little higher at the heel, with a closed toe box over the front of the foot."""
+    w, rig = fit.welded, fit.rig
+    m = SkinMesh()
+    for side in (1.0, -1.0):
+        ring, (cx, cz), floor, foot_pts, name, top = _sole(m, fit, side, 2.6, welt=0.7, material="Clog", heel=1.2)
+        ball_z = rig.pos("ball_" + name)[2]
+        ankle_z = rig.pos("foot_" + name)[2]
+        # The toe box: the front of the foot pushed out and smoothed, open behind the instep.
+        keep = {g for g, p in enumerate(w.points) if p[0] * side > 0 and p[2] > ankle_z - 1.0 and p[1] < floor + 10.5 * fit.scale
+                and w.body.dominant(w.members[g][0]).startswith(FOOT_BONES)}
+        pts = inflate(w, keep, lambda g: 1.1, smooth_iters=16, min_offset=lambda g: 0.6, smooth_weight=0.65)
+        for g, p in list(pts.items()):
+            pts[g] = (p[0], max(p[1], top(p[2]) - 0.2), p[2])
+        surf, _ = _mesh_from_points(m, w, pts, w.tris(), "Clog")
+        for loop in boundary_loops(surf.tris):
+            c = mul(sum_points([surf.points[v] for v in loop]), 1.0 / len(loop))
+            if c[1] > floor + 2.0:
+                hem(m, surf, loop, lambda p: (0.0, 0.0, 1.0), 1.2, 0.4, "Clog", tuck=0.2)
+    return m
+
+
 # --- Everything --------------------------------------------------------------------------------------------------------
 
 # The hairstyles: each body has its own fitted file of each (Tools/mh_export.py writes them).
@@ -2228,6 +2406,11 @@ def build_all(source_dir, out_dir, log=print):
         meshes["SK_Uniform"] = uniform
         meshes["SK_Boots"] = build_boots(fit)
         meshes["SK_Gloves"] = build_gloves(fit)
+        meshes["SK_TShirt"] = build_tshirt(fit)
+        meshes["SK_Shorts"] = build_shorts(fit)
+        meshes["SK_Sandals"] = build_sandals(fit)
+        meshes["SK_Slides"] = build_slides(fit)
+        meshes["SK_Clogs"] = build_clogs(fit)
         meshes["SK_Balaclava"] = build_balaclava(fit)
         meshes["SK_Shemagh"] = build_shemagh(fit)
         meshes["SK_Helmet"] = build_helmet(fit)

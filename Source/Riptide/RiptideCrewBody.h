@@ -89,7 +89,7 @@ public:
 
 private:
 	/** The parts worn on the body, each its own mesh following the body's pose. */
-	enum class EPart : uint8 { Uniform, Boots, Gloves, Hair, Beard, Headgear, FaceCover, Vest, Pack, Count };
+	enum class EPart : uint8 { Uniform, Boots, Gloves, Hair, Beard, Headgear, FaceCover, Vest, Pack, Shirt, Shorts, Footwear, Count };
 
 	USkeletalMeshComponent* PartComponent(EPart Part);
 	void SetPart(EPart Part, const TCHAR* MeshName);

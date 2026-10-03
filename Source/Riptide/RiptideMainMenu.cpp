@@ -526,6 +526,10 @@ TSharedRef<SWidget> SRiptideMainMenu::MakeCrew()
 	for (int32 i = 0; i < int32(ERiptideLook::Count); ++i)
 	{
 		const ERiptideLook Part = ERiptideLook(i);
+		if (!URiptideAppearanceLibrary::IsShownInMenu(Part))
+		{
+			continue;
+		}
 		Rows->AddSlot().AutoHeight().Padding(0.f, 2.f)
 		[
 			SNew(SRiptideStepper)

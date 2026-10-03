@@ -104,15 +104,22 @@ void URiptideCrewBodyComponent::SetAppearance(const FRiptideAppearance& Look)
 	static const TCHAR* Pack[] = { nullptr, TEXT("SK_AssaultPack"), TEXT("SK_HydrationPack") };
 	static const TCHAR* PackOverPlate[] = { nullptr, TEXT("SK_AssaultPack_OverPlate"), TEXT("SK_HydrationPack_OverPlate") };
 	const uint8 HairChoice = Appearance.Get(ERiptideLook::Hair);
-	SetPart(EPart::Uniform, TEXT("SK_Uniform"));
-	SetPart(EPart::Boots, TEXT("SK_Boots"));
-	SetPart(EPart::Gloves, Appearance.Get(ERiptideLook::Gloves) == 1 ? TEXT("SK_Gloves") : nullptr);
-	SetPart(EPart::Hair, bBalaclava ? nullptr : (Head != 0 ? HairHat : Hair)[FMath::Min<int32>(HairChoice, 4)]);
-	SetPart(EPart::Beard, Folder == TEXT("Male") && Appearance.Get(ERiptideLook::Beard) == 1 && !bBalaclava && !bShemagh ? TEXT("SK_Beard") : nullptr);
-	SetPart(EPart::Headgear, Headgear[FMath::Min<int32>(Head, 4)]);
-	SetPart(EPart::FaceCover, FaceCover[FMath::Min<int32>(Face, 4)]);
-	SetPart(EPart::Vest, Vest[FMath::Min<int32>(Appearance.Get(ERiptideLook::Vest), 2)]);
-	SetPart(EPart::Pack, (bOverPlate ? PackOverPlate : Pack)[FMath::Min<int32>(Appearance.Get(ERiptideLook::Backpack), 2)]);
+	// Castaways: what they wash up in. The military gear parts are kept for when such things are found as items;
+	// until then nothing of the sort is worn, whatever an old profile says.
+	static const TCHAR* Footwear[] = { nullptr, TEXT("SK_Sandals"), TEXT("SK_Slides"), TEXT("SK_Clogs") };
+	const bool bMilitary = false;
+	SetPart(EPart::Uniform, nullptr);
+	SetPart(EPart::Boots, nullptr);
+	SetPart(EPart::Shirt, Appearance.Get(ERiptideLook::Shirt) == 7 ? nullptr : TEXT("SK_TShirt"));
+	SetPart(EPart::Shorts, TEXT("SK_Shorts"));
+	SetPart(EPart::Footwear, Footwear[FMath::Min<int32>(Appearance.Get(ERiptideLook::Footwear), 3)]);
+	SetPart(EPart::Gloves, bMilitary && Appearance.Get(ERiptideLook::Gloves) == 1 ? TEXT("SK_Gloves") : nullptr);
+	SetPart(EPart::Hair, bBalaclava && bMilitary ? nullptr : (Head != 0 && bMilitary ? HairHat : Hair)[FMath::Min<int32>(HairChoice, 4)]);
+	SetPart(EPart::Beard, Folder == TEXT("Male") && Appearance.Get(ERiptideLook::Beard) == 1 && !(bMilitary && (bBalaclava || bShemagh)) ? TEXT("SK_Beard") : nullptr);
+	SetPart(EPart::Headgear, bMilitary ? Headgear[FMath::Min<int32>(Head, 4)] : nullptr);
+	SetPart(EPart::FaceCover, bMilitary ? FaceCover[FMath::Min<int32>(Face, 4)] : nullptr);
+	SetPart(EPart::Vest, bMilitary ? Vest[FMath::Min<int32>(Appearance.Get(ERiptideLook::Vest), 2)] : nullptr);
+	SetPart(EPart::Pack, bMilitary ? (bOverPlate ? PackOverPlate : Pack)[FMath::Min<int32>(Appearance.Get(ERiptideLook::Backpack), 2)] : nullptr);
 
 	// The eyebrows (a section of the body) would poke through a balaclava.
 	if (USkeletalMesh* BodyMesh = GetSkeletalMeshAsset())
@@ -310,6 +317,11 @@ void URiptideCrewBodyComponent::ColourAll()
 		M->SetVectorParameterValue(TEXT("HairColour"), Hair);
 		M->SetVectorParameterValue(TEXT("GearColour"), Gear);
 		M->SetVectorParameterValue(TEXT("BootColour"), Boots);
+		// The castaway clothes: each in its own chosen colour (the shirt's and the shorts' instances are told apart
+		// by their names).
+		const FString Name = Pair.Key ? Pair.Key->GetName() : FString();
+		const ERiptideLook ClothPart = Name.Contains(TEXT("Shorts")) ? ERiptideLook::Shorts : ERiptideLook::Shirt;
+		M->SetVectorParameterValue(TEXT("ClothColour"), URiptideAppearanceLibrary::GetClothColour(ClothPart, Appearance.Get(ClothPart)));
 		M->SetScalarParameterValue(TEXT("CamoStyle"), Pattern.Style);
 		M->SetScalarParameterValue(TEXT("CamoSize"), Pattern.Size);
 		for (int32 i = 0; i < 4; ++i)
