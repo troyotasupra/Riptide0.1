@@ -10,6 +10,7 @@
 #include "RiptideSkyClock.h"
 #include "RiptideStorageComponent.h"
 #include "RiptideWorldItem.h"
+#include "RiptideRaft.h"
 
 #define LOCTEXT_NAMESPACE "RiptideStructure"
 
@@ -594,8 +595,14 @@ void ARiptideStructure::Dismantle(ARiptideCharacter* Who)
 
 void ARiptideStructure::Launch(ARiptideCharacter* Who)
 {
-	// The raft comes with its own milestone; for now the site stays until it does.
+	// The finished raft goes into the water nearest the site; the site is used up.
+	if (!ARiptideRaft::Launch(GetWorld(), GetActorTransform()))
+	{
+		Who->ClientNote(TEXT("Too far from the water to launch: build the raft site at the water's edge."));
+		return;
+	}
 	Who->StartAction(ERiptideCrewAction::Reach);
+	Destroy();
 }
 
 #undef LOCTEXT_NAMESPACE

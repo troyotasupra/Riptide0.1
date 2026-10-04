@@ -7,6 +7,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "RiptideAngler.h"
 #include "RiptideBoat.h"
+#include "RiptideRaft.h"
 #include "RiptideCharacter.h"
 #include "RiptideCrewBody.h"
 #include "TwoBoneIK.h"
@@ -182,13 +183,22 @@ void URiptideCrewAnimInstance::GatherCharacter(ARiptideCharacter* Crew, float De
 	N.Speed = FVector2D(Local.X, Local.Y).Size();
 	N.Direction = N.Speed > 5.f ? FMath::RadiansToDegrees(FMath::Atan2(Local.Y, Local.X)) : 0.f;
 	N.VerticalSpeed = Velocity.Z;
-	N.bCrouched = Crew->bIsCrouched;
+	N.bCrouched = Crew->bIsCrouched || Crew->GetRowingRaft() != nullptr;    // kneeling at the oars
 	N.bSprinting = Crew->IsSprinting();
 	N.Action = uint8(Crew->GetAction());
 	N.ActionTime = Crew->GetActionTime();
 	N.AimPitch = FRotator::NormalizeAxis(Crew->GetBaseAimRotation().Pitch);
 	N.bHoldingRod = Crew->GetHeldItem() == TEXT("fishing_rod") && Crew->CanUseHands();
 	N.RodSwing = Crew->GetAngler() ? Crew->GetAngler()->GetRodSwing() : 0.f;
+	if (const ARiptideRaft* Raft = Crew->GetRowingRaft())
+	{
+		FVector Left, Right;
+		Raft->GetOarHandles(Left, Right);
+		const FTransform Component = GetSkelMeshComponent()->GetComponentTransform();
+		N.bRowing = true;
+		N.OarHandleL = Component.InverseTransformPosition(Left);
+		N.OarHandleR = Component.InverseTransformPosition(Right);
+	}
 
 	const bool bFalling = Move && Move->IsFalling() && !Crew->IsInSea() && !Crew->IsClimbing();
 	N.FallTime = bFalling ? Inputs.FallTime + DeltaSeconds : 0.f;
@@ -673,6 +683,32 @@ void FRiptideCrewAnimProxy::HoldRod(FCSPose<FCompactPose>& CS, float Weight) con
 	ApplyGrip(CS, LeftHand, BoneOf);
 }
 
+void FRiptideCrewAnimProxy::HoldOars(FCSPose<FCompactPose>& CS) const
+{
+	// An overhand grip on each oar's handle: palm down on it, fingers over the front and closed round it, the elbows
+	// down and out to the sides.
+	if (!B(TEXT("upperarm_r")).IsValid() || !B(TEXT("middle_01_l")).IsValid())
+	{
+		return;
+	}
+	auto BoneOf = [this](const FString& Name) { return B(*Name); };
+	for (const bool bLeftHand : { false, true })
+	{
+		const FVector Handle = bLeftHand ? In.OarHandleL : In.OarHandleR;
+		FGrip G;
+		G.bLeft = bLeftHand;
+		G.Palm = FVector(0.f, 0.f, -1.f);
+		G.Fingers = BodyForward;
+		G.Knuckles = Handle + FVector(0.f, 0.f, 2.f + PalmThickness) + BodyForward * 2.f;
+		G.Pole = CS.GetComponentSpaceTransform(B(bLeftHand ? TEXT("upperarm_l") : TEXT("upperarm_r"))).GetLocation()
+			+ BodyLeft * (bLeftHand ? 30.f : -30.f) - FVector(0.f, 0.f, 40.f);
+		SetCurl(G.Curl, 80.f, 90.f, 55.f);
+		SetCurl(G.IndexCurl, 75.f, 85.f, 50.f);
+		SetCurl(G.ThumbCurl, 30.f, 30.f, 25.f);
+		ApplyGrip(CS, G, BoneOf);
+	}
+}
+
 void FRiptideCrewAnimProxy::MenuRifle(FPoseContext& Out) const
 {
 	// Shouldered: the stance and breathing from the pistol aim, then the head tipped down onto the stock, the rifle
@@ -928,6 +964,10 @@ bool FRiptideCrewAnimProxy::Evaluate(FPoseContext& Output)
 	if (In.bHoldingRod)
 	{
 		HoldRod(CS, Upright);
+	}
+	if (In.bRowing)
+	{
+		HoldOars(CS);
 	}
 	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CS), Output.Pose);
 

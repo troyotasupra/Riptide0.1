@@ -60,7 +60,7 @@ void ARiptideGameMode::StartSaving()
 	{
 		return;
 	}
-	if (bWantContinue && Save->Structures.Num() + Save->WorldItems.Num() + Save->Harvested.Num() + Save->Players.Num() > 0)
+	if (bWantContinue && Save->Structures.Num() + Save->WorldItems.Num() + Save->Harvested.Num() + Save->Rafts.Num() + Save->Players.Num() > 0)
 	{
 		Save->RestoreWorld(GetWorld());
 		bContinued = true;
@@ -71,6 +71,9 @@ void ARiptideGameMode::StartSaving()
 		if (Record)
 		{
 			URiptideWorldSave::RestorePlayer(Waiting.Get(), *Record);
+			// Put back where they stood again, now the world is: on a raft's deck rather than in the sea where it
+			// wasn't yet.
+			Waiting->SetActorLocation(Record->Location + FVector(0.f, 0.f, 10.f), false, nullptr, ETeleportType::TeleportPhysics);
 		}
 	}
 	WaitingForSave.Reset();

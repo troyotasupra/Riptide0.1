@@ -11,6 +11,7 @@
 #include "Misc/Parse.h"
 #include "RiptideCharacter.h"
 #include "RiptideCraftingComponent.h"
+#include "RiptideRaft.h"
 #include "RiptideSea.h"
 #include "RiptideSkyClock.h"
 #include "RiptideWorldItem.h"
@@ -166,6 +167,17 @@ void URiptideWorldSave::Capture(UWorld* World)
 		}
 	}
 
+	Rafts.Reset();
+	for (TActorIterator<ARiptideRaft> It(World); It; ++It)
+	{
+		if (IsValid(*It))
+		{
+			FRiptideSavedRaft& Out = Rafts.AddDefaulted_GetRef();
+			Out.Transform = It->GetActorTransform();
+			Out.bOars = It->HasOars();
+		}
+	}
+
 	Harvested.Reset();
 	for (TActorIterator<ARiptideIslandProps> It(World); It; ++It)
 	{
@@ -298,6 +310,11 @@ void URiptideWorldSave::RestoreWorld(UWorld* World) const
 		Item->Contents->OnChanged.Broadcast();
 	}
 
+	for (const FRiptideSavedRaft& Saved : Rafts)
+	{
+		ARiptideRaft::Restore(World, Saved.Transform, Saved.bOars);
+	}
+
 	for (TActorIterator<ARiptideIslandProps> It(World); It; ++It)
 	{
 		const FString Name = It->GetName();
@@ -317,8 +334,8 @@ void URiptideWorldSave::RestoreWorld(UWorld* World) const
 		}
 		It->OnRep_Depleted();
 	}
-	UE_LOG(LogTemp, Log, TEXT("Riptide: continued the saved world: day %d, %.2f h, %d structures, %d things lying about, %d harvested"),
-		Day, Hours, Structures.Num(), WorldItems.Num(), Harvested.Num());
+	UE_LOG(LogTemp, Log, TEXT("Riptide: continued the saved world: day %d, %.2f h, %d structures, %d things lying about, %d harvested, %d rafts"),
+		Day, Hours, Structures.Num(), WorldItems.Num(), Harvested.Num(), Rafts.Num());
 }
 
 void URiptideWorldSave::RestorePlayer(ARiptideCharacter* Character, const FRiptideSavedPlayer& Saved)

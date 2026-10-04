@@ -17,6 +17,7 @@
 #include "Net/UnrealNetwork.h"
 #include "RiptideAngler.h"
 #include "RiptideBoat.h"
+#include "RiptideRaft.h"
 #include "RiptideCharacterMovement.h"
 #include "RiptideCraftBook.h"
 #include "RiptideCraftingComponent.h"
@@ -119,6 +120,7 @@ void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ARiptideCharacter, ClimbOverStart);
 	DOREPLIFETIME(ARiptideCharacter, LadderLeavePush);
 	DOREPLIFETIME(ARiptideCharacter, HeldItem);
+	DOREPLIFETIME(ARiptideCharacter, RowingRaft);
 }
 
 void ARiptideCharacter::BeginPlay()
@@ -360,8 +362,8 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	if (UEnhancedInputComponent* Input = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		Input->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnMove);
-		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetLadderInput(0.f); });
-		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetLadderInput(0.f); });
+		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetLadderInput(0.f); SetRowInput(0.f, 0.f); });
+		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetLadderInput(0.f); SetRowInput(0.f, 0.f); });
 		Input->BindAction(LookAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnLook);
 		Input->BindAction(JumpAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnJump);
 		Input->BindAction(JumpAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnSwimUp);
@@ -388,6 +390,13 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 
 void ARiptideCharacter::OnMove(const FInputActionValue& Value)
 {
+	if (RowingRaft)
+	{
+		// At the oars: W and S pull ahead and back, A and D turn.
+		const FVector2D Axis = Value.Get<FVector2D>();
+		SetRowInput(Axis.Y, Axis.X);
+		return;
+	}
 	if (bSleeping)
 	{
 		// Moving gets up.
@@ -429,7 +438,11 @@ void ARiptideCharacter::OnLook(const FInputActionValue& Value)
 
 void ARiptideCharacter::OnJump(const FInputActionValue& Value)
 {
-	if (IsOnLadder())
+	if (RowingRaft)
+	{
+		StopRowing();
+	}
+	else if (IsOnLadder())
 	{
 		LetGoOfLadder();
 	}
@@ -854,6 +867,17 @@ void ARiptideCharacter::OnInteract(const FInputActionValue& Value)
 	if (bSleeping)
 	{
 		ServerWake();
+		return;
+	}
+	if (RowingRaft)
+	{
+		StopRowing();
+		return;
+	}
+	// Swimming beside a raft, E climbs aboard it.
+	if (IsInSea() && Interaction && Interaction->HasFocus() && Cast<ARiptideRaft>(Interaction->GetFocus().Actor.Get()))
+	{
+		Interaction->BeginUse();
 		return;
 	}
 	// Whatever is under the crosshair comes first: a thing on the ground, a plant, a fire. A hand goes out to it.
@@ -1369,7 +1393,128 @@ bool ARiptideCharacter::IsHoldable(FName Id)
 
 bool ARiptideCharacter::CanUseHands() const
 {
-	return !bManningHelm && !IsClimbing() && !IsInSea() && !IsKnockedDown() && !bSleeping;
+	return !bManningHelm && !IsClimbing() && !IsInSea() && !IsKnockedDown() && !bSleeping && !RowingRaft;
+}
+
+// --- At a raft's oars ---
+
+void ARiptideCharacter::SetRowInput(float Forward, float Turn)
+{
+	const int8 F = int8(FMath::RoundToInt(FMath::Clamp(Forward, -1.f, 1.f) * 127.f));
+	const int8 T = int8(FMath::RoundToInt(FMath::Clamp(Turn, -1.f, 1.f) * 127.f));
+	if (!RowingRaft || (F == SentRowForward && T == SentRowTurn))
+	{
+		return;
+	}
+	SentRowForward = F;
+	SentRowTurn = T;
+	if (HasAuthority())
+	{
+		RowingRaft->SetRowInput(F / 127.f, T / 127.f);
+	}
+	else
+	{
+		ServerRow(F, T);
+	}
+}
+
+void ARiptideCharacter::ServerRow_Implementation(int8 Forward, int8 Turn)
+{
+	if (RowingRaft && RowingRaft->GetRower() == this)
+	{
+		RowingRaft->SetRowInput(Forward / 127.f, Turn / 127.f);
+	}
+}
+
+void ARiptideCharacter::StopRowing()
+{
+	if (HasAuthority())
+	{
+		if (RowingRaft)
+		{
+			RowingRaft->SetRower(nullptr);
+		}
+	}
+	else
+	{
+		ServerStopRowing();
+	}
+}
+
+void ARiptideCharacter::ServerStopRowing_Implementation()
+{
+	StopRowing();
+}
+
+void ARiptideCharacter::SetRowing(ARiptideRaft* Raft)
+{
+	if (!HasAuthority() || RowingRaft == Raft)
+	{
+		return;
+	}
+	ARiptideRaft* Was = RowingRaft;
+	RowingRaft = Raft;
+	SentRowForward = SentRowTurn = 0;
+	if (Raft)
+	{
+		// Kneeling amidships at the oars, riding with the raft.
+		HoldItem(NAME_None);
+		const FTransform Seat = Raft->GetSeatTransform();
+		ApplyRowing();
+		// Looking the way it kneels, toward the bow (the body stays that way while the head looks round).
+		if (APlayerController* PC = Cast<APlayerController>(GetController()))
+		{
+			PC->ClientSetRotation(FRotator(0.f, Seat.Rotator().Yaw, 0.f));
+		}
+		SetActorLocationAndRotation(Seat.GetLocation() + Seat.GetUnitAxis(EAxis::Z) * GetCapsuleComponent()->GetScaledCapsuleHalfHeight(),
+			FRotator(0.f, Seat.Rotator().Yaw, 0.f), false, nullptr, ETeleportType::TeleportPhysics);
+		AttachToComponent(Raft->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
+	}
+	else
+	{
+		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		ApplyRowing();
+		if (IsValid(Was))
+		{
+			// Up off the oars onto the deck, where the seat was.
+			const FTransform Seat = Was->GetSeatTransform();
+			SetActorLocation(Seat.GetLocation() + Seat.GetUnitAxis(EAxis::Z) * (GetCapsuleComponent()->GetScaledCapsuleHalfHeight() + 6.f), false, nullptr,
+				ETeleportType::TeleportPhysics);
+			GetCharacterMovement()->Velocity = Was->GetVelocity();
+		}
+	}
+	ForceNetUpdate();
+}
+
+void ARiptideCharacter::ClientNote_Implementation(const FString& Text)
+{
+	RiptideHud::Note(Cast<APlayerController>(GetController()), Text, 4.f, FLinearColor(0.9f, 0.9f, 0.9f), 0x2071);
+}
+
+void ARiptideCharacter::OnRep_Rowing()
+{
+	ApplyRowing();
+}
+
+void ARiptideCharacter::ApplyRowing()
+{
+	// The body stops being solid while it rides at the oars (attached to the raft, it would otherwise shove the raft
+	// it kneels on); the animation kneels it and puts its hands on the oars.
+	SetActorEnableCollision(!RowingRaft);
+	// Kneeling at the oars the body faces the bow whichever way its player looks; on its feet it turns with the look.
+	bUseControllerRotationYaw = !RowingRaft;
+	UCharacterMovementComponent* Move = GetCharacterMovement();
+	if (RowingRaft)
+	{
+		Move->DisableMovement();
+	}
+	else
+	{
+		if (Move->MovementMode == MOVE_None)
+		{
+			Move->SetMovementMode(MOVE_Falling);
+		}
+	}
 }
 
 void ARiptideCharacter::OnHoldKey(const FInputActionValue& Value)
@@ -1815,7 +1960,12 @@ void ARiptideCharacter::DrawHud() const
 		RiptideHud::Prompt(this, RiptideHud::ESlot::Focus, Use.bEnabled ? FString::Printf(TEXT("E  %s"), *Use.Prompt.ToString()) : Use.WhyNot.ToString(),
 			Use.bEnabled ? FLinearColor::White : FLinearColor(0.7f, 0.7f, 0.7f), Use.HoldSeconds > 0.f && Use.bEnabled ? Interaction->GetHoldFraction() : -1.f);
 	}
-	if (IsOnLadder() && IsValid(HomeBoat))
+	if (RowingRaft)
+	{
+		Say(FColor::White, RowingRaft->IsAfloat() ? TEXT("At the oars:  W  Row ahead    S  Back    A D  Turn    E  Let go")
+			: TEXT("Aground: the oars find no water.  Push off from the sand, or E  Let go"));
+	}
+	else if (IsOnLadder() && IsValid(HomeBoat))
 	{
 		const float Top = HomeBoat->GetActorTransform().InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation()).Z + LadderHighestFeet;
 		Say(FColor::White, LadderFeetZ >= Top - 1.f

@@ -105,6 +105,8 @@ Each sound is levelled on import to a target loudness, with peaks held below -8 
 | Fishing: change the bait (grub, berries, cut bait, lure, jig, or a bare hook) | Right mouse button | Left trigger |
 | Fishing: cut the line (a shark on your fish) | F | Y |
 
+A raft: make a raft kit, place it at the water's edge, add 6 logs and 3 rope (E), then E launches it onto the water. Swimming beside it, E climbs aboard. With two oars carried, E at an oarlock fits them; E on the deck takes them up (W/S row ahead and back, A/D turn, E or Space lets go); holding E at an oarlock takes them out again, so nobody rows it away. On the sand, E pushes it.
+
 A landed fish flops at your feet: E kills it, then E takes it. What bites depends on the bait, how deep the water is and the time of day. Food goes off over time (its tooltip says when); dried food keeps.
 
 ## Helm controls

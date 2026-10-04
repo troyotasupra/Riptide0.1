@@ -5,6 +5,7 @@
 #include "RiptideCharacter.generated.h"
 
 class ARiptideBoat;
+class ARiptideRaft;
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
@@ -226,6 +227,10 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientOpenContainer(URiptideStorageComponent* Container, int32 Index);
 
+	/** Shows a note on this crew member's player's screen (from the server: why something can't be done). */
+	UFUNCTION(Client, Reliable)
+	void ClientNote(const FString& Text);
+
 	/** Looks at and uses things in the world (IRiptideInteractable). */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	class URiptideInteractionComponent* GetInteraction() const { return Interaction; }
@@ -275,6 +280,21 @@ public:
 	/** Whether the hands are free to use what's held: on your feet, not swimming, climbing, at the helm or down. */
 	bool CanUseHands() const;
 
+	/** The raft this crew member is rowing (kneeling amidships, hands on the oars), or null. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	ARiptideRaft* GetRowingRaft() const { return RowingRaft; }
+
+	/** Kneels at a raft's oars, or (null) gets up off them onto its deck. Server (ARiptideRaft::SetRower). */
+	void SetRowing(ARiptideRaft* Raft);
+
+	/** Rows as if W/S (Forward) and A/D (Turn) were held, each -1..1. For tests and AI. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetRowInput(float Forward, float Turn);
+
+	/** Lets go of the oars (E or Space while rowing). */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void StopRowing();
+
 	/** Asleep in a shelter: the night passes when everyone is (ARiptideSkyClock). Moving or E gets up. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsSleeping() const { return bSleeping; }
@@ -322,6 +342,23 @@ protected:
 
 	UPROPERTY(Replicated)
 	FName HeldItem;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Rowing)
+	TObjectPtr<ARiptideRaft> RowingRaft;
+
+	UFUNCTION()
+	void OnRep_Rowing();
+	void ApplyRowing();
+
+	UFUNCTION(Server, Unreliable)
+	void ServerRow(int8 Forward, int8 Turn);
+
+	UFUNCTION(Server, Reliable)
+	void ServerStopRowing();
+
+	/** The strokes last sent to the server. */
+	int8 SentRowForward = 0;
+	int8 SentRowTurn = 0;
 
 	UFUNCTION(Server, Reliable)
 	void ServerHoldItem(FName Id);

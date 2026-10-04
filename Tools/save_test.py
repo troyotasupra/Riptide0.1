@@ -1,7 +1,8 @@
 """Checks saving and continuing: on the cay a castaway builds a lean-to, drops a stone, picks one up off the beach
 and carries a coconut; the world is saved, then hosted again with ?Continue. Everything has to come back: the day and
-hour, the lean-to, the stone on the ground, the gap where the stone was taken, and the castaway where they stood,
-in the same condition, carrying the same things (the coconut no nearer going off than when it was saved).
+hour, the lean-to, a raft afloat with its oars, the stone on the ground, the gap where the stone was taken, and the
+castaway where they stood, in the same condition, carrying the same things (the coconut no nearer going off than when
+it was saved).
 
     UnrealEditor Riptide.uproject -nullrhi -unattended -nosplash -nosound -ExecCmds="py <project>/Tools/save_test.py"
 
@@ -93,6 +94,11 @@ def tick(dt):
             walker.give_item("coconut", 2)
             walker.give_item("fiber", 4)
             walker.use_item(0, unreal.RiptideDataLibrary.first_carried_uid(walker, "lean_to_kit"))
+            # And a raft with its oars in, afloat off the beach.
+            out = unreal.Vector(island.beach_out[1] * 100.0, island.beach_out[0] * 100.0, 0.0)
+            out.z = unreal.RiptideSeaSubsystem.sea_surface_at(world, out) + 25.0
+            state["raft_at"] = out
+            unreal.RiptideRaft.spawn_raft(world, unreal.Transform(location=out), True)
             enter("placed", t)
         elif phase == "placed" and since > 1.5:
             # One stone dropped on the sand; then off to pick another off the beach.
@@ -127,6 +133,7 @@ def tick(dt):
                 "carried": counts(walker), "spoils": unreal.RiptideDataLibrary.carried_spoils_in(walker, "coconut"),
                 "structures": [(str(s.get_type()), s.get_stage(), s.is_finished()) for s in leantos],
                 "items": sorted(str(i.get_item_id()) for i in items), "depleted": props.get_depleted_count(),
+                "rafts": [(r.get_actor_location(), r.has_oars()) for r in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideRaft)],
             }
             state["saved"] = saved
             log("saving: %r" % saved)
@@ -149,6 +156,10 @@ def tick(dt):
             check("the lean-to is standing where it was built", built == saved["structures"], "%r, saved %r" % (built, saved["structures"]))
             items = sorted(str(i.get_item_id()) for i in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideWorldItem))
             check("the dropped stone is still lying there", items == saved["items"], "%r, saved %r" % (items, saved["items"]))
+            rafts = [(r.get_actor_location(), r.has_oars()) for r in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideRaft)]
+            check("the raft is afloat where it was, oars and all", len(rafts) == 1 and len(saved["rafts"]) == 1 and rafts[0][1]
+                  and math.hypot(rafts[0][0].x - saved["rafts"][0][0].x, rafts[0][0].y - saved["rafts"][0][0].y) < 150.0,
+                  "%r, saved %r" % (rafts, saved["rafts"]))
             check("what was harvested is still gone", props.get_depleted_count() == saved["depleted"], "%d, saved %d" % (props.get_depleted_count(), saved["depleted"]))
             where = walker.get_actor_location()
             moved = math.hypot(where.x - saved["where"].x, where.y - saved["where"].y)

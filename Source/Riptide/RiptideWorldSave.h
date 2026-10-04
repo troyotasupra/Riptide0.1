@@ -91,6 +91,19 @@ struct FRiptideSavedWorldItem
 	FRiptideStorage Contents;
 };
 
+/** A raft afloat (or beached), and whether its oars are in it. */
+USTRUCT()
+struct FRiptideSavedRaft
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FTransform Transform;
+
+	UPROPERTY()
+	bool bOars = false;
+};
+
 /** One harvested thing on an island, growing back. */
 USTRUCT()
 struct FRiptideSavedProp
@@ -115,7 +128,8 @@ struct FRiptideSavedProp
 };
 
 /**
- * A hosted world, saved on the host's machine: the day and hour, what's been built and dropped and harvested, and
+ * A hosted world, saved on the host's machine: the day and hour, what's been built and dropped and harvested, the
+ * rafts, and
  * every crew member who has played in it. Continue (the host screen) loads it; a new game replaces it at its first
  * save. The game saves itself every minute, when the night is slept through, when a crew member leaves and when the
  * host leaves or quits.
@@ -160,6 +174,9 @@ public:
 
 	UPROPERTY()
 	TArray<FRiptideSavedProp> Harvested;
+
+	UPROPERTY()
+	TArray<FRiptideSavedRaft> Rafts;
 
 	/** The save slot: separate when playing in the editor (or named with -RiptideSaveSlot=), so tests never touch the
 	 * game's own save. */
