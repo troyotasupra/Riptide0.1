@@ -25,6 +25,7 @@
 #include "RiptidePlayerState.h"
 #include "RiptideInventoryWidget.h"
 #include "RiptideWorldItem.h"
+#include "RiptideGameMode.h"
 #include "RiptideSettings.h"
 #include "RiptideSea.h"
 #include "RiptideStorageComponent.h"
@@ -286,7 +287,22 @@ void ARiptideCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		HomeBoat->SetLadderUser(nullptr);
 	}
+	NoteLeavingForSave();       // the game ending with them in it
 	Super::EndPlay(EndPlayReason);
+}
+
+void ARiptideCharacter::Destroyed()
+{
+	NoteLeavingForSave();       // their player leaving: noted while the body is still theirs (the pawn lets go of its
+	Super::Destroyed();         // controller before EndPlay)
+}
+
+void ARiptideCharacter::NoteLeavingForSave()
+{
+	if (ARiptideGameMode* Mode = HasAuthority() && GetWorld() ? GetWorld()->GetAuthGameMode<ARiptideGameMode>() : nullptr)
+	{
+		Mode->NotePlayerLeaving(this);
+	}
 }
 
 void ARiptideCharacter::NotifyControllerChanged()

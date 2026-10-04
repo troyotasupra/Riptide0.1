@@ -165,6 +165,8 @@ public:
 	virtual void Interact(ARiptideCharacter* Who, const FHitResult& Hit, uint8 Verb) override;
 
 private:
+	friend class URiptideWorldSave;     // saves and restores what's been harvested
+
 	UPROPERTY(VisibleAnywhere, Category = "Riptide")
 	TObjectPtr<USceneComponent> Root;
 

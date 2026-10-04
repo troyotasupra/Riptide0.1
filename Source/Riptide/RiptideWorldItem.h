@@ -67,6 +67,8 @@ protected:
 	float SettleSeconds = 3.f;
 
 private:
+	friend class URiptideWorldSave;     // saves and restores what's lying about
+
 	float Settling = 0.f;
 	bool bFloating = false;
 	void Refresh();

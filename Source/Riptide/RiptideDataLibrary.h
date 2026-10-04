@@ -38,6 +38,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Riptide|Data")
 	static int32 FirstCarriedUid(const class ARiptideCharacter* Crew, FName Id);
 
+	/** Seconds until the first carried stack of food Id goes off, or -1 if none is carried or it never will. For tests. */
+	UFUNCTION(BlueprintPure, Category = "Riptide|Data")
+	static float CarriedSpoilsIn(const class ARiptideCharacter* Crew, FName Id);
+
 	/** Writes one item's inventory picture to a PNG at Path (a full file path). For looking at them. */
 	UFUNCTION(BlueprintCallable, Category = "Riptide|Data", meta = (WorldContext = "WorldContextObject"))
 	static bool SaveIcon(const UObject* WorldContextObject, FName Id, const FString& Path);

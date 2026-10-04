@@ -209,7 +209,8 @@ int32 SRiptideHudOverlay::OnPaint(const FPaintArgs& Args, const FGeometry& G, co
 	if (const ARiptideSkyClock* Clock = ARiptideSkyClock::Get(H))
 	{
 		const float Hours = Clock->GetHours();
-		const FString Time = FString::Printf(TEXT("%s  %02d:%02d"), Clock->IsNight() ? TEXT("NIGHT") : TEXT("DAY"), int32(Hours), int32(FMath::Frac(Hours) * 60.f));
+		const FString Time = FString::Printf(TEXT("DAY %d  %s  %02d:%02d"), Clock->GetDay(), Clock->IsNight() ? TEXT("NIGHT") : TEXT(""), int32(Hours),
+			int32(FMath::Frac(Hours) * 60.f)).Replace(TEXT("    "), TEXT("  "));
 		const FSlateFontInfo ClockFont = Font(EFont::Bold, FMath::RoundToInt(16 * Scale));
 		DrawString(Out, LayerId + 1, G, Time, ClockFont, FVector2f(Size.X - 30.f * Scale, 26.f * Scale), Srgb(1.f, 1.f, 1.f, 0.8f), 1.f);
 	}

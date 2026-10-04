@@ -10,6 +10,7 @@
 #include "RiptideGameInstance.h"
 #include "RiptideMenuGameMode.h"
 #include "RiptideMenuWidgets.h"
+#include "RiptideWorldSave.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -252,8 +253,14 @@ TSharedRef<SWidget> SRiptideMainMenu::MakeHome()
 		return SNew(SRiptideButton).Text(Name).Detail(Detail).Width(HomeWidth).Height(70.f).FontSize(24)
 			.OnClicked_Lambda([Action]() { Action(); });
 	};
-	TSharedRef<SRiptideButton> Host = Item(LOCTEXT("Host", "Host game"), LOCTEXT("HostDetail", "Take the boat out. Your crew joins you."),
-		[this]() { ShowScreen(ERiptideMenuScreen::Host); });
+	TSharedRef<SRiptideButton> Host = SNew(SRiptideButton).Text(LOCTEXT("Host", "Host game")).Width(HomeWidth).Height(70.f).FontSize(24)
+		.Detail_Lambda([this]()
+		{
+			return bHaveSave ? LOCTEXT("HostDetailSaved", "Carry on where you left off, or start again. Your crew joins you.")
+				: LOCTEXT("HostDetail", "Wash up on the island. Your crew joins you.");
+		})
+		.OnClicked_Lambda([this]() { ShowScreen(ERiptideMenuScreen::Host); });
+	RefreshSave();
 	FirstControl.Add(ERiptideMenuScreen::Home, Host);
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)[ Host ]
@@ -275,9 +282,36 @@ TSharedRef<SWidget> SRiptideMainMenu::MakeHome()
 		];
 }
 
+void SRiptideMainMenu::RefreshSave()
+{
+	const URiptideWorldSave* Save = Game.IsValid() ? URiptideWorldSave::Load(Game.Get()) : nullptr;
+	bHaveSave = Save != nullptr;
+	bContinue = bHaveSave;
+	if (Save)
+	{
+		const int32 Minutes = FMath::FloorToInt(FMath::Frac(Save->Hours / 24.f) * 24.f * 60.f);
+		SaveSummary = FText::Format(LOCTEXT("SaveSummary", "Day {0}, {1}:{2}. {3} {3}|plural(one=castaway,other=castaways). Saved {4}."),
+			Save->Day, FText::AsNumber(Minutes / 60), FText::FromString(FString::Printf(TEXT("%02d"), Minutes % 60)), FMath::Max(Save->Players.Num(), 1),
+			FText::AsDateTime(Save->SavedAt, EDateTimeStyle::Medium, EDateTimeStyle::Short));
+	}
+}
+
 TSharedRef<SWidget> SRiptideMainMenu::MakeHost()
 {
 	auto Steam = [this]() { return Game.IsValid() && Game->IsUsingSteam(); };
+	TSharedRef<SRiptideButton> Carry = SNew(SRiptideButton)
+		.Text(LOCTEXT("Continue", "Continue"))
+		.Detail_Lambda([this]() { return SaveSummary; })
+		.Width(PanelWidth).Height(74.f)
+		.Selected_Lambda([this]() { return bContinue; })
+		.OnClicked_Lambda([this]() { bContinue = true; });
+	TSharedRef<SRiptideButton> Fresh = SNew(SRiptideButton)
+		.Text(LOCTEXT("NewGame", "New game"))
+		.Detail(LOCTEXT("NewGameDetail", "Wash up on the island with nothing. Your saved game is replaced."))
+		.Width(PanelWidth).Height(74.f)
+		.Selected_Lambda([this]() { return !bContinue; })
+		.OnClicked_Lambda([this]() { bContinue = false; });
+	auto IfSaved = [this]() { return bHaveSave ? EVisibility::Visible : EVisibility::Collapsed; };
 	TSharedRef<SRiptideButton> Friends = SNew(SRiptideButton)
 		.Text(LOCTEXT("FriendsOnly", "Friends only"))
 		.Detail(LOCTEXT("FriendsOnlyDetail", "Your Steam friends can join, and anyone you invite."))
@@ -292,11 +326,11 @@ TSharedRef<SWidget> SRiptideMainMenu::MakeHost()
 		.Selected_Lambda([this, Steam]() { return !bFriendsOnly || !Steam(); })
 		.OnClicked_Lambda([this]() { bFriendsOnly = false; });
 	TSharedRef<SRiptideButton> HostButton = SNew(SRiptideButton)
-		.Text(LOCTEXT("HostNow", "Host"))
+		.Text_Lambda([this]() { return bHaveSave && bContinue ? LOCTEXT("HostContinue", "Continue") : LOCTEXT("HostNow", "Host"); })
 		.Width(300.f).Height(58.f).Centred(true).Primary(true)
 		.OnClicked_Lambda([this]()
 		{
-			if (Game.IsValid() && !Game->HostGame(bFriendsOnly))
+			if (Game.IsValid() && !Game->HostGame(bFriendsOnly, bHaveSave && bContinue))
 			{
 				ShowMessage(LOCTEXT("Busy", "Hold on: something else is still under way."));
 			}
@@ -307,7 +341,15 @@ TSharedRef<SWidget> SRiptideMainMenu::MakeHost()
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			ScreenHeader(LOCTEXT("HostTitle", "Host game"), LOCTEXT("HostBlurb", "You start on the patrol boat; up to three more crew can join you."))
+			ScreenHeader(LOCTEXT("HostTitle", "Host game"), LOCTEXT("HostBlurb", "Castaways on an island: up to three more crew can join you."))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox).Visibility_Lambda(IfSaved).Padding(FMargin(0.f, 0.f, 0.f, 10.f))[ Carry ]
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox).Visibility_Lambda(IfSaved).Padding(FMargin(0.f, 0.f, 0.f, 24.f))[ Fresh ]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)[ Friends ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)[ Public ]
@@ -702,6 +744,10 @@ void SRiptideMainMenu::ShowScreen(ERiptideMenuScreen Screen)
 		{
 			Preview->SetLook(EditingLook);
 		}
+	}
+	if (Screen == ERiptideMenuScreen::Host && Previous != ERiptideMenuScreen::Host)
+	{
+		RefreshSave();
 	}
 	Current = Screen;
 	if (Switcher.IsValid())

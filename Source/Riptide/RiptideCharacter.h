@@ -49,6 +49,7 @@ public:
 	virtual void NotifyControllerChanged() override;
 
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void Destroyed() override;
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void OnRep_PlayerState() override;
 
@@ -416,6 +417,9 @@ private:
 	/** The home boat was destroyed: back on our own feet (and our player back in this body) if we were driving it. */
 	UFUNCTION()
 	void OnHomeBoatDestroyed(AActor* Boat);
+
+	/** Tells the game's save what this crew member has on them, as they leave. */
+	void NoteLeavingForSave();
 
 	/** Closes the inventory if what it was opened for is out of reach now. */
 	void CloseInventoryIfOutOfReach();

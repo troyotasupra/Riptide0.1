@@ -4,6 +4,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "GameFramework/GameStateBase.h"
 #include "Rendering/DrawElements.h"
 #include "RiptideItemIcons.h"
 #include "RiptideItems.h"
@@ -370,8 +371,17 @@ int32 SRiptideInventory::OnPaint(const FPaintArgs& Args, const FGeometry& Allott
 			const FString Info = FString::Printf(TEXT("%s · %s · %d×%d · %.2f kg"), *RiptideItems::RarityName(Def->Rarity).ToString(),
 				*Def->Category.ToString(), Size.X, Size.Y, Def->WeightKg * Hovered->Count);
 			const TArray<FString> HintLines = Wrap(Def->Hint.ToString(), Body, 260.f);
+			// Food: how long it keeps.
+			FString Keeps;
+			const UWorld* World = Carrying.IsValid() ? Carrying->GetWorld() : nullptr;
+			const AGameStateBase* State = World ? World->GetGameState() : nullptr;
+			if (Hovered->SpoilAt > 0.f && State)
+			{
+				const int32 Minutes = FMath::CeilToInt((Hovered->SpoilAt - State->GetServerWorldTimeSeconds()) / 60.0);
+				Keeps = Minutes <= 1 ? FString(TEXT("Going off")) : FString::Printf(TEXT("Goes off in %d min"), Minutes);
+			}
 			const float Width = FMath::Max(280.f, Measure(Info, Body).X + 20.f);
-			const float Height = 20.f + NameFont.Size * 1.5f + Body.Size * 1.5f * (1 + HintLines.Num()) + 8.f;
+			const float Height = 20.f + NameFont.Size * 1.5f + Body.Size * 1.5f * (1 + HintLines.Num() + (Keeps.IsEmpty() ? 0 : 1)) + 8.f;
 			FVector2f Pos = Mouse + FVector2f(18.f, 18.f);
 			Pos.X = FMath::Min(Pos.X, Screen.X - Width - 8.f);
 			Pos.Y = FMath::Min(Pos.Y, Screen.Y - Height - 8.f);
@@ -384,6 +394,11 @@ int32 SRiptideInventory::OnPaint(const FPaintArgs& Args, const FGeometry& Allott
 			Y += NameFont.Size * 1.5f;
 			Text(Out, L + 21, G, Info, Body, FVector2f(Pos.X + 10.f, Y), Srgb(0.54f, 0.6f, 0.66f));
 			Y += Body.Size * 1.5f + 4.f;
+			if (!Keeps.IsEmpty())
+			{
+				Text(Out, L + 21, G, Keeps, Body, FVector2f(Pos.X + 10.f, Y), Srgb(0.95f, 0.72f, 0.38f));
+				Y += Body.Size * 1.5f;
+			}
 			for (const FString& Line : HintLines)
 			{
 				Text(Out, L + 21, G, Line, Body, FVector2f(Pos.X + 10.f, Y), Srgb(0.72f, 0.77f, 0.81f));

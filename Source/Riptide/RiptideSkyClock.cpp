@@ -9,6 +9,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Net/UnrealNetwork.h"
 #include "RiptideCharacter.h"
+#include "RiptideGameMode.h"
 
 namespace
 {
@@ -33,6 +34,7 @@ void ARiptideSkyClock::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ARiptideSkyClock, Hours);
+	DOREPLIFETIME(ARiptideSkyClock, Day);
 }
 
 ARiptideSkyClock* ARiptideSkyClock::Get(const UObject* WorldContext)
@@ -59,6 +61,15 @@ void ARiptideSkyClock::SetHours(float InHours)
 	}
 }
 
+void ARiptideSkyClock::SetDay(int32 InDay)
+{
+	if (HasAuthority())
+	{
+		Day = FMath::Max(InDay, 1);
+		ForceNetUpdate();
+	}
+}
+
 float ARiptideSkyClock::SkipTo(float Hour)
 {
 	if (!HasAuthority())
@@ -66,6 +77,10 @@ float ARiptideSkyClock::SkipTo(float Hour)
 		return 0.f;
 	}
 	const float Ahead = FMath::Fmod(Hour - Hours + 24.f, 24.f);
+	if (Hours + Ahead >= 24.f)
+	{
+		SetDay(Day + 1);       // through midnight
+	}
 	SetHours(Hour);
 	return Ahead / 24.f * DaySeconds;
 }
@@ -79,7 +94,12 @@ void ARiptideSkyClock::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	// Every machine runs the clock on (a client is corrected each time the server's hour arrives).
+	const float Was = Hours;
 	Hours = FMath::Fmod(Hours + DeltaSeconds * 24.f / FMath::Max(DaySeconds, 1.f), 24.f);
+	if (Hours < Was && HasAuthority())
+	{
+		SetDay(Day + 1);       // midnight
+	}
 	ApplySky();
 	// When everyone's asleep at night, the night passes: morning, everyone up, a night's hunger and thirst later.
 	if (HasAuthority() && IsNight())
@@ -104,6 +124,10 @@ void ARiptideSkyClock::Tick(float DeltaSeconds)
 				Character->WakeAfterNight(Skipped);
 			}
 			UE_LOG(LogTemp, Log, TEXT("Riptide: everyone slept; the night passed (%.0f s)"), Skipped);
+			if (ARiptideGameMode* Mode = GetWorld()->GetAuthGameMode<ARiptideGameMode>())
+			{
+				Mode->SaveWorld();
+			}
 		}
 	}
 }

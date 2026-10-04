@@ -11,7 +11,9 @@ Both copies run with -nosteam, on the Null online subsystem, as playing without 
   game when it shows up (or connects to 127.0.0.1 if the LAN search doesn't find it), and checks it's on the deck in
   its own crew member, with the name and look it sent, as everyone sees them;
 - the host checks the same from its side (a second crew member on the deck, named Bravo-7, in Bravo-7's look);
-- the client leaves to the main menu (it must arrive there with the menu up), and the host sees it go.
+- the client leaves to the main menu (it must arrive there with the menu up), and the host sees it go;
+- the client joins again by IP: it comes back where it left, carrying the flint the host gave it (the world's save
+  keeps every crew member's record), then leaves for good.
 
 Inside the game the same file runs each side (picked by -RiptideTestRole=host or client); its lines in each side's
 log start with "RiptideMPTest".
@@ -27,7 +29,7 @@ ROLE_FLAG = "-RiptideTestRole="
 HOST_NAME, CLIENT_NAME = "Alpha-1", "Bravo-7"
 CLIENT_LOOK = "1.4.3.2.1.2.3.5.2.3.1.0.2.3.1"   # female, brown skin, long dark hair... (gear choices kept but not worn), shirt, shorts, sandals
 GAME_MAP = "Island_Test"     # what hosting loads (URiptideGameInstance::GameMap)
-TIMEOUT_S = 540
+TIMEOUT_S = 720
 
 
 # --- The launcher (plain Python, outside the game) ---
@@ -42,7 +44,8 @@ def _editor_path():
 
 def _launch(role, project, script, log, render):
     args = [_editor_path(), project, "-game", "-RenderOffscreen" if render else "-nullrhi", "-windowed", "-ResX=1280", "-ResY=720",
-            "-unattended", "-nosplash", "-nosound", "-nosteam", f"-abslog={log}", f"{ROLE_FLAG}{role}"]
+            "-unattended", "-nosplash", "-nosound", "-nosteam", f"-abslog={log}", f"{ROLE_FLAG}{role}",
+            "-RiptideSaveSlot=MultiplayerTest"]
     if sys.platform == "win32":
         # Windows hands the game its command line as typed, so the script's switch needs its quotes just so.
         line = subprocess.list2cmdline(args) + f' -ExecCmds="py {script}"'
@@ -175,6 +178,8 @@ def run_in_game(role):
                         check("the client has its own crew member", isinstance(pawn, unreal.RiptideCharacter), str(pawn))
                         if isinstance(pawn, unreal.RiptideCharacter):
                             check("the client's crew member stands on the island", pawn.get_component_by_class(unreal.CharacterMovementComponent).is_moving_on_ground())
+                        if isinstance(pawn, unreal.RiptideCharacter):
+                            pawn.give_item("flint", 2)      # to come back with (see "the client is back")
                     crew = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideCharacter)
                     check("two crew members are aboard", len(crew) == 2, str(len(crew)))
                     hud = unreal.GameplayStatics.get_player_controller(world, 0).get_hud()
@@ -214,11 +219,40 @@ def run_in_game(role):
                             crew.try_toggle_mic()
                             go("waiting for the client to leave")
                 elif step == "waiting for the client to leave":
-                    if len(unreal.GameplayStatics.get_game_state(world).player_array) == 1:
+                    states = list(unreal.GameplayStatics.get_game_state(world).player_array)
+                    if len(states) == 1:
                         check("the host sees the client leave, and its game goes on", map_name == GAME_MAP)
-                        finish()
+                        go("waiting for the client to come back")
                     elif waited() > 180:
                         finish("the client never left")
+                    else:
+                        client = next((s for s in states if s.get_player_name() == CLIENT_NAME), None)
+                        if client and isinstance(client.get_pawn(), unreal.RiptideCharacter):
+                            st["client_at"] = client.get_pawn().get_actor_location()
+                elif step == "waiting for the client to come back":
+                    states = list(unreal.GameplayStatics.get_game_state(world).player_array)
+                    client = next((s for s in states if s.get_player_name() == CLIENT_NAME), None)
+                    if client and isinstance(client.get_pawn(), unreal.RiptideCharacter) and waited() > 0:
+                        go("client is back")
+                    elif waited() > 180:
+                        finish("the client never came back")
+                elif step == "client is back" and waited() > 6:
+                    client = next((s for s in unreal.GameplayStatics.get_game_state(world).player_array if s.get_player_name() == CLIENT_NAME), None)
+                    pawn = client.get_pawn() if client else None
+                    if isinstance(pawn, unreal.RiptideCharacter) and "client_at" in st:
+                        at, was = pawn.get_actor_location(), st["client_at"]
+                        moved = math.hypot(at.x - was.x, at.y - was.y)
+                        check("the client comes back where it left", moved < 60.0, f"{moved:.0f} cm from where it left")
+                        check("with what it carried", unreal.RiptideDataLibrary.count_carried(pawn, "flint") == 2,
+                              str(unreal.RiptideDataLibrary.count_carried(pawn, "flint")))
+                    else:
+                        check("the client comes back in its own crew member", False, str(pawn))
+                    go("waiting for the client to leave again")
+                elif step == "waiting for the client to leave again":
+                    if len(unreal.GameplayStatics.get_game_state(world).player_array) == 1:
+                        finish()
+                    elif waited() > 120:
+                        finish("the client never left the second time")
 
             else:
                 if step == "start" and map_name == "MainMenu" and time.time() - st["t0"] > 4:
@@ -346,9 +380,26 @@ def run_in_game(role):
                         check("leaving returns to the main menu, with the menu up",
                               isinstance(hud, unreal.RiptideMenuHUD) and hud.is_menu_shown(), str(hud))
                         check("no longer connected", not gi.is_hosting() and gi.get_activity() == unreal.RiptideOnlineActivity.NONE)
-                        finish()
+                        check("joining again starts", gi.join_by_address("127.0.0.1"))
+                        go("rejoining")
                     elif waited() > 60:
                         finish("leaving never got back to the main menu")
+                elif step == "rejoining":
+                    if map_name == GAME_MAP and not gi.is_hosting():
+                        go("rejoined")
+                    elif waited() > 90:
+                        finish("the client never got back into the host's game")
+                elif step == "rejoined" and waited() > 8:
+                    pawn = unreal.GameplayStatics.get_player_controller(world, 0).get_controlled_pawn()
+                    check("back in the game, it carries what it had", isinstance(pawn, unreal.RiptideCharacter)
+                          and unreal.RiptideDataLibrary.count_carried(pawn, "flint") == 2, str(pawn))
+                    gi.leave_game()
+                    go("leaving for good")
+                elif step == "leaving for good":
+                    if map_name == "MainMenu" and waited() > 3:
+                        finish()
+                    elif waited() > 60:
+                        finish("leaving the second time never got back to the main menu")
             if time.time() - st["t0"] > TIMEOUT_S - 20:
                 finish(f"ran out of time at step '{st['step']}'")
         except Exception as err:  # noqa: BLE001 - any script error fails the test

@@ -12,8 +12,8 @@ class APostProcessVolume;
  * it. A day lasts DaySeconds of real time; the sun rises at 6 and sets at 18. At night a dim, cold moonlight replaces
  * the sun and the exposure opens up, so it's dark but playable.
  *
- * When every player is asleep in a shelter at night, the night is skipped to morning (ARiptideGameMode asks via
- * SkipTo). The dev mode's time-of-day key sets the clock too.
+ * When every player is asleep in a shelter at night, the night is skipped to morning (and the game saved). The dev
+ * mode's time-of-day key sets the clock too. It counts the days, from the first.
  */
 UCLASS()
 class RIPTIDE_API ARiptideSkyClock : public AActor
@@ -32,6 +32,14 @@ public:
 	/** The hour, 0-24. */
 	UFUNCTION(BlueprintPure, Category = "Time")
 	float GetHours() const { return Hours; }
+
+	/** Which day this is, from 1 (the day the crew washed up). */
+	UFUNCTION(BlueprintPure, Category = "Time")
+	int32 GetDay() const { return Day; }
+
+	/** Sets the day (server; a saved game). */
+	UFUNCTION(BlueprintCallable, Category = "Time")
+	void SetDay(int32 InDay);
 
 	/** Night: between dusk and dawn (the sun below the horizon). */
 	UFUNCTION(BlueprintPure, Category = "Time")
@@ -65,6 +73,9 @@ private:
 	/** The hour, replicated every few seconds; each machine runs it on in between. */
 	UPROPERTY(ReplicatedUsing = OnRep_Hours)
 	float Hours = 8.f;
+
+	UPROPERTY(Replicated)
+	int32 Day = 1;
 
 	TWeakObjectPtr<ADirectionalLight> Sun;
 	bool bHaveSunDefaults = false;

@@ -103,6 +103,8 @@ public:
 	enum EVerb : uint8 { VerbBuild, VerbLight, VerbFuel, VerbPut, VerbTake, VerbOpen, VerbDismantle, VerbLaunch, VerbSleep };
 
 protected:
+	friend class URiptideWorldSave;     // saves and rebuilds what the crew built
+
 	UPROPERTY(VisibleAnywhere, Category = "Structure")
 	TObjectPtr<UStaticMeshComponent> Mesh;
 

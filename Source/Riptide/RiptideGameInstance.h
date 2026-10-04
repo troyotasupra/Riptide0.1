@@ -79,10 +79,10 @@ public:
 
 	// --- Hosting and joining ---
 
-	/** Creates a session (listed publicly, or for Steam friends only) and loads the game as its host. False if
-	 * something else is already under way. */
+	/** Creates a session (listed publicly, or for Steam friends only) and loads the game as its host: the saved world
+	 * if bContinue (URiptideWorldSave), otherwise a fresh one. False if something else is already under way. */
 	UFUNCTION(BlueprintCallable, Category = "Online")
-	bool HostGame(bool bFriendsOnly);
+	bool HostGame(bool bFriendsOnly, bool bContinue = false);
 
 	/** Looks for games to join: public lobbies and friends' games on Steam, or games on the local network without
 	 * it. The results replace GetFoundGames() when it's done. */
@@ -190,6 +190,9 @@ private:
 
 	void SetActivity(ERiptideOnlineActivity NewActivity, const FText& Status = FText::GetEmpty());
 
+	/** Hosting: saves the world before leaving it. */
+	void SaveHostedWorld();
+
 	// Hosting: create the session, then load the map as a listen server.
 	void CreateSession();
 	void OnCreateSessionComplete(FName SessionName, bool bWasSuccessful);
@@ -233,6 +236,7 @@ private:
 	FText SearchSummary;
 	FText MenuMessage;
 	bool bHostedFriendsOnly = false;
+	bool bHostContinue = false;
 
 	TSharedPtr<FOnlineSessionSearch> Search;
 	TArray<FOnlineSessionSearchResult> Results;

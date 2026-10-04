@@ -99,6 +99,8 @@ public:
 	bool IsNearWarmth() const;
 
 private:
+	friend class URiptideWorldSave;     // puts a saved crew member's condition back
+
 	UPROPERTY(ReplicatedUsing = OnRep_Vitals)
 	FRiptideVitals Vitals;
 

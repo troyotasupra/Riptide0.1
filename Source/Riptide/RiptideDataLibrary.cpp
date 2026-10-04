@@ -2,6 +2,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
+#include "GameFramework/GameStateBase.h"
 #include "Kismet/KismetRenderingLibrary.h"
 #include "RiptideCharacter.h"
 #include "RiptideItemIcons.h"
@@ -167,6 +168,24 @@ int32 URiptideDataLibrary::FirstCarriedUid(const ARiptideCharacter* Crew, FName 
 		}
 	}
 	return 0;
+}
+
+float URiptideDataLibrary::CarriedSpoilsIn(const ARiptideCharacter* Crew, FName Id)
+{
+	const URiptideStorageComponent* Inventory = Crew ? Crew->GetInventory() : nullptr;
+	const AGameStateBase* State = Crew && Crew->GetWorld() ? Crew->GetWorld()->GetGameState() : nullptr;
+	const double Now = State ? State->GetServerWorldTimeSeconds() : 0.0;
+	for (int32 Grid = 0; Inventory && Grid < Inventory->Num(); ++Grid)
+	{
+		for (const FRiptideItem& Item : Inventory->GetStorage(Grid)->Grid.Items)
+		{
+			if (Item.Id == Id)
+			{
+				return Item.SpoilAt > 0.f ? float(Item.SpoilAt - Now) : -1.f;
+			}
+		}
+	}
+	return -1.f;
 }
 
 bool URiptideDataLibrary::SaveIcon(const UObject* WorldContextObject, FName Id, const FString& Path)

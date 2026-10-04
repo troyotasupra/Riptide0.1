@@ -1,11 +1,47 @@
 #include "RiptideStorageComponent.h"
 
+#include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
 
 URiptideStorageComponent::URiptideStorageComponent()
 {
 	SetIsReplicatedByDefault(true);
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.TickInterval = 2.f;      // spoiling is counted in minutes
+}
+
+void URiptideStorageComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !GetWorld())
+	{
+		return;
+	}
+	const AGameStateBase* State = GetWorld()->GetGameState();
+	const float Now = State ? float(State->GetServerWorldTimeSeconds()) : GetWorld()->GetTimeSeconds();
+	bool bChanged = false;
+	for (FRiptideStorage& Storage : Storages)
+	{
+		for (FRiptideItem& Item : Storage.Grid.Items)
+		{
+			if (Item.SpoilAt <= 0.f)
+			{
+				const FRiptideItemDef* Def = RiptideItems::Find(Item.Id);
+				if (Def && Def->Food.IsSet() && Def->Food->SpoilSeconds > 0.f)
+				{
+					Item.SpoilAt = Now + Def->Food->SpoilSeconds;
+					bChanged = true;
+				}
+			}
+		}
+		bChanged |= Storage.Grid.Spoil(Now) > 0;
+	}
+	if (bChanged)
+	{
+		OnChanged.Broadcast();
+	}
 }
 
 void URiptideStorageComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
