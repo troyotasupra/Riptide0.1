@@ -80,6 +80,7 @@ def import_sounds():
 
 
 RADIO_SOUNDS_VERSION = "1"
+FISHING_SOUNDS_VERSION = "1"
 
 
 def _squelch(open_click, seconds, seed):
@@ -105,43 +106,116 @@ def _squelch(open_click, seconds, seed):
     return rate, out
 
 
+def _made_sound(name, version, make, volume=0.5):
+    """Imports a sound made in code (make() returns (rate, samples in -1..1)) as AUDIO_PATH/name, unless the one there
+    is already this version: written out as a 16-bit mono WAV and put in the effects sound class."""
+    import struct
+    import wave
+    path = f"{AUDIO_PATH}/{name}"
+    if unreal.EditorAssetLibrary.does_asset_exist(path) and \
+            unreal.EditorAssetLibrary.get_metadata_tag(unreal.load_asset(path), "RiptideVersion") == version:
+        return
+    out_dir = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()), "Generated", "Audio")
+    os.makedirs(out_dir, exist_ok=True)
+    rate, samples = make()
+    filename = os.path.join(out_dir, f"{name}.wav")
+    with wave.open(filename, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"".join(struct.pack("<h", int(max(-1.0, min(1.0, v)) * 32000)) for v in samples))
+    task = unreal.AssetImportTask()
+    task.filename = filename
+    task.destination_path = AUDIO_PATH
+    task.destination_name = name
+    task.automated = True
+    task.replace_existing = True
+    task.save = False
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    sound = unreal.load_asset(path)
+    if not sound:
+        unreal.log_error(f"Riptide: sound {name} failed to import")
+        return
+    sound.set_editor_property("volume", volume)
+    effects = f"{AUDIO_PATH}/SC_Effects"
+    if unreal.EditorAssetLibrary.does_asset_exist(effects):
+        sound.set_editor_property("sound_class_object", unreal.load_asset(effects))
+    unreal.EditorAssetLibrary.set_metadata_tag(sound, "RiptideVersion", version)
+    unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+    unreal.log(f"Riptide: made the sound {name}")
+
+
 def make_radio_sounds():
     """The radio's squelch opening and closing (S_RadioSquelchOpen and S_RadioSquelchClose): generated, written out as
     WAVs and imported."""
-    import struct
-    import wave
-    out_dir = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()), "Generated", "Audio")
-    os.makedirs(out_dir, exist_ok=True)
     for name, open_click, seconds, seed in (("S_RadioSquelchOpen", True, 0.16, 7), ("S_RadioSquelchClose", False, 0.32, 11)):
-        path = f"{AUDIO_PATH}/{name}"
-        if unreal.EditorAssetLibrary.does_asset_exist(path) and                 unreal.EditorAssetLibrary.get_metadata_tag(unreal.load_asset(path), "RiptideVersion") == RADIO_SOUNDS_VERSION:
-            continue
-        rate, samples = _squelch(open_click, seconds, seed)
-        filename = os.path.join(out_dir, f"{name}.wav")
-        with wave.open(filename, "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(rate)
-            w.writeframes(b"".join(struct.pack("<h", int(v * 32000)) for v in samples))
-        task = unreal.AssetImportTask()
-        task.filename = filename
-        task.destination_path = AUDIO_PATH
-        task.destination_name = name
-        task.automated = True
-        task.replace_existing = True
-        task.save = False
-        unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
-        sound = unreal.load_asset(path)
-        if not sound:
-            unreal.log_error(f"Riptide: radio sound {name} failed to import")
-            continue
-        sound.set_editor_property("volume", 0.5)
-        effects = f"{AUDIO_PATH}/SC_Effects"
-        if unreal.EditorAssetLibrary.does_asset_exist(effects):
-            sound.set_editor_property("sound_class_object", unreal.load_asset(effects))
-        unreal.EditorAssetLibrary.set_metadata_tag(sound, "RiptideVersion", RADIO_SOUNDS_VERSION)
-        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
-        unreal.log(f"Riptide: made the radio sound {name}")
+        _made_sound(name, RADIO_SOUNDS_VERSION, lambda o=open_click, s=seconds, r=seed: _squelch(o, s, r))
+
+
+def _fishing_sound(kind):
+    """Fishing's sounds, made rather than recorded (22.05 kHz mono): the rod swishing through a cast, the bobber's
+    plop, the splash of a bite, one click of the reel's ratchet, and the line snapping."""
+    import math
+    import random
+    rate = 22050
+    rng = random.Random({"cast": 3, "plop": 5, "splash": 9, "reel": 13, "snap": 17}[kind])
+    out = []
+    lp = lp2 = 0.0
+    if kind == "cast":
+        # Air past a thin rod: hiss swept up and down in pitch as the tip whips through.
+        n = int(rate * 0.42)
+        for i in range(n):
+            t = i / n
+            k = 0.05 + 0.5 * math.sin(math.pi * t) ** 2
+            lp += k * (rng.uniform(-1.0, 1.0) - lp)
+            lp2 += 0.5 * k * (lp - lp2)
+            out.append((lp - lp2) * 2.2 * math.sin(math.pi * t) ** 1.5)
+    elif kind == "plop":
+        # A small thing into water: a falling bubble tone and a short wash.
+        n = int(rate * 0.35)
+        phase = 0.0
+        for i in range(n):
+            t = i / rate
+            phase += 2.0 * math.pi * (900.0 * math.exp(-t / 0.03) + 260.0) / rate
+            lp += 0.25 * (rng.uniform(-1.0, 1.0) - lp)
+            out.append(0.55 * math.sin(phase) * math.exp(-t / 0.05) + 0.35 * lp * math.exp(-t / 0.09))
+    elif kind == "splash":
+        # A fish breaking the surface: a broadband burst with a few bubble tones in it.
+        n = int(rate * 0.7)
+        bubbles = [(rng.uniform(0.0, 0.25), rng.uniform(500.0, 1400.0)) for _ in range(6)]
+        for i in range(n):
+            t = i / rate
+            lp += 0.45 * (rng.uniform(-1.0, 1.0) - lp)
+            v = lp * (1.0 - math.exp(-t / 0.004)) * math.exp(-t / 0.16) * 0.9
+            for start, f in bubbles:
+                if t > start:
+                    u = t - start
+                    v += 0.18 * math.sin(2.0 * math.pi * f * (1.0 + 2.0 * u) * u) * math.exp(-u / 0.04)
+            out.append(v)
+    elif kind == "reel":
+        # One tick of the ratchet: a hard click and a short metallic ring.
+        n = int(rate * 0.05)
+        for i in range(n):
+            t = i / rate
+            out.append(0.8 * math.exp(-t / 0.0015) * (1.0 if (i // 3) % 2 else -1.0)
+                       + 0.25 * math.sin(2.0 * math.pi * 3400.0 * t) * math.exp(-t / 0.012))
+    elif kind == "snap":
+        # The line going: a sharp crack and a falling twang.
+        n = int(rate * 0.45)
+        phase = 0.0
+        for i in range(n):
+            t = i / rate
+            phase += 2.0 * math.pi * (1800.0 * math.exp(-t / 0.08) + 180.0) / rate
+            crack = rng.uniform(-1.0, 1.0) * math.exp(-t / 0.006)
+            out.append(0.7 * crack + 0.35 * math.sin(phase) * math.exp(-t / 0.12))
+    return rate, out
+
+
+def make_fishing_sounds():
+    """S_FishCast, S_FishPlop, S_FishSplash, S_FishReel, S_FishSnap (URiptideAnglerComponent plays them where they happen)."""
+    for name, kind, volume in (("S_FishCast", "cast", 0.45), ("S_FishPlop", "plop", 0.6), ("S_FishSplash", "splash", 0.7),
+                               ("S_FishReel", "reel", 0.3), ("S_FishSnap", "snap", 0.6)):
+        _made_sound(name, FISHING_SOUNDS_VERSION, lambda k=kind: _fishing_sound(k), volume=volume)
 
 
 def _spawn(actor_class, location=(0.0, 0.0, 0.0), yaw=0.0, pitch=0.0):
@@ -1610,6 +1684,7 @@ def _set_up_project():
     try:
         import_sounds()
         make_radio_sounds()
+        make_fishing_sounds()
     except Exception as err:  # noqa: BLE001 - never block the editor from opening
         unreal.log_error(f"Riptide: could not import sounds: {err}")
 

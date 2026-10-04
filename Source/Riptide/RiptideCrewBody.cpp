@@ -8,7 +8,9 @@
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "ReferenceSkeleton.h"
 #include "Engine/World.h"
+#include "RiptideAngler.h"
 #include "RiptideBoat.h"
+#include "RiptideItemIcons.h"
 #include "RiptideCharacter.h"
 #include "RiptideCrewMannequin.h"
 
@@ -405,6 +407,7 @@ void URiptideCrewBodyComponent::UpdateRifle()
 void URiptideCrewBodyComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	UpdateHeld();
 	if (Rifle && Rifle->IsVisible())
 	{
 		// Shouldered, from the posed body each frame (it moves with the breathing and sway); the animation puts the
@@ -412,6 +415,77 @@ void URiptideCrewBodyComponent::TickComponent(float DeltaTime, ELevelTick TickTy
 		const FTransform InComponent = RifleInComponent(GetSocketTransform(TEXT("upperarm_r"), RTS_Component).GetLocation(),
 			GetSocketTransform(TEXT("Head"), RTS_Component).GetLocation());
 		Rifle->SetWorldTransform(InComponent * GetComponentTransform());
+	}
+}
+
+FTransform URiptideCrewBodyComponent::RodInComponent(const FVector& UpperArmR, float Pitch, float Swing)
+{
+	// The body faces +Y with its left at +X. Held at the waist in front of the right hip, pointing out a little to the
+	// right and up; it follows the look up and down by half, winds back over the right shoulder for a cast (the hands
+	// coming up beside the head) and flicks out low as the cast goes.
+	const FVector Forward(0.f, 1.f, 0.f), Left(1.f, 0.f, 0.f), Up(0.f, 0.f, 1.f);
+	const float Back = FMath::Max(Swing, 0.f);
+	const FVector Grip = UpperArmR + Forward * (28.f - 16.f * Back) + Left * (4.f - 18.f * Back) + Up * (-24.f + 36.f * Back);
+	const float Tilt = FMath::DegreesToRadians(FMath::Clamp(26.f + FMath::Clamp(Pitch, -60.f, 60.f) * 0.5f + (Swing > 0.f ? Swing * 95.f : Swing * 30.f), -5.f, 125.f));
+	const float Out = FMath::DegreesToRadians(12.f);
+	const FVector Flat = Forward * FMath::Cos(Out) - Left * FMath::Sin(Out);
+	const FVector Along = (Flat * FMath::Cos(Tilt) + Up * FMath::Sin(Tilt)).GetSafeNormal();
+	const FVector Down = (-Up - Along * FVector::DotProduct(-Up, Along)).GetSafeNormal();
+	return FTransform(FRotationMatrix::MakeFromXY(Along, Down).ToQuat(), Grip);
+}
+
+bool URiptideCrewBodyComponent::GetHeldTip(FVector& OutTip) const
+{
+	if (!Held || !Held->IsVisible() || HeldShown.IsNone())
+	{
+		return false;
+	}
+	OutTip = Held->GetComponentTransform().TransformPosition(HeldTip);
+	return true;
+}
+
+void URiptideCrewBodyComponent::UpdateHeld()
+{
+	const ARiptideCharacter* Crew = Pose == ERiptideCrewPose::Gameplay ? Cast<ARiptideCharacter>(GetOwner()) : nullptr;
+	const FName Want = Crew && HasBody() ? Crew->GetHeldItem() : NAME_None;
+	if (Want != HeldShown)
+	{
+		HeldShown = Want;
+		if (!Want.IsNone() && !Held)
+		{
+			Held = NewObject<UStaticMeshComponent>(GetOwner() ? static_cast<UObject*>(GetOwner()) : static_cast<UObject*>(this), NAME_None, RF_Transient);
+			Held->SetupAttachment(this);
+			Held->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			Held->SetUsingAbsoluteLocation(true);
+			Held->SetUsingAbsoluteRotation(true);
+			if (GetWorld())
+			{
+				Held->RegisterComponentWithWorld(GetWorld());
+			}
+		}
+		if (Held && !Want.IsNone())
+		{
+			// The rod's model lies along x, butt to tip; the right hand goes round its reel seat, 21 cm up from the
+			// butt, on the line of its handle (riptide_item_catalog.py's build_fishing_rod).
+			UStaticMesh* Mesh = URiptideItemIconSubsystem::MeshFor(Want);
+			Held->SetStaticMesh(Mesh);
+			const FBox Box = Mesh ? Mesh->GetBoundingBox() : FBox(FVector(-70.f, -2.f, 0.f), FVector(70.f, 2.f, 3.f));
+			HeldGrip = FVector(Box.Min.X + 21.f, Box.Min.Y + 1.2f, Box.Min.Z + 1.4f);
+			HeldTip = FVector(Box.Max.X, HeldGrip.Y, HeldGrip.Z);
+		}
+	}
+	if (!Held)
+	{
+		return;
+	}
+	const bool bShow = !HeldShown.IsNone() && Crew && Crew->CanUseHands() && IsVisible();
+	Held->SetVisibility(bShow);
+	if (bShow)
+	{
+		const URiptideAnglerComponent* Angler = Crew->GetAngler();
+		const FTransform InComponent = RodInComponent(GetSocketTransform(TEXT("upperarm_r"), RTS_Component).GetLocation(),
+			FRotator::NormalizeAxis(Crew->GetBaseAimRotation().Pitch), Angler ? Angler->GetRodSwing() : 0.f);
+		Held->SetWorldTransform(FTransform(-HeldGrip) * InComponent * GetComponentTransform());
 	}
 }
 
@@ -445,6 +519,12 @@ void URiptideCrewBodyComponent::OnUnregister()
 		Rifle->DestroyComponent();
 	}
 	Rifle = nullptr;
+	if (Held && Held->IsRegistered())
+	{
+		Held->DestroyComponent();
+	}
+	Held = nullptr;
+	HeldShown = NAME_None;
 	bBuilt = false;
 	Super::OnUnregister();
 }

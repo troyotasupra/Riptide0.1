@@ -59,7 +59,8 @@ def tick(dt):
         phase = state["phase"]
         if phase == "open":
             known = [str(k) for k in crafting.get_known_recipes()]
-            check("a castaway knows rope, the hatchet, the oar and the raft", set(known) == {"rope", "stone_hatchet", "oar", "raft_kit"}, ", ".join(known))
+            check("a castaway knows rope, the hatchet, the oar, the raft and a fishing rod", set(known) == {"rope", "stone_hatchet", "oar", "raft_kit", "fishing_rod"},
+                  ", ".join(known))
             check("rope can't be made with empty pockets", not crafting.can_make("rope"), "can_make %s" % crafting.can_make("rope"))
             walker.give_item("fiber", 5)
             check("rope can be made with five fiber", crafting.can_make("rope"), "fiber %d" % count(walker, "fiber"))

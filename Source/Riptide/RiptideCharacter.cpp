@@ -15,6 +15,7 @@
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
 #include "Net/UnrealNetwork.h"
+#include "RiptideAngler.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacterMovement.h"
 #include "RiptideCraftBook.h"
@@ -56,6 +57,7 @@ ARiptideCharacter::ARiptideCharacter(const FObjectInitializer& ObjectInitializer
 	Interaction = CreateDefaultSubobject<URiptideInteractionComponent>(TEXT("Interaction"));
 	Crafting = CreateDefaultSubobject<URiptideCraftingComponent>(TEXT("Crafting"));
 	Survival = CreateDefaultSubobject<URiptideSurvivalComponent>(TEXT("Survival"));
+	Angler = CreateDefaultSubobject<URiptideAnglerComponent>(TEXT("Angler"));
 	BaseEyeHeight = 70.f;
 
 	bUseControllerRotationYaw = true;
@@ -116,6 +118,7 @@ void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ARiptideCharacter, LadderFeetZ);
 	DOREPLIFETIME(ARiptideCharacter, ClimbOverStart);
 	DOREPLIFETIME(ARiptideCharacter, LadderLeavePush);
+	DOREPLIFETIME(ARiptideCharacter, HeldItem);
 }
 
 void ARiptideCharacter::BeginPlay()
@@ -199,6 +202,21 @@ void ARiptideCharacter::BuildInput()
 	CraftAction = NewObject<UInputAction>(this, TEXT("IA_Craft"));
 	CraftAction->ValueType = EInputActionValueType::Boolean;
 	WalkMapping->MapKey(CraftAction, EKeys::B);
+
+	// With something in hand: Q takes the rod out or puts it away; the left mouse button (above) casts and reels, the
+	// right picks the bait, F cuts the line.
+	HoldAction = NewObject<UInputAction>(this, TEXT("IA_Hold"));
+	HoldAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(HoldAction, EKeys::Q);
+	WalkMapping->MapKey(HoldAction, EKeys::Gamepad_DPad_Up);
+	SecondaryAction = NewObject<UInputAction>(this, TEXT("IA_Secondary"));
+	SecondaryAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(SecondaryAction, EKeys::RightMouseButton);
+	WalkMapping->MapKey(SecondaryAction, EKeys::Gamepad_LeftTrigger);
+	CutLineAction = NewObject<UInputAction>(this, TEXT("IA_CutLine"));
+	CutLineAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(CutLineAction, EKeys::F);
+	WalkMapping->MapKey(CutLineAction, EKeys::Gamepad_FaceButton_Top);
 
 	InventoryAction = NewObject<UInputAction>(this, TEXT("IA_Inventory"));
 	InventoryAction->ValueType = EInputActionValueType::Boolean;
@@ -354,6 +372,11 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetBracing(false); SetSprinting(false); });
 		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetBracing(false); SetSprinting(false); });
 		Input->BindAction(PunchAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnPunch);
+		Input->BindAction(PunchAction, ETriggerEvent::Completed, this, &ARiptideCharacter::OnPrimaryReleased);
+		Input->BindAction(PunchAction, ETriggerEvent::Canceled, this, &ARiptideCharacter::OnPrimaryReleased);
+		Input->BindAction(HoldAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnHoldKey);
+		Input->BindAction(SecondaryAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnSecondary);
+		Input->BindAction(CutLineAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnCutLine);
 		Input->BindAction(DropAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnDropKey);
 		Input->BindAction(CraftAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnCraftKey);
 		Input->BindAction(InteractAction, ETriggerEvent::Completed, this, &ARiptideCharacter::OnInteractReleased);
@@ -1301,7 +1324,102 @@ void ARiptideCharacter::Punch()
 
 void ARiptideCharacter::OnPunch(const FInputActionValue& Value)
 {
+	// With the rod in hand the left button fishes; empty-handed, it punches.
+	if (HeldItem == TEXT("fishing_rod"))
+	{
+		if (CanUseHands() && !IsInventoryOpen() && !IsCraftBookOpen())
+		{
+			Angler->PrimaryPressed();
+		}
+		return;
+	}
 	Punch();
+}
+
+void ARiptideCharacter::OnPrimaryReleased(const FInputActionValue& Value)
+{
+	if (HeldItem == TEXT("fishing_rod"))
+	{
+		Angler->PrimaryReleased();
+	}
+}
+
+void ARiptideCharacter::OnSecondary(const FInputActionValue& Value)
+{
+	if (HeldItem == TEXT("fishing_rod") && !IsInventoryOpen() && !IsCraftBookOpen())
+	{
+		Angler->CycleBait();
+	}
+}
+
+void ARiptideCharacter::OnCutLine(const FInputActionValue& Value)
+{
+	if (HeldItem == TEXT("fishing_rod"))
+	{
+		Angler->CutLine();
+	}
+}
+
+// --- In hand ---
+
+bool ARiptideCharacter::IsHoldable(FName Id)
+{
+	return Id == TEXT("fishing_rod");
+}
+
+bool ARiptideCharacter::CanUseHands() const
+{
+	return !bManningHelm && !IsClimbing() && !IsInSea() && !IsKnockedDown() && !bSleeping;
+}
+
+void ARiptideCharacter::OnHoldKey(const FInputActionValue& Value)
+{
+	if (IsInventoryOpen() || IsCraftBookOpen())
+	{
+		return;
+	}
+	if (!HeldItem.IsNone())
+	{
+		HoldItem(NAME_None);
+		return;
+	}
+	// Nothing in hand: the first thing carried that's held to use.
+	for (int32 Grid = 0; Grid < Inventory->Num(); ++Grid)
+	{
+		for (const FRiptideItem& Item : Inventory->GetStorage(Grid)->Grid.Items)
+		{
+			if (IsHoldable(Item.Id))
+			{
+				HoldItem(Item.Id);
+				return;
+			}
+		}
+	}
+	RiptideHud::Note(Cast<APlayerController>(GetController()), TEXT("Nothing to hold: Q takes out a fishing rod"), 2.5f, FLinearColor(0.8f, 0.8f, 0.8f), 0x51ED);
+}
+
+void ARiptideCharacter::HoldItem(FName Id)
+{
+	if (!HasAuthority())
+	{
+		ServerHoldItem(Id);
+		return;
+	}
+	if (!Id.IsNone() && (!IsHoldable(Id) || Inventory->CountOf(Id) <= 0))
+	{
+		return;
+	}
+	if (HeldItem != Id)
+	{
+		Angler->Stop();
+		HeldItem = Id;
+		StartAction(ERiptideCrewAction::Reach);
+	}
+}
+
+void ARiptideCharacter::ServerHoldItem_Implementation(FName Id)
+{
+	HoldItem(Id);
 }
 
 void ARiptideCharacter::OnInteractReleased(const FInputActionValue& Value)
@@ -1439,6 +1557,14 @@ void ARiptideCharacter::ServerUseItem_Implementation(int32 StorageIndex, int32 U
 		Storage->Grid.Take(Uid, 1);
 		StartAction(ERiptideCrewAction::Reach);
 		break;
+	case ERiptideItemKind::Tool:
+		// Something held to use (the rod): into the hands, or away again.
+		if (!IsHoldable(Def->Id))
+		{
+			return;
+		}
+		HoldItem(HeldItem == Def->Id ? NAME_None : Def->Id);
+		return;
 	default:
 		return;
 	}
@@ -1628,6 +1754,12 @@ void ARiptideCharacter::Tick(float DeltaSeconds)
 	if (IsHoldingMic() && !bManningHelm)
 	{
 		HomeBoat->UpdateMicCord();
+	}
+	// What's held is let go of if it's no longer carried (dropped, stowed in a crate).
+	if (HasAuthority() && !HeldItem.IsNone() && Inventory->CountOf(HeldItem) <= 0)
+	{
+		Angler->Stop();
+		HeldItem = NAME_None;
 	}
 }
 

@@ -92,6 +92,16 @@ public:
 	/** The rifle model's placement in the body's component space, from the posed right upper arm and head. */
 	static FTransform RifleInComponent(const FVector& UpperArmR, const FVector& Head);
 
+	/** A fishing rod held in both hands, in the body's component space: the origin where the right hand holds it (at
+	 * the reel seat), X along the rod to its tip, Y down toward the reel. Pitch is where the crew member looks (up +,
+	 * degrees); Swing how it's being worked (URiptideAnglerComponent::GetRodSwing: 1 wound back over the shoulder,
+	 * negative flicked out). The reel hangs under the right hand, the left hand on its crank. Shared with the
+	 * animation. */
+	static FTransform RodInComponent(const FVector& UpperArmR, float Pitch, float Swing);
+
+	/** The tip of what's held (the rod's), in the world. False when nothing is held or it isn't shown. */
+	bool GetHeldTip(FVector& OutTip) const;
+
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void OnUnregister() override;
 
@@ -106,6 +116,8 @@ private:
 	void ColourAll();
 	void ApplyOwnerVisibility(UPrimitiveComponent* Component, EPart Part = EPart::Count) const;
 	void UpdateRifle();
+	/** Shows what the owning character holds, placed in its hands. */
+	void UpdateHeld();
 	/** Hides the head for the owner and keeps the shadow copy in step with the body (after a rebuild). */
 	void ApplyFirstPerson();
 
@@ -114,6 +126,13 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMeshComponent> Rifle;
+
+	/** What's in the hands (the fishing rod), and where on its model the right hand holds it and its tip are. */
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> Held;
+	FName HeldShown;
+	FVector HeldGrip = FVector::ZeroVector;
+	FVector HeldTip = FVector::ZeroVector;
 
 	/** The whole body again, drawn for nobody, there only for its shadow in the owner's first-person view. */
 	UPROPERTY(Transient)

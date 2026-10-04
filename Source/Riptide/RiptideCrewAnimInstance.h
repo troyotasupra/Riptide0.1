@@ -62,6 +62,9 @@ struct FRiptideCrewAnimInputs
 	FVector LadderIn = FVector::ForwardVector;
 	FVector LadderLeft = FVector::RightVector;
 	bool bHaveLadder = false;
+	/** A fishing rod in hand, and how it's being worked (URiptideAnglerComponent::GetRodSwing). */
+	bool bHoldingRod = false;
+	float RodSwing = 0.f;
 };
 
 /**
@@ -90,6 +93,8 @@ private:
 	void Ladder(FPoseContext& Out) const;
 	void Knockdown(FPoseContext& Out) const;
 	void MenuRifle(FPoseContext& Out) const;
+	/** Both hands on a held fishing rod (URiptideCrewBodyComponent::RodInComponent). */
+	void HoldRod(FCSPose<FCompactPose>& CS, float Weight) const;
 	void StatePose(ERiptideCrewAnimState State, FPoseContext& Out) const;
 
 	/** How much each state shows (crossfading toward the current one), and the clips' play positions. */

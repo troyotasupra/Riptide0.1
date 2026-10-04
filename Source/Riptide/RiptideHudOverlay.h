@@ -20,8 +20,9 @@ class ARiptideHUD;
  */
 namespace RiptideHud
 {
-	/** Where a prompt goes: the line for what's under the crosshair, the place-specific prompts, the boat's readout. */
-	enum class ESlot : uint8 { Focus, Context, Helm, HelmReadout, Radio, Count };
+	/** Where a prompt goes: the line for what's under the crosshair, the place-specific prompts, the boat's readout,
+	 * what's in your hands (the fishing rod's line). */
+	enum class ESlot : uint8 { Focus, Context, Helm, HelmReadout, Radio, Hands, Count };
 
 	/** Shows Text in Slot this frame, for the player controlling (or riding as) For. Progress 0-1 draws a bar under it. */
 	RIPTIDE_API void Prompt(const AActor* For, ESlot Slot, const FString& Text, const FLinearColor& Colour = FLinearColor::White, float Progress = -1.f);

@@ -100,6 +100,12 @@ Each sound is levelled on import to a target loudness, with peaks held below -8 
 | On the ladder: climb up / down (let go of both to hang on), let go | W / S, Space | Left stick, A |
 | Take the helm (at the wheel), take or hang up the radio mic (looking at it), refuel (at the filler with a fuel drum), or open a locker (beside it) | E | X |
 | Inventory (Tab, E or Esc closes it) | Tab | View (B, X or Start closes it) |
+| Take a fishing rod out, or put it away (using it in the inventory does too) | Q | D-pad up |
+| Fishing: hold to wind up a cast, let go to throw; click to strike when the bobber dips; hold to reel, ease off when the line's tight | Left mouse button | Right trigger |
+| Fishing: change the bait (grub, berries, cut bait, lure, jig, or a bare hook) | Right mouse button | Left trigger |
+| Fishing: cut the line (a shark on your fish) | F | Y |
+
+A landed fish flops at your feet: E kills it, then E takes it. What bites depends on the bait, how deep the water is and the time of day. Food goes off over time (its tooltip says when); dried food keeps.
 
 ## Helm controls
 | Action | Keyboard / mouse | Gamepad |

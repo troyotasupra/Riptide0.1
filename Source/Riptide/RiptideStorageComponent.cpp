@@ -61,6 +61,16 @@ int32 URiptideStorageComponent::AddStorage(const FText& Title, int32 Width, int3
 	return Storages.Num() - 1;
 }
 
+int32 URiptideStorageComponent::CountOf(FName Need) const
+{
+	int32 Count = 0;
+	for (const FRiptideStorage& Storage : Storages)
+	{
+		Count += Storage.Grid.CountOf(Need);
+	}
+	return Count;
+}
+
 int32 URiptideStorageComponent::CountFreeCells(int32 Index) const
 {
 	if (!Storages.IsValidIndex(Index))

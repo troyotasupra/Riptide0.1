@@ -222,7 +222,7 @@ int32 SRiptideHudOverlay::OnPaint(const FPaintArgs& Args, const FGeometry& G, co
 	// Prompts, stacked up from the bottom middle: what's under the crosshair nearest the centre.
 	float Y = Size.Y - 70.f * Scale;
 	using RiptideHud::ESlot;
-	for (const ESlot Slot : { ESlot::HelmReadout, ESlot::Helm, ESlot::Radio, ESlot::Context, ESlot::Focus })
+	for (const ESlot Slot : { ESlot::HelmReadout, ESlot::Helm, ESlot::Radio, ESlot::Hands, ESlot::Context, ESlot::Focus })
 	{
 		const ARiptideHUD::FPrompt& P = H->Prompts[int32(Slot)];
 		if (P.Time < 0.0 || T - P.Time > PromptLife || P.Text.IsEmpty())

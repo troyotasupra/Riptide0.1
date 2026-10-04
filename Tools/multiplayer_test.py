@@ -11,6 +11,7 @@ Both copies run with -nosteam, on the Null online subsystem, as playing without 
   game when it shows up (or connects to 127.0.0.1 if the LAN search doesn't find it), and checks it's on the deck in
   its own crew member, with the name and look it sent, as everyone sees them;
 - the host checks the same from its side (a second crew member on the deck, named Bravo-7, in Bravo-7's look);
+- the host takes a fishing rod out and casts off the beach, and the client sees the rod in its hands and its line out;
 - the client leaves to the main menu (it must arrive there with the menu up), and the host sees it go;
 - the client joins again by IP: it comes back where it left, carrying the flint the host gave it (the world's save
   keeps every crew member's record), then leaves for good.
@@ -219,6 +220,27 @@ def run_in_game(role):
                             crew.try_toggle_mic()
                             go("waiting for the client to leave")
                 elif step == "waiting for the client to leave":
+                    # Meanwhile the host fishes off the beach, for the client to see (see its "watching the host fish").
+                    pc = unreal.GameplayStatics.get_player_controller(world, 0)
+                    me = pc.get_controlled_pawn()
+                    if isinstance(me, unreal.RiptideCharacter) and not me.get_home_boat():
+                        f = st.setdefault("fish", {"next": time.time() + 1.0})
+                        angler = me.get_angler()
+                        if str(me.get_held_item()) != "fishing_rod":
+                            if "rod" not in f:
+                                me.give_item("fishing_rod", 1)
+                                starts = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideBeachStart)
+                                f["yaw"] = (starts[0].get_actor_rotation().yaw + 180.0) if starts else 0.0
+                                f["rod"] = True
+                            me.hold_item("fishing_rod")
+                        elif "release" in f and time.time() > f["release"]:
+                            angler.primary_released()
+                            del f["release"]
+                            f["next"] = time.time() + 6.0
+                        elif angler.get_state() == unreal.RiptideAnglerState.IDLE and time.time() > f["next"] and "release" not in f:
+                            pc.set_control_rotation(unreal.Rotator(roll=0.0, pitch=-5.0, yaw=f["yaw"]))
+                            angler.primary_pressed()
+                            f["release"] = time.time() + 0.9
                     states = list(unreal.GameplayStatics.get_game_state(world).player_array)
                     if len(states) == 1:
                         check("the host sees the client leave, and its game goes on", map_name == GAME_MAP)
@@ -331,10 +353,7 @@ def run_in_game(role):
                         voice.set_push_to_talk(True)
                         check("push-to-talk starts and stops", voice.is_pushing_to_talk())
                         voice.set_push_to_talk(False)
-                        hud = pc.get_hud()
-                        hud.set_menu_open(True)
-                        check("the in-game menu opens", hud.is_menu_open())
-                        go("menu open")
+                        go("watching the host fish")
                         return
                     if route == unreal.RiptideVoiceRoute.LOUDHAILER and "hailer" not in r:
                         r["hailer"] = True
@@ -354,6 +373,20 @@ def run_in_game(role):
                         go("menu open")
                     elif waited() > 45:
                         finish(f"the radio checks didn't all happen: {r}, last heard '{heard}'")
+                elif step == "watching the host fish":
+                    # The host takes a rod out and casts off the beach: everyone sees the rod in its hands and its line out.
+                    pc = unreal.GameplayStatics.get_player_controller(world, 0)
+                    host = next((s for s in unreal.GameplayStatics.get_game_state(world).player_array if s.get_player_name() == HOST_NAME), None)
+                    pawn = host.get_pawn() if host else None
+                    shown = pawn.get_angler().get_shown_state() if isinstance(pawn, unreal.RiptideCharacter) else None
+                    if shown in (unreal.RiptideAnglerState.FLYING, unreal.RiptideAnglerState.WAITING, unreal.RiptideAnglerState.BITE):
+                        check("the host is seen fishing: the rod in its hands, its line out", str(pawn.get_held_item()) == "fishing_rod", str(shown))
+                        hud = pc.get_hud()
+                        hud.set_menu_open(True)
+                        check("the in-game menu opens", hud.is_menu_open())
+                        go("menu open")
+                    elif waited() > 45:
+                        finish(f"never saw the host fishing (held {pawn.get_held_item() if pawn else None}, shown {shown})")
                 elif step == "menu open" and waited() > 2:
                     # (A screenshot is taken at the end of the frame, so each change waits for the one before.)
                     if shots:

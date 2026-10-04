@@ -116,14 +116,45 @@ def tick(dt):
             stand = unreal.Vector(where.x - away.x * 170.0, where.y - away.y * 170.0, 0.0)
             stand.z = unreal.RiptideSeaSubsystem.ground_height_at(world, stand) + 100.0
             walker.set_actor_location(stand, False, True)
-            # where is the thing's centre; aim at the trunk, or a little above the sand for things lying on it.
-            aim = unreal.Vector(where.x, where.y, ground + {"palm": 150.0, "tree": 150.0, "fiber": 30.0, "stone": 12.0, "flint": 6.0}.get(kind, 12.0))
+            # where is the thing's centre (a tall one's foot); aim at the trunk, or a little above the sand for things
+            # lying on it. Palms lean, so their trunk is looked for (below) once the eyes are in place.
+            aim = unreal.Vector(where.x, where.y, ground + {"palm": 100.0, "tree": 80.0, "fiber": 30.0, "stone": 12.0, "flint": 6.0}.get(kind, 12.0))
             state["aim"] = aim
+            state["where"] = where
+            state["ground"] = ground
+            state["searched"] = kind not in ("palm", "tree")
             state["before"] = unreal.RiptideDataLibrary.count_carried(walker, item)
             state["stage"] = "look"
             state["since"] = t
         elif state["stage"] == "look":
             eye = pc.player_camera_manager.get_camera_location()
+            if not state["searched"] and since > 0.3:
+                # Where the trunk really is, as a player would see it: the first point round the foot that a look from
+                # the eyes lands on the island's props, close to where it was aimed.
+                state["searched"] = True
+                where, ground = state["where"], state["ground"]
+                # (A sweeping palm's trunk is well out from its foot: 1.7 m at head height.)
+                for h in (130.0, 100.0, 70.0, 45.0):
+                    for r in (0.0, 25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 175.0, 200.0):
+                        for k in range(12 if r else 1):
+                            a = k * math.pi / 6.0
+                            p = unreal.Vector(where.x + r * math.cos(a), where.y + r * math.sin(a), ground + h)
+                            hit = unreal.SystemLibrary.line_trace_single(world, eye, p, unreal.TraceTypeQuery.TRACE_TYPE_QUERY1, False, [walker],
+                                                                         unreal.DrawDebugTrace.NONE, True)
+                            if hit:
+                                tup = hit.to_tuple()
+                                if tup[9] == holder and tup[4].distance(p) < 40.0:
+                                    state["aim"] = tup[4]
+                                    break
+                        else:
+                            continue
+                        break
+                    else:
+                        continue
+                    break
+                log("%s: looking at its trunk at %s" % (kind, state["aim"]))
+                state["since"] = t
+                return
             to = state["aim"] - eye
             pc.set_control_rotation(unreal.Rotator(roll=0.0, pitch=math.degrees(math.atan2(to.z, math.hypot(to.x, to.y))), yaw=math.degrees(math.atan2(to.y, to.x))))
             if since > 0.8:

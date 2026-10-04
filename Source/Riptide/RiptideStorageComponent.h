@@ -49,6 +49,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Storage")
 	int32 Num() const { return Storages.Num(); }
 
+	/** How many of Need (an item id or group) are here, across every grid. */
+	int32 CountOf(FName Need) const;
+
 	/** How many stacks are in one grid, and the free cells left in it. */
 	UFUNCTION(BlueprintPure, Category = "Storage")
 	int32 CountStacks(int32 Index) const { return Storages.IsValidIndex(Index) ? Storages[Index].Grid.Items.Num() : 0; }

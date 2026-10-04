@@ -157,7 +157,7 @@ TArray<FRiptideItemDef> RiptideItems_BuildTable()
 	Item(TEXT("lighter"), TEXT("Lighter"), K::Tool, 1, 1, 1, 0.05f, 2).Tool(TEXT("lighter"), 20).Hint(TEXT("Twenty lights in it."));
 	Item(TEXT("torch"), TEXT("Torch"), K::Tool, 1, 3, 1, 0.5f, 0).Tool(TEXT("torch"), 0, 1800.f).Hint(TEXT("Burns half an hour once lit."));
 	Item(TEXT("canteen"), TEXT("Canteen (empty)"), K::Tool, 1, 2, 1, 0.3f, 0).Tool(TEXT("canteen")).Hint(TEXT("Fill it at a spring, or from a stream and boil it."));
-	Item(TEXT("fishing_rod"), TEXT("Fishing rod"), K::Tool, 1, 4, 1, 1.f, 1).Tool(TEXT("fishing_rod"));
+	Item(TEXT("fishing_rod"), TEXT("Fishing rod"), K::Tool, 1, 4, 1, 1.f, 1).Tool(TEXT("fishing_rod")).Hint(TEXT("Q takes it out to fish: hold the left button to cast, right to change the bait."));
 	Item(TEXT("cleaning_kit"), TEXT("Cleaning kit"), K::Tool, 2, 1, 1, 0.3f, 1).Tool(TEXT("cleaning_kit"), 10).Hint(Soon);
 	Item(TEXT("binoculars"), TEXT("Binoculars"), K::Tool, 2, 1, 1, 0.9f, 2).Tool(TEXT("binoculars")).Hint(Soon);
 	Item(TEXT("handheld_radio"), TEXT("Handheld radio"), K::Tool, 1, 2, 1, 0.4f, 2).Tool(TEXT("radio")).Hint(Soon);

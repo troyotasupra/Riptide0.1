@@ -40,12 +40,14 @@ namespace
 			Add(TEXT("compost_bin_kit"), LOCTEXT("compost_bin_kit", "Compost bin kit"), { { TEXT("wood"), 4 }, { TEXT("rope"), 1 } }, TEXT("compost_bin_kit"), 1, 4.f);
 			Add(TEXT("drying_rack_kit"), LOCTEXT("drying_rack_kit", "Drying rack kit"), { { TEXT("wood"), 6 }, { TEXT("rope"), 3 } }, TEXT("drying_rack_kit"), 1, 5.f);
 			Add(TEXT("cut_bait"), LOCTEXT("cut_bait", "Cut bait"), { { TEXT("baitfish"), 1 } }, TEXT("cut_bait"), 4, 1.5f, TEXT("knife"));
+			// A castaway's rod: a straight stick, a line twisted from fibre and a hook knapped from flint.
+			Add(TEXT("fishing_rod"), LOCTEXT("fishing_rod", "Fishing rod"), { { TEXT("wood"), 1 }, { TEXT("fiber"), 4 }, { TEXT("flint"), 1 } }, TEXT("fishing_rod"), 1, 4.f);
 			Add(TEXT("jig"), LOCTEXT("jig", "Jig"), { { TEXT("wood"), 1 }, { TEXT("fiber"), 2 }, { TEXT("flint"), 1 } }, TEXT("jig"), 1, 3.f, TEXT("knife"));
 			Add(TEXT("peg_leg"), LOCTEXT("peg_leg", "Peg leg"), { { TEXT("log"), 1 }, { TEXT("rope"), 2 } }, TEXT("peg_leg"), 1, 5.f, TEXT("knife"));
 			Add(TEXT("hook_hand"), LOCTEXT("hook_hand", "Hook hand"), { { TEXT("wood"), 1 }, { TEXT("rope"), 1 }, { TEXT("lure"), 1 } }, TEXT("hook_hand"), 1, 4.f, TEXT("knife"));
 			Add(TEXT("storage_crate_kit"), LOCTEXT("storage_crate_kit", "Storage crate kit"), { { TEXT("log"), 3 }, { TEXT("rope"), 2 } }, TEXT("storage_crate_kit"), 1, 5.f, TEXT("hatchet"));
 
-			Start = { TEXT("rope"), TEXT("stone_hatchet"), TEXT("oar"), TEXT("raft_kit") };
+			Start = { TEXT("rope"), TEXT("stone_hatchet"), TEXT("oar"), TEXT("raft_kit"), TEXT("fishing_rod") };
 			Book = { TEXT("campfire_kit"), TEXT("lean_to_kit"), TEXT("spear"), TEXT("bandage"), TEXT("torch"), TEXT("cut_bait"), TEXT("jig"),
 				TEXT("compost_bin_kit"), TEXT("sandbag") };
 		}

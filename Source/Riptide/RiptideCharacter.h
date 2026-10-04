@@ -256,6 +256,25 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	class URiptideSurvivalComponent* GetSurvival() const { return Survival; }
 
+	/** Fishing, with the rod in hand. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	class URiptideAnglerComponent* GetAngler() const { return Angler; }
+
+	/** What's in the hands (a fishing rod), or none: a carried item taken out to use. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	FName GetHeldItem() const { return HeldItem; }
+
+	/** Takes a carried item in hand (one that's held to use: IsHoldable), or with none puts away what's held. The
+	 * server does it. Q takes the rod out or puts it away; using it in the inventory does too. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void HoldItem(FName Id);
+
+	/** Whether an item is one you hold in your hands to use (the fishing rod). */
+	static bool IsHoldable(FName Id);
+
+	/** Whether the hands are free to use what's held: on your feet, not swimming, climbing, at the helm or down. */
+	bool CanUseHands() const;
+
 	/** Asleep in a shelter: the night passes when everyone is (ARiptideSkyClock). Moving or E gets up. */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsSleeping() const { return bSleeping; }
@@ -297,6 +316,30 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Crew")
 	TObjectPtr<class URiptideSurvivalComponent> Survival;
+
+	UPROPERTY(VisibleAnywhere, Category = "Crew")
+	TObjectPtr<class URiptideAnglerComponent> Angler;
+
+	UPROPERTY(Replicated)
+	FName HeldItem;
+
+	UFUNCTION(Server, Reliable)
+	void ServerHoldItem(FName Id);
+
+	/** Q: the rod out, or away. */
+	void OnHoldKey(const FInputActionValue& Value);
+	void OnPrimaryReleased(const FInputActionValue& Value);
+	void OnSecondary(const FInputActionValue& Value);
+	void OnCutLine(const FInputActionValue& Value);
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> HoldAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> SecondaryAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> CutLineAction;
 
 	UPROPERTY(Replicated)
 	bool bSleeping = false;
