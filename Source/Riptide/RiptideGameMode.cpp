@@ -7,6 +7,7 @@
 #include "RiptideBeachStart.h"
 #include "RiptideBoat.h"
 #include "RiptideSkyClock.h"
+#include "RiptideChart.h"
 #include "RiptideCharacter.h"
 #include "RiptideSea.h"
 #include "RiptideHUD.h"
@@ -49,6 +50,13 @@ void ARiptideGameMode::BeginPlay()
 		Params.ObjectFlags |= RF_Transient;
 		GetWorld()->SpawnActor<ARiptideSkyClock>(ARiptideSkyClock::StaticClass(), FTransform::Identity, Params);
 	}
+	// And the crew's chart (M), filled in as they go.
+	if (!ARiptideChart::Get(this))
+	{
+		FActorSpawnParameters Params;
+		Params.ObjectFlags |= RF_Transient;
+		GetWorld()->SpawnActor<ARiptideChart>(ARiptideChart::StaticClass(), FTransform::Identity, Params);
+	}
 	GetWorldTimerManager().SetTimerForNextTick(this, &ARiptideGameMode::StartSaving);
 }
 
@@ -60,7 +68,7 @@ void ARiptideGameMode::StartSaving()
 	{
 		return;
 	}
-	if (bWantContinue && Save->Structures.Num() + Save->WorldItems.Num() + Save->Harvested.Num() + Save->Rafts.Num() + Save->Players.Num() > 0)
+	if (bWantContinue && Save->Structures.Num() + Save->WorldItems.Num() + Save->Harvested.Num() + Save->Rafts.Num() + Save->ChartSeen.Num() + Save->Players.Num() > 0)
 	{
 		Save->RestoreWorld(GetWorld());
 		bContinued = true;

@@ -335,6 +335,9 @@ def run_in_game(role):
                         check("its crew member stands on the island", pawn.get_component_by_class(unreal.CharacterMovementComponent).is_moving_on_ground())
                     crew = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideCharacter)
                     check("it sees both crew members", len(crew) == 2, str(len(crew)))
+                    charts = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideChart)
+                    check("the crew's chart reaches it, with what the crew has seen", bool(charts) and charts[0].get_seen_count() > 0,
+                          str(charts[0].get_seen_count()) if charts else "no chart")
                     hud = pc.get_hud()
                     check("the in-game menu's HUD is there", isinstance(hud, unreal.RiptideHUD), str(hud))
                     if isinstance(hud, unreal.RiptideHUD):

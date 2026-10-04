@@ -314,6 +314,16 @@ public:
 	void CloseCraftBook();
 	bool IsCraftBookOpen() const { return CraftBook.IsValid(); }
 
+	/** The crew's chart (M): held up while you go on moving. Local player only. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void OpenChart();
+
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void CloseChart();
+
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsChartOpen() const { return ChartPanel.IsValid(); }
+
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void CloseInventory();
 	bool IsInventoryOpen() const { return InventoryWidget.IsValid(); }
@@ -371,6 +381,11 @@ protected:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> HoldAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> ChartAction;
+
+	TSharedPtr<class SWidget> ChartPanel;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> SecondaryAction;

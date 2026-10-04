@@ -104,6 +104,9 @@ Each sound is levelled on import to a target loudness, with peaks held below -8 
 | Fishing: hold to wind up a cast, let go to throw; click to strike when the bobber dips; hold to reel, ease off when the line's tight | Left mouse button | Right trigger |
 | Fishing: change the bait (grub, berries, cut bait, lure, jig, or a bare hook) | Right mouse button | Left trigger |
 | Fishing: cut the line (a shark on your fish) | F | Y |
+| The chart: what the crew has seen, you and your crew on it (M again puts it away) | M | D-pad down |
+
+The chart fills in wherever anyone in the crew goes. Reading a sea chart (use it in the inventory) names the islands on it and puts their bearings and distances under the clock.
 
 A raft: make a raft kit, place it at the water's edge, add 6 logs and 3 rope (E), then E launches it onto the water. Swimming beside it, E climbs aboard. With two oars carried, E at an oarlock fits them; E on the deck takes them up (W/S row ahead and back, A/D turn, E or Space lets go); holding E at an oarlock takes them out again, so nobody rows it away. On the sand, E pushes it.
 

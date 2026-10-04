@@ -12,6 +12,7 @@
 #include "RiptideCharacter.h"
 #include "RiptideCraftingComponent.h"
 #include "RiptideRaft.h"
+#include "RiptideChart.h"
 #include "RiptideSea.h"
 #include "RiptideSkyClock.h"
 #include "RiptideWorldItem.h"
@@ -167,6 +168,12 @@ void URiptideWorldSave::Capture(UWorld* World)
 		}
 	}
 
+	if (const ARiptideChart* Chart = ARiptideChart::Get(World))
+	{
+		ChartSeen = Chart->GetSeenCells();
+		bChartRead = Chart->IsRead();
+	}
+
 	Rafts.Reset();
 	for (TActorIterator<ARiptideRaft> It(World); It; ++It)
 	{
@@ -313,6 +320,10 @@ void URiptideWorldSave::RestoreWorld(UWorld* World) const
 	for (const FRiptideSavedRaft& Saved : Rafts)
 	{
 		ARiptideRaft::Restore(World, Saved.Transform, Saved.bOars);
+	}
+	if (ARiptideChart* Chart = ARiptideChart::Get(World))
+	{
+		Chart->Restore(ChartSeen, bChartRead);
 	}
 
 	for (TActorIterator<ARiptideIslandProps> It(World); It; ++It)

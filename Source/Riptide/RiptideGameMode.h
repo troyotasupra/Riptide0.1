@@ -25,7 +25,7 @@ public:
 	ARiptideGameMode();
 
 	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
-	/** Starts the day: the sky clock (ARiptideSkyClock) every machine's sun follows. */
+	/** Starts the day (the sky clock, ARiptideSkyClock, every machine's sun follows) and the crew's chart. */
 	virtual void BeginPlay() override;
 
 	/** Takes the joining player's look from their join URL (?Look=..., see FRiptideAppearance::ToString), or, for

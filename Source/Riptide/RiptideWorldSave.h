@@ -178,6 +178,13 @@ public:
 	UPROPERTY()
 	TArray<FRiptideSavedRaft> Rafts;
 
+	/** The chart: the squares the crew has seen, and whether a sea chart has been read (ARiptideChart). */
+	UPROPERTY()
+	TArray<FIntPoint> ChartSeen;
+
+	UPROPERTY()
+	bool bChartRead = false;
+
 	/** The save slot: separate when playing in the editor (or named with -RiptideSaveSlot=), so tests never touch the
 	 * game's own save. */
 	static FString SlotFor(const UObject* WorldContext);

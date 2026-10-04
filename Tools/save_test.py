@@ -134,6 +134,7 @@ def tick(dt):
                 "structures": [(str(s.get_type()), s.get_stage(), s.is_finished()) for s in leantos],
                 "items": sorted(str(i.get_item_id()) for i in items), "depleted": props.get_depleted_count(),
                 "rafts": [(r.get_actor_location(), r.has_oars()) for r in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideRaft)],
+                "charted": unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideChart)[0].get_seen_count(),
             }
             state["saved"] = saved
             log("saving: %r" % saved)
@@ -160,6 +161,8 @@ def tick(dt):
             check("the raft is afloat where it was, oars and all", len(rafts) == 1 and len(saved["rafts"]) == 1 and rafts[0][1]
                   and math.hypot(rafts[0][0].x - saved["rafts"][0][0].x, rafts[0][0].y - saved["rafts"][0][0].y) < 150.0,
                   "%r, saved %r" % (rafts, saved["rafts"]))
+            charted = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.RiptideChart)[0].get_seen_count()
+            check("the chart remembers what the crew had seen", charted >= saved["charted"] > 0, "%d squares, saved %d" % (charted, saved["charted"]))
             check("what was harvested is still gone", props.get_depleted_count() == saved["depleted"], "%d, saved %d" % (props.get_depleted_count(), saved["depleted"]))
             where = walker.get_actor_location()
             moved = math.hypot(where.x - saved["where"].x, where.y - saved["where"].y)

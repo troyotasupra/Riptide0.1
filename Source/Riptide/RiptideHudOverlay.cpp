@@ -8,6 +8,7 @@
 #include "RiptideHUD.h"
 #include "RiptideMenuWidgets.h"
 #include "RiptideSkyClock.h"
+#include "RiptideChart.h"
 
 namespace
 {
@@ -213,6 +214,25 @@ int32 SRiptideHudOverlay::OnPaint(const FPaintArgs& Args, const FGeometry& G, co
 			int32(FMath::Frac(Hours) * 60.f)).Replace(TEXT("    "), TEXT("  "));
 		const FSlateFontInfo ClockFont = Font(EFont::Bold, FMath::RoundToInt(16 * Scale));
 		DrawString(Out, LayerId + 1, G, Time, ClockFont, FVector2f(Size.X - 30.f * Scale, 26.f * Scale), Srgb(1.f, 1.f, 1.f, 0.8f), 1.f);
+	}
+	// The compass: with a sea chart read, each island's bearing and distance.
+	const ARiptideChart* Chart = ARiptideChart::Get(H);
+	const APawn* Pawn = H->GetOwningPawn();
+	if (Chart && Chart->IsRead() && Pawn)
+	{
+		const FSlateFontInfo CompassFont = Font(EFont::Bold, FMath::RoundToInt(14 * Scale));
+		float Y = 50.f * Scale;
+		for (const FRiptideChartIsland& Island : Chart->GetIslands())
+		{
+			int32 Bearing = 0;
+			float Metres = 0.f;
+			ARiptideChart::BearingTo(Pawn->GetActorLocation(), Island, Bearing, Metres);
+			const FString Line = Metres * 100.f < Island.Radius ? FString::Printf(TEXT("%s  (here)"), *Island.Name.ToString())
+				: Metres < 1000.f ? FString::Printf(TEXT("%s  %03d\u00B0  %.0f m"), *Island.Name.ToString(), Bearing, Metres)
+				: FString::Printf(TEXT("%s  %03d\u00B0  %.1f km"), *Island.Name.ToString(), Bearing, Metres / 1000.f);
+			DrawString(Out, LayerId + 1, G, Line, CompassFont, FVector2f(Size.X - 30.f * Scale, Y), Srgb(0.95f, 0.9f, 0.75f, 0.85f), 1.f);
+			Y += 20.f * Scale;
+		}
 	}
 
 	// A small crosshair dot, so it's clear what E acts on.

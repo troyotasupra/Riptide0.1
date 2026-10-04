@@ -18,6 +18,8 @@
 #include "RiptideAngler.h"
 #include "RiptideBoat.h"
 #include "RiptideRaft.h"
+#include "RiptideChart.h"
+#include "RiptideChartPanel.h"
 #include "RiptideCharacterMovement.h"
 #include "RiptideCraftBook.h"
 #include "RiptideCraftingComponent.h"
@@ -220,6 +222,12 @@ void ARiptideCharacter::BuildInput()
 	WalkMapping->MapKey(CutLineAction, EKeys::F);
 	WalkMapping->MapKey(CutLineAction, EKeys::Gamepad_FaceButton_Top);
 
+	// M: the chart.
+	ChartAction = NewObject<UInputAction>(this, TEXT("IA_Chart"));
+	ChartAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(ChartAction, EKeys::M);
+	WalkMapping->MapKey(ChartAction, EKeys::Gamepad_DPad_Down);
+
 	InventoryAction = NewObject<UInputAction>(this, TEXT("IA_Inventory"));
 	InventoryAction->ValueType = EInputActionValueType::Boolean;
 	WalkMapping->MapKey(InventoryAction, EKeys::Tab);
@@ -303,6 +311,7 @@ void ARiptideCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		Old->OnAppearanceChanged.Remove(AppearanceWatch);
 	}
 	CloseInventory();
+	CloseChart();
 	if (HasAuthority() && IsValid(HomeBoat) && HomeBoat->GetLadderUser() == this)
 	{
 		HomeBoat->SetLadderUser(nullptr);
@@ -377,6 +386,7 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 		Input->BindAction(PunchAction, ETriggerEvent::Completed, this, &ARiptideCharacter::OnPrimaryReleased);
 		Input->BindAction(PunchAction, ETriggerEvent::Canceled, this, &ARiptideCharacter::OnPrimaryReleased);
 		Input->BindAction(HoldAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnHoldKey);
+		Input->BindActionValueLambda(ChartAction, ETriggerEvent::Started, [this](const FInputActionValue&) { IsChartOpen() ? CloseChart() : OpenChart(); });
 		Input->BindAction(SecondaryAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnSecondary);
 		Input->BindAction(CutLineAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnCutLine);
 		Input->BindAction(DropAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnDropKey);
@@ -1702,6 +1712,22 @@ void ARiptideCharacter::ServerUseItem_Implementation(int32 StorageIndex, int32 U
 		Storage->Grid.Take(Uid, 1);
 		StartAction(ERiptideCrewAction::Reach);
 		break;
+	case ERiptideItemKind::Chart:
+	{
+		// Studied: the islands go on everyone's compass (and are named on the chart). The chart is kept.
+		ARiptideChart* Chart = ARiptideChart::Get(this);
+		const FString Name = GetPlayerState() ? GetPlayerState()->GetPlayerName() : FString(TEXT("Someone"));
+		for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+		{
+			if (ARiptideCharacter* Mate = It->IsValid() ? Cast<ARiptideCharacter>((*It)->GetPawn()) : nullptr)
+			{
+				Mate->ClientNote(Chart && Chart->Read() ? FString::Printf(TEXT("%s studied the sea chart: the islands are on everyone's compass."), *Name)
+					: FString(TEXT("The islands are already on your compass.")));
+			}
+		}
+		StartAction(ERiptideCrewAction::Reach);
+		return;
+	}
 	case ERiptideItemKind::Tool:
 		// Something held to use (the rod): into the hands, or away again.
 		if (!IsHoldable(Def->Id))
@@ -1728,8 +1754,29 @@ void ARiptideCharacter::OnCraftKey(const FInputActionValue& Value)
 	}
 }
 
+void ARiptideCharacter::OpenChart()
+{
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !PC->IsLocalController() || IsChartOpen() || IsInventoryOpen() || IsCraftBookOpen() || !GEngine || !GEngine->GameViewport)
+	{
+		return;
+	}
+	ChartPanel = SNew(SRiptideChartPanel).Crew(this);
+	GEngine->GameViewport->AddViewportWidgetContent(ChartPanel.ToSharedRef(), 8);
+}
+
+void ARiptideCharacter::CloseChart()
+{
+	if (GEngine && GEngine->GameViewport && ChartPanel.IsValid())
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(ChartPanel.ToSharedRef());
+	}
+	ChartPanel.Reset();
+}
+
 void ARiptideCharacter::OpenCraftBook()
 {
+	CloseChart();
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	if (!PC || !PC->IsLocalController() || IsCraftBookOpen() || !GEngine || !GEngine->GameViewport)
 	{
