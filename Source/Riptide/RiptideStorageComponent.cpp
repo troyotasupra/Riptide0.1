@@ -1,11 +1,47 @@
 #include "RiptideStorageComponent.h"
 
+#include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
 
 URiptideStorageComponent::URiptideStorageComponent()
 {
 	SetIsReplicatedByDefault(true);
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.TickInterval = 2.f;      // spoiling is counted in minutes
+}
+
+void URiptideStorageComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !GetWorld())
+	{
+		return;
+	}
+	const AGameStateBase* State = GetWorld()->GetGameState();
+	const float Now = State ? float(State->GetServerWorldTimeSeconds()) : GetWorld()->GetTimeSeconds();
+	bool bChanged = false;
+	for (FRiptideStorage& Storage : Storages)
+	{
+		for (FRiptideItem& Item : Storage.Grid.Items)
+		{
+			if (Item.SpoilAt <= 0.f)
+			{
+				const FRiptideItemDef* Def = RiptideItems::Find(Item.Id);
+				if (Def && Def->Food.IsSet() && Def->Food->SpoilSeconds > 0.f)
+				{
+					Item.SpoilAt = Now + Def->Food->SpoilSeconds;
+					bChanged = true;
+				}
+			}
+		}
+		bChanged |= Storage.Grid.Spoil(Now) > 0;
+	}
+	if (bChanged)
+	{
+		OnChanged.Broadcast();
+	}
 }
 
 void URiptideStorageComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -23,6 +59,16 @@ int32 URiptideStorageComponent::AddStorage(const FText& Title, int32 Width, int3
 	Storage.Grid.Width = Width;
 	Storage.Grid.Height = Height;
 	return Storages.Num() - 1;
+}
+
+int32 URiptideStorageComponent::CountOf(FName Need) const
+{
+	int32 Count = 0;
+	for (const FRiptideStorage& Storage : Storages)
+	{
+		Count += Storage.Grid.CountOf(Need);
+	}
+	return Count;
 }
 
 int32 URiptideStorageComponent::CountFreeCells(int32 Index) const
@@ -120,13 +166,13 @@ bool URiptideStorageComponent::MoveItem(URiptideStorageComponent* From, int32 Fr
 		// Sent across: top up matching stacks there, then wherever the rest fits. Nothing is touched unless there's
 		// room for at least some of it, and whatever doesn't fit stays where it was, as the same item.
 		const bool bRoom = Target->Grid.Items.ContainsByPredicate([&](const FRiptideItem& Other)
-			{ return Other.Id == Item.Id && Def && Other.Count < Def->Stack; });
+			{ return Other.CanMergeWith(Item) && Def && Other.Count < Def->Stack; });
 		int32 SpaceX, SpaceY;
 		bool bSpaceRot;
 		if (!bSameGrid && (bRoom || Target->Grid.FindSpace(Item.Id, SpaceX, SpaceY, bSpaceRot)))
 		{
 			FRiptideItem Taken = Source->Grid.Take(Uid, Moving);
-			const int32 Left = Target->Grid.Add(Taken.Id, Taken.Count);
+			const int32 Left = Target->Grid.AddStack(Taken);
 			if (Left > 0)
 			{
 				if (FRiptideItem* Still = Source->Grid.Get(Uid))
@@ -173,7 +219,7 @@ bool URiptideStorageComponent::MoveItem(URiptideStorageComponent* From, int32 Fr
 	else if (const FRiptideItem* Onto = Target->Grid.SingleOverlap(Item.Id, X, Y, bRotated, Ignore))
 	{
 		// Dropped on a stack of the same thing: top it up.
-		if (Def && Onto->Id == Item.Id && Onto->Uid != Uid && Onto->Count < Def->Stack)
+		if (Def && Onto->CanMergeWith(Item) && Onto->Uid != Uid && Onto->Count < Def->Stack)
 		{
 			const int32 OntoUid = Onto->Uid;
 			const int32 Room = FMath::Min(Moving, Def->Stack - Onto->Count);

@@ -12,6 +12,9 @@
 #include "Interfaces/OnlinePresenceInterface.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Misc/PackageName.h"
+#include "RiptideGameMode.h"
+#include "RiptideWorldSave.h"
 #include "Online/OnlineSessionNames.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
@@ -25,7 +28,7 @@
 DEFINE_LOG_CATEGORY_STATIC(LogRiptideOnline, Log, All);
 
 const TCHAR* URiptideGameInstance::MenuMap = TEXT("/Game/Riptide/Maps/MainMenu");
-const TCHAR* URiptideGameInstance::GameMap = TEXT("/Game/Riptide/Maps/Ocean_Test");
+const TCHAR* URiptideGameInstance::GameMap = TEXT("/Game/Riptide/Maps/Island_Test");
 
 namespace
 {
@@ -246,12 +249,13 @@ FString URiptideGameInstance::GetPlayerOptions() const
 
 // --- Hosting ---
 
-bool URiptideGameInstance::HostGame(bool bFriendsOnly)
+bool URiptideGameInstance::HostGame(bool bFriendsOnly, bool bContinue)
 {
 	if (Activity != ERiptideOnlineActivity::None)
 	{
 		return false;
 	}
+	bHostContinue = bContinue;
 	// Friends only is a Steam lobby setting; without Steam the game is open to the local network and by IP.
 	bHostedFriendsOnly = bFriendsOnly && IsUsingSteam();
 	SetActivity(ERiptideOnlineActivity::Hosting, LOCTEXT("SettingUp", "Setting up the game..."));
@@ -281,7 +285,7 @@ void URiptideGameInstance::CreateSession()
 	Settings.bUseLobbiesIfAvailable = bSteam;
 	Settings.bAllowJoinViaPresence = true;
 	Settings.bAllowJoinViaPresenceFriendsOnly = bHostedFriendsOnly;
-	Settings.Set(SETTING_MAPNAME, FString(TEXT("Ocean_Test")), EOnlineDataAdvertisementType::ViaOnlineService);
+	Settings.Set(SETTING_MAPNAME, FString(TEXT("Island_Test")), EOnlineDataAdvertisementType::ViaOnlineService);
 	Settings.Set(KeyGame, FString(GameTag), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 	Settings.Set(KeyCallsign, GetCallsign(), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 	Settings.Set(KeyFriendsOnly, bHostedFriendsOnly, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
@@ -310,7 +314,19 @@ void URiptideGameInstance::OnCreateSessionComplete(FName SessionName, bool bWasS
 void URiptideGameInstance::TravelToHostedGame()
 {
 	SetActivity(ERiptideOnlineActivity::Hosting, LOCTEXT("LoadingGame", "Loading the game..."));
-	UGameplayStatics::OpenLevel(this, FName(GameMap), true, FString(TEXT("listen?")) + GetPlayerOptions());
+	// Continuing goes back to the map the world was saved on (if the game still has it); ARiptideGameMode reads ?Continue.
+	FString Map = GameMap;
+	FString Options = TEXT("listen?");
+	if (bHostContinue)
+	{
+		const URiptideWorldSave* Save = URiptideWorldSave::Load(this);
+		if (Save && FPackageName::DoesPackageExist(Save->Map))
+		{
+			Map = Save->Map;
+		}
+		Options += TEXT("Continue?");
+	}
+	UGameplayStatics::OpenLevel(this, FName(Map), true, Options + GetPlayerOptions());
 }
 
 // --- Finding games ---
@@ -603,14 +619,24 @@ void URiptideGameInstance::OnInviteAccepted(const bool bWasSuccessful, const int
 
 // --- Leaving ---
 
+void URiptideGameInstance::SaveHostedWorld()
+{
+	if (ARiptideGameMode* Mode = GetWorld() ? GetWorld()->GetAuthGameMode<ARiptideGameMode>() : nullptr)
+	{
+		Mode->SaveWorld();
+	}
+}
+
 void URiptideGameInstance::LeaveGame()
 {
+	SaveHostedWorld();
 	SetActivity(ERiptideOnlineActivity::Leaving, LOCTEXT("Leaving", "Leaving the game..."));
 	DestroySessionThen([this]() { OpenMenu(); });
 }
 
 void URiptideGameInstance::QuitToDesktop()
 {
+	SaveHostedWorld();
 	SetActivity(ERiptideOnlineActivity::Leaving, LOCTEXT("Quitting", "Quitting..."));
 	DestroySessionThen([this]()
 	{

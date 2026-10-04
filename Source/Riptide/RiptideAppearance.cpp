@@ -27,19 +27,26 @@ namespace
 				LOCTEXT("HairBrown", "Brown"), LOCTEXT("HairBlond", "Blond"), LOCTEXT("HairRed", "Red"), LOCTEXT("HairGrey", "Grey") }, 1 },
 			{ LOCTEXT("Beard", "Beard"), { LOCTEXT("BeardNone", "Clean-shaven"), LOCTEXT("BeardFull", "Full beard") }, 0 },
 			{ LOCTEXT("Headgear", "Headgear"), { LOCTEXT("HeadNone", "None"), LOCTEXT("Helmet", "Combat helmet"),
-				LOCTEXT("Boonie", "Boonie hat"), LOCTEXT("Cap", "Cap"), LOCTEXT("Beanie", "Beanie") }, 1 },
+				LOCTEXT("Boonie", "Boonie hat"), LOCTEXT("Cap", "Cap"), LOCTEXT("Beanie", "Beanie") }, 0 },
 			{ LOCTEXT("Face", "Face"), { LOCTEXT("FaceNone", "Bare"), LOCTEXT("Sunglasses", "Sunglasses"),
 				LOCTEXT("Ballistic", "Ballistic glasses"), LOCTEXT("Balaclava", "Balaclava"), LOCTEXT("Shemagh", "Shemagh") }, 0 },
 			{ LOCTEXT("Camo", "Uniform"), { LOCTEXT("CamoMulti", "Multi-terrain"), LOCTEXT("CamoWoodland", "Woodland"),
 				LOCTEXT("CamoDesert", "Desert"), LOCTEXT("CamoUrban", "Urban grey"), LOCTEXT("CamoOlive", "Plain olive"),
 				LOCTEXT("CamoBlack", "Black") }, 0 },
 			{ LOCTEXT("Vest", "Vest"), { LOCTEXT("VestNone", "None"), LOCTEXT("PlateCarrier", "Plate carrier"),
-				LOCTEXT("ChestRig", "Chest rig") }, 1 },
+				LOCTEXT("ChestRig", "Chest rig") }, 0 },
 			{ LOCTEXT("GearColour", "Gear colour"), { LOCTEXT("Coyote", "Coyote brown"), LOCTEXT("RangerGreen", "Ranger green"),
 				LOCTEXT("GearBlack", "Black"), LOCTEXT("Wolf", "Wolf grey"), LOCTEXT("Tan", "Tan") }, 0 },
 			{ LOCTEXT("Backpack", "Pack"), { LOCTEXT("PackNone", "None"), LOCTEXT("Assault", "Assault pack"),
 				LOCTEXT("Hydration", "Hydration pack") }, 0 },
-			{ LOCTEXT("Gloves", "Gloves"), { LOCTEXT("GlovesNone", "None"), LOCTEXT("GlovesTactical", "Tactical gloves") }, 1 },
+			{ LOCTEXT("Gloves", "Gloves"), { LOCTEXT("GlovesNone", "None"), LOCTEXT("GlovesTactical", "Tactical gloves") }, 0 },
+			{ LOCTEXT("Shirt", "Shirt"), { LOCTEXT("ShirtWhite", "White t-shirt"), LOCTEXT("ShirtGrey", "Grey t-shirt"), LOCTEXT("ShirtNavy", "Navy t-shirt"),
+				LOCTEXT("ShirtRed", "Red t-shirt"), LOCTEXT("ShirtOlive", "Olive t-shirt"), LOCTEXT("ShirtBlack", "Black t-shirt"),
+				LOCTEXT("ShirtYellow", "Yellow t-shirt"), LOCTEXT("ShirtNone", "No shirt") }, 0 },
+			{ LOCTEXT("Shorts", "Shorts"), { LOCTEXT("ShortsKhaki", "Khaki"), LOCTEXT("ShortsNavy", "Navy"), LOCTEXT("ShortsBlack", "Black"),
+				LOCTEXT("ShortsGrey", "Grey"), LOCTEXT("ShortsGreen", "Green"), LOCTEXT("ShortsRed", "Red") }, 0 },
+			{ LOCTEXT("Footwear", "Footwear"), { LOCTEXT("Barefoot", "Barefoot"), LOCTEXT("Sandals", "Sandals"), LOCTEXT("Slides", "Slides"),
+				LOCTEXT("Clogs", "Clogs") }, 1 },
 		};
 		check(Table.Num() == int32(ERiptideLook::Count));
 		return Table;
@@ -131,12 +138,30 @@ uint8 URiptideAppearanceLibrary::GetDefaultOption(ERiptideLook Part)
 	return Parts().IsValidIndex(int32(Part)) ? Parts()[int32(Part)].Default : 0;
 }
 
+bool URiptideAppearanceLibrary::IsShownInMenu(ERiptideLook Part)
+{
+	return !(Part >= ERiptideLook::Headgear && Part <= ERiptideLook::Gloves);
+}
+
+FLinearColor URiptideAppearanceLibrary::GetClothColour(ERiptideLook Part, int32 Option)
+{
+	static const FLinearColor Shirts[] = { Srgb(225, 222, 212), Srgb(120, 120, 118), Srgb(32, 40, 72), Srgb(150, 36, 32), Srgb(84, 92, 56),
+		Srgb(26, 26, 28), Srgb(214, 178, 48), Srgb(225, 222, 212) };
+	static const FLinearColor Shorts[] = { Srgb(166, 146, 104), Srgb(34, 42, 76), Srgb(28, 28, 30), Srgb(104, 104, 102), Srgb(70, 88, 54), Srgb(140, 40, 34) };
+	if (Part == ERiptideLook::Shorts)
+	{
+		return Shorts[FMath::Clamp(Option, 0, int32(UE_ARRAY_COUNT(Shorts)) - 1)];
+	}
+	return Shirts[FMath::Clamp(Option, 0, int32(UE_ARRAY_COUNT(Shirts)) - 1)];
+}
+
 FRiptideAppearance URiptideAppearanceLibrary::RandomAppearance()
 {
 	FRiptideAppearance Look;
 	for (int32 i = 0; i < int32(ERiptideLook::Count); ++i)
 	{
-		Look.Set(ERiptideLook(i), uint8(FMath::RandRange(0, GetOptionCount(ERiptideLook(i)) - 1)));
+		const ERiptideLook Part = ERiptideLook(i);
+		Look.Set(Part, IsShownInMenu(Part) ? uint8(FMath::RandRange(0, GetOptionCount(Part) - 1)) : GetDefaultOption(Part));
 	}
 	return Look;
 }

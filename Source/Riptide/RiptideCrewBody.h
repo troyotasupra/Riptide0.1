@@ -55,6 +55,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void SetHiddenFromOwner(bool bHide);
 
+	/** The owner's own first-person view of this body: the head and what's on it aren't drawn for them (the camera
+	 * is inside it), while a shadow-only copy keeps the whole figure's shadow on the ground. Others see all of it. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetFirstPersonView(bool bOn);
+
+	/** Poses the body every frame even off screen (as a player's own body always is); for tests without a renderer. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetAlwaysPosed(bool bAlways)
+	{
+		VisibilityBasedAnimTickOption = bAlways || bFirstPerson || bHiddenFromOwner ? EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones
+			: EVisibilityBasedAnimTickOption::OnlyTickPoseWhenRendered;
+	}
+
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsFirstPersonView() const { return bFirstPerson; }
+
 	/** What the animation shows now (for tests). */
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	ERiptideCrewAnimState GetAnimState() const;
@@ -76,26 +92,53 @@ public:
 	/** The rifle model's placement in the body's component space, from the posed right upper arm and head. */
 	static FTransform RifleInComponent(const FVector& UpperArmR, const FVector& Head);
 
+	/** A fishing rod held in both hands, in the body's component space: the origin where the right hand holds it (at
+	 * the reel seat), X along the rod to its tip, Y down toward the reel. Pitch is where the crew member looks (up +,
+	 * degrees); Swing how it's being worked (URiptideAnglerComponent::GetRodSwing: 1 wound back over the shoulder,
+	 * negative flicked out). The reel hangs under the right hand, the left hand on its crank. Shared with the
+	 * animation. */
+	static FTransform RodInComponent(const FVector& UpperArmR, float Pitch, float Swing);
+
+	/** The tip of what's held (the rod's), in the world. False when nothing is held or it isn't shown. */
+	bool GetHeldTip(FVector& OutTip) const;
+
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void OnUnregister() override;
 
 private:
 	/** The parts worn on the body, each its own mesh following the body's pose. */
-	enum class EPart : uint8 { Uniform, Boots, Gloves, Hair, Beard, Headgear, FaceCover, Vest, Pack, Count };
+	enum class EPart : uint8 { Uniform, Boots, Gloves, Hair, Beard, Headgear, FaceCover, Vest, Pack, Shirt, Shorts, Footwear, Count };
 
 	USkeletalMeshComponent* PartComponent(EPart Part);
 	void SetPart(EPart Part, const TCHAR* MeshName);
 	/** The material to draw a slot with, with this look's colours set (one dynamic instance per material). */
 	UMaterialInterface* Coloured(UMaterialInterface* Material);
 	void ColourAll();
-	void ApplyOwnerVisibility(UPrimitiveComponent* Component) const;
+	void ApplyOwnerVisibility(UPrimitiveComponent* Component, EPart Part = EPart::Count) const;
 	void UpdateRifle();
+	/** Shows what the owning character holds, placed in its hands. */
+	void UpdateHeld();
+	/** Hides the head for the owner and keeps the shadow copy in step with the body (after a rebuild). */
+	void ApplyFirstPerson();
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<USkeletalMeshComponent>> Parts;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMeshComponent> Rifle;
+
+	/** What's in the hands (the fishing rod), and where on its model the right hand holds it and its tip are. */
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> Held;
+	FName HeldShown;
+	FVector HeldGrip = FVector::ZeroVector;
+	FVector HeldTip = FVector::ZeroVector;
+
+	/** The whole body again, drawn for nobody, there only for its shadow in the owner's first-person view. */
+	UPROPERTY(Transient)
+	TObjectPtr<USkeletalMeshComponent> ShadowBody;
+
+	bool bFirstPerson = false;
 
 	/** Dynamic instances by the material they were made from. */
 	UPROPERTY(Transient)

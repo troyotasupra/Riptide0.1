@@ -21,6 +21,11 @@ enum class ERiptideLook : uint8
 	GearColour,     // the colour of the vest, helmet cover, pouches and pack
 	Backpack,
 	Gloves,
+	// What castaways wash up in (the parts above from Headgear down are military gear: kept for later, when such
+	// things are found, but not chosen in the menu and not worn from it).
+	Shirt,          // a t-shirt in a colour, or none
+	Shorts,
+	Footwear,       // barefoot, sandals, slides or clogs
 	Count UMETA(Hidden)
 };
 
@@ -76,6 +81,13 @@ public:
 
 	/** The default for a part (what a new profile starts with). */
 	static uint8 GetDefaultOption(ERiptideLook Part);
+
+	/** Whether the customisation screen offers this part (the military gear isn't on offer to a castaway). */
+	UFUNCTION(BlueprintPure, Category = "Appearance")
+	static bool IsShownInMenu(ERiptideLook Part);
+
+	/** The cloth colour of a shirt or shorts option. */
+	static FLinearColor GetClothColour(ERiptideLook Part, int32 Option);
 
 	/** A random look (for "randomise", and for AI crews). */
 	UFUNCTION(BlueprintCallable, Category = "Appearance")

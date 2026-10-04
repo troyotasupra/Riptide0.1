@@ -59,7 +59,7 @@ public:
  * - V is push-to-talk. Spoken without the radio mic, it's heard around you, fading over about 25 m.
  * - Holding the boat's hand mic, what you say goes out on the boat's CB channel (heard from the radio of every other
  *   boat tuned to it, through a radio's tinny speaker), or through the loudhailer horn if the mic's switched to it.
- * - While holding the mic: [ and ] (or the mouse wheel) change the channel, B switches between CB and loudhailer.
+ * - While holding the mic: [ and ] change the channel, T switches between CB and loudhailer.
  * - NPC crews talk on the same channels and over their loudhailers (URiptideRadioSubsystem): heard here as radio
  *   chatter with subtitles.
  *
@@ -85,6 +85,19 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Voice")
 	bool IsPushingToTalk() const { return bPushToTalk; }
+
+	/** The microphones this machine has, by device name (the settings menu's list). */
+	UFUNCTION(BlueprintCallable, Category = "Voice")
+	static TArray<FString> ListMicrophones();
+
+	/** Points the voice capture at the microphone the settings name (empty: the system's default). Works once the
+	 * player has started talking at least once (that's when the capture exists). True if it was taken. */
+	UFUNCTION(BlueprintCallable, Category = "Voice", meta = (WorldContext = "WorldContext"))
+	static bool ApplyMicrophone(const UObject* WorldContext);
+
+	/** How loud the microphone is right now while talking, 0..1 (0 when not capturing). For the mic test. */
+	UFUNCTION(BlueprintPure, Category = "Voice", meta = (WorldContext = "WorldContext"))
+	static float MicrophoneLevel(const UObject* WorldContext);
 
 	/** Turns the radio's channel knob (while holding the mic, or at the helm). */
 	UFUNCTION(BlueprintCallable, Category = "Voice")
@@ -157,12 +170,6 @@ private:
 
 	bool bPushToTalk = false;
 
-	struct FHeardLine
-	{
-		FString Text;
-		double Until = 0.0;
-	};
-	TArray<FHeardLine> HeardLines;
 	FString LastHeardLine;
 };
 

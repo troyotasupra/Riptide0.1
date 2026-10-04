@@ -5,7 +5,9 @@
 #include "BonePose.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "RiptideAngler.h"
 #include "RiptideBoat.h"
+#include "RiptideRaft.h"
 #include "RiptideCharacter.h"
 #include "RiptideCrewBody.h"
 #include "TwoBoneIK.h"
@@ -17,13 +19,29 @@ namespace
 	enum EClip : int32
 	{
 		Idle, Walk, Jog, CrouchIdle, CrouchWalk, JumpStart, JumpLoop, JumpLand, SwimIdle, SwimForward, ClimbUp, Rail,
-		Knockback, GetUp, RifleReady, ClipCount
+		Knockback, GetUp, RifleReady, Sprint, PunchJab, PunchCross, ReachOut, Consume, PickUp, Chop, Harvest, Throw, ClipCount
+	};
+
+	// The one-shot actions (ERiptideCrewAction, in order after None): the clip each plays over the upper body, how
+	// long it runs (0 for the clip's own length), and whether it loops while held.
+	struct FActionClip { int32 Clip; float Seconds; bool bLoop; };
+	const FActionClip ActionClips[] = {
+		{ Idle, 0.f, false },          // None
+		{ PunchJab, 0.f, false },
+		{ PunchCross, 0.f, false },
+		{ ReachOut, 0.f, false },
+		{ Consume, 0.f, false },
+		{ PickUp, 0.f, false },
+		{ Chop, 0.f, true },
+		{ Harvest, 0.f, false },
+		{ Throw, 0.f, false },
 	};
 
 	// How fast each clip's feet travel over the ground at its own speed (cm/s), measured from the clips (the
 	// distance a planted foot slides back over its stance): walking and running play faster or slower to match.
 	constexpr float WalkClipSpeed = 105.f;
 	constexpr float JogClipSpeed = 320.f;
+	constexpr float SprintClipSpeed = 520.f;
 	constexpr float CrouchClipSpeed = 70.f;
 
 	// The animations' rig: its legs (thigh + shin) are 82.9 cm, and its pelvis height is for those.
@@ -91,6 +109,15 @@ const TArray<TPair<FString, FString>>& URiptideCrewAnimInstance::GetClipTable()
 		{ TEXT("A_Knockback"), TEXT("UAL2/Hit_Knockback") },
 		{ TEXT("A_GetUp"), TEXT("UAL2/LayToIdle") },
 		{ TEXT("A_RifleReady"), TEXT("UAL1/Pistol_Idle_Loop") },
+		{ TEXT("A_Sprint"), TEXT("UAL1/Sprint_Loop") },
+		{ TEXT("A_PunchJab"), TEXT("UAL1/Punch_Jab") },
+		{ TEXT("A_PunchCross"), TEXT("UAL1/Punch_Cross") },
+		{ TEXT("A_Reach"), TEXT("UAL1/Interact") },
+		{ TEXT("A_Consume"), TEXT("UAL2/Consume") },
+		{ TEXT("A_PickUp"), TEXT("UAL1/PickUp_Table") },
+		{ TEXT("A_Chop"), TEXT("UAL2/TreeChopping_Loop") },
+		{ TEXT("A_Harvest"), TEXT("UAL2/Farm_Harvest") },
+		{ TEXT("A_Throw"), TEXT("UAL2/OverhandThrow") },
 	};
 	check(Table.Num() == ClipCount);
 	return Table;
@@ -156,8 +183,22 @@ void URiptideCrewAnimInstance::GatherCharacter(ARiptideCharacter* Crew, float De
 	N.Speed = FVector2D(Local.X, Local.Y).Size();
 	N.Direction = N.Speed > 5.f ? FMath::RadiansToDegrees(FMath::Atan2(Local.Y, Local.X)) : 0.f;
 	N.VerticalSpeed = Velocity.Z;
-	N.bCrouched = Crew->bIsCrouched;
+	N.bCrouched = Crew->bIsCrouched || Crew->GetRowingRaft() != nullptr;    // kneeling at the oars
+	N.bSprinting = Crew->IsSprinting();
+	N.Action = uint8(Crew->GetAction());
+	N.ActionTime = Crew->GetActionTime();
 	N.AimPitch = FRotator::NormalizeAxis(Crew->GetBaseAimRotation().Pitch);
+	N.bHoldingRod = Crew->GetHeldItem() == TEXT("fishing_rod") && Crew->CanUseHands();
+	N.RodSwing = Crew->GetAngler() ? Crew->GetAngler()->GetRodSwing() : 0.f;
+	if (const ARiptideRaft* Raft = Crew->GetRowingRaft())
+	{
+		FVector Left, Right;
+		Raft->GetOarHandles(Left, Right);
+		const FTransform Component = GetSkelMeshComponent()->GetComponentTransform();
+		N.bRowing = true;
+		N.OarHandleL = Component.InverseTransformPosition(Left);
+		N.OarHandleR = Component.InverseTransformPosition(Right);
+	}
 
 	const bool bFalling = Move && Move->IsFalling() && !Crew->IsInSea() && !Crew->IsClimbing();
 	N.FallTime = bFalling ? Inputs.FallTime + DeltaSeconds : 0.f;
@@ -255,12 +296,27 @@ void FRiptideCrewAnimProxy::Update(float DeltaSeconds)
 	if (WalkClip && JogClip)
 	{
 		const float JogW = FMath::Clamp((SmoothedSpeed - 160.f) / 140.f, 0.f, 1.f);
+		const float SprintW = FMath::Clamp((SmoothedSpeed - 380.f) / 160.f, 0.f, 1.f);
+		const UAnimSequence* SprintClip = Clips.IsValidIndex(Sprint) ? Clips[Sprint] : nullptr;
 		const float Speed = FMath::Max(SmoothedSpeed, 40.f);
+		const float RunCycles = FMath::Lerp(Speed / JogClipSpeed / JogClip->GetPlayLength(),
+			SprintClip ? Speed / SprintClipSpeed / SprintClip->GetPlayLength() : Speed / JogClipSpeed / JogClip->GetPlayLength(), SprintW);
 		const float Cycles = In.bCrouched
 			? Speed / CrouchClipSpeed / (Clips[CrouchWalk] ? Clips[CrouchWalk]->GetPlayLength() : 2.f)
-			: FMath::Lerp(Speed / WalkClipSpeed / WalkClip->GetPlayLength(), Speed / JogClipSpeed / JogClip->GetPlayLength(), JogW);
+			: FMath::Lerp(Speed / WalkClipSpeed / WalkClip->GetPlayLength(), RunCycles, JogW);
 		StridePhase = FMath::Frac(StridePhase + (bBackwards ? -1.f : 1.f) * Cycles * DeltaSeconds + 1.f);
 	}
+	// The action over the upper body fades in and out round its clip.
+	const bool bActing = In.Action > 0 && In.Action < UE_ARRAY_COUNT(ActionClips);
+	float ActionGoal = 0.f;
+	if (bActing)
+	{
+		const FActionClip& Act = ActionClips[In.Action];
+		const UAnimSequence* Clip = Clips.IsValidIndex(Act.Clip) ? Clips[Act.Clip] : nullptr;
+		const float Length = Act.Seconds > 0.f ? Act.Seconds : Clip ? Clip->GetPlayLength() : 0.f;
+		ActionGoal = Act.bLoop || In.ActionTime < Length - 0.1f ? 1.f : 0.f;
+	}
+	ActionWeight = FMath::FInterpConstantTo(ActionWeight, ActionGoal, DeltaSeconds, 1.f / 0.12f);
 	const float SwimGoal = FMath::Clamp((In.Speed - 40.f) / 110.f, 0.f, 1.f);
 	SwimWeight = FMath::FInterpTo(SwimWeight, SwimGoal, DeltaSeconds, 4.f);
 	SwimPhase = FMath::Frac(SwimPhase + DeltaSeconds * FMath::Clamp(In.Speed / 110.f, 0.7f, 1.4f) / 1.33f);
@@ -406,13 +462,23 @@ void FRiptideCrewAnimProxy::Locomotion(FPoseContext& Out) const
 	else
 	{
 		const float JogW = FMath::Clamp((S - 160.f) / 140.f, 0.f, 1.f);
+		const float SprintW = FMath::Clamp((S - 380.f) / 160.f, 0.f, 1.f);
 		const UAnimSequence* WalkClip = Clips[Walk];
 		const UAnimSequence* JogClip = Clips[Jog];
+		const UAnimSequence* SprintClip = Clips.IsValidIndex(Sprint) ? Clips[Sprint] : nullptr;
 		Sample(Walk, StridePhase * (WalkClip ? WalkClip->GetPlayLength() : 1.f), true, Moving);
 		if (JogW > 0.01f)
 		{
 			FPoseContext Running(Out);
 			Sample(Jog, StridePhase * (JogClip ? JogClip->GetPlayLength() : 1.f), true, Running);
+			if (SprintW > 0.01f && SprintClip)
+			{
+				// Flat out: the sprint over the jog.
+				FPoseContext Sprinting(Out);
+				Sample(Sprint, StridePhase * SprintClip->GetPlayLength(), true, Sprinting);
+				float RW = 1.f - SprintW;
+				BlendInto(Running, RW, Sprinting, SprintW);
+			}
 			float W = 1.f - JogW;
 			BlendInto(Moving, W, Running, JogW);
 		}
@@ -503,15 +569,143 @@ namespace
 {
 	/** Where a hand's bones put it: its fingers' direction (wrist to middle knuckle), and the way its palm faces. */
 	void HandFrame(const FCSPose<FCompactPose>& CS, FCompactPoseBoneIndex Hand, FCompactPoseBoneIndex Middle, FCompactPoseBoneIndex Index,
-		FCompactPoseBoneIndex Pinky, bool bLeft, FVector& OutFingers, FVector& OutPalm)
+		FCompactPoseBoneIndex Pinky, FVector& OutFingers, FVector& OutPalm)
 	{
 		FCSPose<FCompactPose>& Pose = const_cast<FCSPose<FCompactPose>&>(CS);
 		const FVector W = Pose.GetComponentSpaceTransform(Hand).GetLocation();
 		OutFingers = (Pose.GetComponentSpaceTransform(Middle).GetLocation() - W).GetSafeNormal();
 		const FVector Across = Pose.GetComponentSpaceTransform(Index).GetLocation() - Pose.GetComponentSpaceTransform(Pinky).GetLocation();
-		// The palm is the side the fingers close toward: under a right hand held palm down with its index to the left,
-		// and the mirror of that for a left hand.
-		OutPalm = (FVector::CrossProduct(OutFingers, Across) * (bLeft ? 1.f : -1.f)).GetSafeNormal();
+		// The palm is the side the fingers close toward. On this rig Fingers x Across comes out of the palm of either
+		// hand (its left hand's bones mirror the right's), as the rifle hold and the fishing rod's grip show.
+		OutPalm = FVector::CrossProduct(OutFingers, Across).GetSafeNormal();
+	}
+}
+
+namespace
+{
+	/** A hand closed round something: where its middle knuckle goes, the way its fingers point and its palm faces,
+	 * which way the elbow bends, and how far each finger joint curls (index and thumb apart from the rest). */
+	struct FGrip
+	{
+		bool bLeft = false;
+		FVector Fingers, Palm, Knuckles, Pole;
+		float Curl[3] = {};
+		float IndexCurl[3] = {};
+		float ThumbCurl[3] = {};
+	};
+
+	void SetCurl(float (&Dest)[3], float A, float B, float C)
+	{
+		Dest[0] = A;
+		Dest[1] = B;
+		Dest[2] = C;
+	}
+
+	/** Puts a hand where a grip says: the arm reached so the knuckles land in place, the hand turned to point and face
+	 * as it should, the fingers closed toward the palm joint by joint. */
+	void ApplyGrip(FCSPose<FCompactPose>& CS, const FGrip& G, TFunctionRef<FCompactPoseBoneIndex(const FString&)> Bone)
+	{
+		const FString Side = G.bLeft ? TEXT("_l") : TEXT("_r");
+		auto SideBone = [&](const TCHAR* Name) { return Bone(FString(Name) + Side); };
+		const FCompactPoseBoneIndex Hand = SideBone(TEXT("hand")), Middle = SideBone(TEXT("middle_01")), Index = SideBone(TEXT("index_01")), Pinky = SideBone(TEXT("pinky_01"));
+		if (!Hand.IsValid() || !Middle.IsValid() || !Index.IsValid() || !Pinky.IsValid())
+		{
+			return;
+		}
+		const float HandLength = FVector::Dist(CS.GetComponentSpaceTransform(Hand).GetLocation(), CS.GetComponentSpaceTransform(Middle).GetLocation());
+		Reach(CS, SideBone(TEXT("upperarm")), SideBone(TEXT("lowerarm")), Hand, G.Knuckles - G.Fingers * HandLength, G.Pole, true);
+		FVector Fingers, Palm;
+		HandFrame(CS, Hand, Middle, Index, Pinky, Fingers, Palm);
+		const FQuat From = FRotationMatrix::MakeFromXZ(Fingers, Palm).ToQuat();
+		const FQuat To = FRotationMatrix::MakeFromXZ(G.Fingers, G.Palm).ToQuat();
+		TurnBone(CS, Hand, To * From.Inverse());
+		HandFrame(CS, Hand, Middle, Index, Pinky, Fingers, Palm);
+		for (const TCHAR* Finger : { TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky"), TEXT("thumb") })
+		{
+			const FString Name(Finger);
+			const float* Angles = Name == TEXT("thumb") ? G.ThumbCurl : Name == TEXT("index") ? G.IndexCurl : G.Curl;
+			for (int32 Joint = 1; Joint <= 3; ++Joint)
+			{
+				const FCompactPoseBoneIndex J = Bone(FString::Printf(TEXT("%s_%02d%s"), Finger, Joint, *Side));
+				const FCompactPoseBoneIndex Next = Bone(Joint < 3 ? FString::Printf(TEXT("%s_%02d%s"), Finger, Joint + 1, *Side)
+					: FString::Printf(TEXT("%s_04_leaf%s"), Finger, *Side));
+				if (!J.IsValid() || !Next.IsValid())
+				{
+					continue;
+				}
+				const FVector Along = (CS.GetComponentSpaceTransform(Next).GetLocation() - CS.GetComponentSpaceTransform(J).GetLocation()).GetSafeNormal();
+				const FVector Axis = FVector::CrossProduct(Along, Palm).GetSafeNormal();
+				if (!Axis.IsNearlyZero())
+				{
+					TurnBone(CS, J, FQuat(Axis, FMath::DegreesToRadians(Angles[Joint - 1])));
+				}
+			}
+		}
+	}
+
+	/** The rod's handle radius at the grips (riptide_item_catalog.py's build_fishing_rod). */
+	constexpr float RodHandleRadius = 1.1f;
+}
+
+void FRiptideCrewAnimProxy::HoldRod(FCSPose<FCompactPose>& CS, float Weight) const
+{
+	// A spinning rod's hold: the right hand round the reel seat from the handle's right side, a fist with the thumb
+	// on top and the fingers wrapping under; the left hand on the reel's crank below it; the elbows down.
+	const FCompactPoseBoneIndex ArmR = B(TEXT("upperarm_r"));
+	if (!ArmR.IsValid() || !B(TEXT("middle_01_l")).IsValid() || Weight < 0.01f)
+	{
+		return;
+	}
+	const FTransform Rod = URiptideCrewBodyComponent::RodInComponent(CS.GetComponentSpaceTransform(ArmR).GetLocation(), In.AimPitch, In.RodSwing);
+	const FVector Along = Rod.GetRotation().GetForwardVector();
+	const FVector Down = Rod.GetRotation().GetRightVector();
+	const FVector RodLeft = (BodyLeft - Along * FVector::DotProduct(BodyLeft, Along)).GetSafeNormal();
+	FGrip Right;
+	Right.Fingers = (Along * 0.45f + Down * 0.9f).GetSafeNormal();
+	Right.Palm = RodLeft;
+	Right.Knuckles = Rod.GetLocation() - RodLeft * (RodHandleRadius + PalmThickness) + Down * 1.5f;
+	Right.Pole = CS.GetComponentSpaceTransform(ArmR).GetLocation() - BodyLeft * 30.f - BodyForward * 10.f - FVector(0.f, 0.f, 40.f);
+	SetCurl(Right.Curl, 80.f, 90.f, 55.f);
+	SetCurl(Right.IndexCurl, 70.f, 80.f, 45.f);
+	SetCurl(Right.ThumbCurl, 25.f, 25.f, 20.f);
+	// The crank's knob, a hand's breadth under the rod on its left: pinched between the fingers and thumb.
+	FGrip LeftHand;
+	LeftHand.bLeft = true;
+	LeftHand.Fingers = (Down * 0.6f + Along * 0.6f - RodLeft * 0.3f).GetSafeNormal();
+	LeftHand.Palm = -RodLeft;
+	LeftHand.Knuckles = Rod.GetLocation() + Down * 9.f + RodLeft * 7.f + Along * 1.f;
+	LeftHand.Pole = CS.GetComponentSpaceTransform(B(TEXT("upperarm_l"))).GetLocation() + BodyLeft * 25.f - FVector(0.f, 0.f, 45.f);
+	SetCurl(LeftHand.Curl, 55.f, 65.f, 45.f);
+	SetCurl(LeftHand.IndexCurl, 50.f, 60.f, 40.f);
+	SetCurl(LeftHand.ThumbCurl, 30.f, 30.f, 25.f);
+	auto BoneOf = [this](const FString& Name) { return B(*Name); };
+	ApplyGrip(CS, Right, BoneOf);
+	ApplyGrip(CS, LeftHand, BoneOf);
+}
+
+void FRiptideCrewAnimProxy::HoldOars(FCSPose<FCompactPose>& CS) const
+{
+	// An overhand grip on each oar's handle: palm down on it, fingers over the front and closed round it, the elbows
+	// down and out to the sides.
+	if (!B(TEXT("upperarm_r")).IsValid() || !B(TEXT("middle_01_l")).IsValid())
+	{
+		return;
+	}
+	auto BoneOf = [this](const FString& Name) { return B(*Name); };
+	for (const bool bLeftHand : { false, true })
+	{
+		const FVector Handle = bLeftHand ? In.OarHandleL : In.OarHandleR;
+		FGrip G;
+		G.bLeft = bLeftHand;
+		G.Palm = FVector(0.f, 0.f, -1.f);
+		G.Fingers = BodyForward;
+		G.Knuckles = Handle + FVector(0.f, 0.f, 2.f + PalmThickness) + BodyForward * 2.f;
+		G.Pole = CS.GetComponentSpaceTransform(B(bLeftHand ? TEXT("upperarm_l") : TEXT("upperarm_r"))).GetLocation()
+			+ BodyLeft * (bLeftHand ? 30.f : -30.f) - FVector(0.f, 0.f, 40.f);
+		SetCurl(G.Curl, 80.f, 90.f, 55.f);
+		SetCurl(G.IndexCurl, 75.f, 85.f, 50.f);
+		SetCurl(G.ThumbCurl, 30.f, 30.f, 25.f);
+		ApplyGrip(CS, G, BoneOf);
 	}
 }
 
@@ -538,16 +732,6 @@ void FRiptideCrewAnimProxy::MenuRifle(FPoseContext& Out) const
 	const FVector RifleUp = Rifle.GetRotation().GetUpVector();
 	const FVector RifleLeft = -Rifle.GetRotation().GetRightVector();
 
-	struct FGrip
-	{
-		bool bLeft = false;
-		FVector Fingers, Palm, Knuckles, Pole;     // where the hand points, faces and has its middle knuckle; the elbow's way
-		float Curl[3] = {};
-		float IndexCurl[3] = {};
-		float ThumbCurl[3] = {};
-	};
-	auto SetCurl = [](float (&Dest)[3], float A, float B, float C) { Dest[0] = A; Dest[1] = B; Dest[2] = C; };
-
 	// Right: on the pistol grip, palm against its right side, fingers round its front (the index lighter, along the
 	// trigger guard), the elbow out and down. The grip rakes back, so the fingers point square across it.
 	const FVector GripAxis = (-Barrel * 0.28f - RifleUp * 0.96f).GetSafeNormal();
@@ -570,47 +754,9 @@ void FRiptideCrewAnimProxy::MenuRifle(FPoseContext& Out) const
 	SetCurl(LeftHand.IndexCurl, 50.f, 65.f, 40.f);
 	SetCurl(LeftHand.ThumbCurl, 25.f, 20.f, 25.f);
 
-	for (const FGrip* G : { &Right, &LeftHand })
-	{
-		const FString Side = G->bLeft ? TEXT("_l") : TEXT("_r");
-		auto SideBone = [&](const TCHAR* Name) { return B(*(FString(Name) + Side)); };
-		const FCompactPoseBoneIndex Hand = SideBone(TEXT("hand")), Middle = SideBone(TEXT("middle_01")), Index = SideBone(TEXT("index_01")), Pinky = SideBone(TEXT("pinky_01"));
-		if (!Hand.IsValid() || !Middle.IsValid() || !Index.IsValid() || !Pinky.IsValid())
-		{
-			continue;
-		}
-		const float HandLength = FVector::Dist(CS.GetComponentSpaceTransform(Hand).GetLocation(), CS.GetComponentSpaceTransform(Middle).GetLocation());
-		// The wrist where the knuckles land in place, then the hand turned to point and face as it should.
-		Reach(CS, SideBone(TEXT("upperarm")), SideBone(TEXT("lowerarm")), Hand, G->Knuckles - G->Fingers * HandLength, G->Pole, true);
-		FVector Fingers, Palm;
-		HandFrame(CS, Hand, Middle, Index, Pinky, G->bLeft, Fingers, Palm);
-		const FQuat From = FRotationMatrix::MakeFromXZ(Fingers, Palm).ToQuat();
-		const FQuat To = FRotationMatrix::MakeFromXZ(G->Fingers, G->Palm).ToQuat();
-		TurnBone(CS, Hand, To * From.Inverse());
-		// The fingers close toward the palm, joint by joint (each about the axis across its own bone).
-		HandFrame(CS, Hand, Middle, Index, Pinky, G->bLeft, Fingers, Palm);
-		for (const TCHAR* Finger : { TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky"), TEXT("thumb") })
-		{
-			const FString Name(Finger);
-			const float* Angles = Name == TEXT("thumb") ? G->ThumbCurl : Name == TEXT("index") ? G->IndexCurl : G->Curl;
-			for (int32 Joint = 1; Joint <= 3; ++Joint)
-			{
-				const FCompactPoseBoneIndex J = B(*FString::Printf(TEXT("%s_%02d%s"), Finger, Joint, *Side));
-				const FCompactPoseBoneIndex Next = B(*(Joint < 3 ? FString::Printf(TEXT("%s_%02d%s"), Finger, Joint + 1, *Side)
-					: FString::Printf(TEXT("%s_04_leaf%s"), Finger, *Side)));
-				if (!J.IsValid() || !Next.IsValid())
-				{
-					continue;
-				}
-				const FVector Along = (CS.GetComponentSpaceTransform(Next).GetLocation() - CS.GetComponentSpaceTransform(J).GetLocation()).GetSafeNormal();
-				const FVector Axis = FVector::CrossProduct(Along, Palm).GetSafeNormal();
-				if (!Axis.IsNearlyZero())
-				{
-					TurnBone(CS, J, FQuat(Axis, FMath::DegreesToRadians(Angles[Joint - 1])));
-				}
-			}
-		}
-	}
+	auto BoneOf = [this](const FString& Name) { return B(*Name); };
+	ApplyGrip(CS, Right, BoneOf);
+	ApplyGrip(CS, LeftHand, BoneOf);
 	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CS), Out.Pose);
 }
 
@@ -716,6 +862,23 @@ bool FRiptideCrewAnimProxy::Evaluate(FPoseContext& Output)
 		return true;
 	}
 
+	// An action (a punch, a reach for something, eating) plays over the upper body while the legs carry on.
+	if (ActionWeight > 0.01f && In.Action > 0 && In.Action < UE_ARRAY_COUNT(ActionClips))
+	{
+		const FActionClip& Act = ActionClips[In.Action];
+		FPoseContext Acting(Output);
+		Sample(Act.Clip, In.ActionTime, Act.bLoop, Acting);
+		FPoseContext Result(Output);
+		TArray<float> Upper = UpperBody;
+		for (float& W : Upper)
+		{
+			W *= ActionWeight;
+		}
+		FAnimationPoseData A(Output), Bp(Acting), R(Result);
+		FAnimationRuntime::BlendTwoPosesTogetherPerBone(A, Bp, Upper, R);
+		Output.Pose.CopyBonesFrom(Result.Pose);
+	}
+
 	// The clips' hips are at the height for their rig's legs: raised or lowered for this body's.
 	const FCompactPoseBoneIndex Pelvis = B(TEXT("pelvis"));
 	if (Pelvis.IsValid())
@@ -739,6 +902,52 @@ bool FRiptideCrewAnimProxy::Evaluate(FPoseContext& Output)
 			CS.SafeSetCSBoneTransforms({ FBoneTransform(Spine, T) });
 		}
 	}
+	// Posture: the clips hunch, more the faster they go (walking carried the head 37 cm ahead of the hips, sprinting
+	// 48 cm, the neck craned well forward). On their feet the upper body is eased back so the head rides no further
+	// ahead of the hips than a person's would: a few centimetres standing, more running, more again crouched. Most of
+	// it comes from the lower spine; then the neck is held back from jutting, the head turned to keep the gaze level.
+	if (Upright > 0.01f)
+	{
+		const FCompactPoseBoneIndex Hips = B(TEXT("pelvis")), Neck = B(TEXT("neck_01")), Skull = B(TEXT("Head"));
+		if (Hips.IsValid() && Neck.IsValid() && Skull.IsValid())
+		{
+			const float Run = FMath::Clamp(SmoothedSpeed / 600.f, 0.f, 1.f);
+			const float Allowed = In.bCrouched ? 28.f : FMath::Lerp(6.f, 26.f, Run);
+			const TPair<const TCHAR*, float> Shares[] = { { TEXT("spine_01"), 0.35f }, { TEXT("spine_02"), 0.35f }, { TEXT("spine_03"), 0.3f } };
+			float EasedBack = 0.f;
+			for (int32 Pass = 0; Pass < 2; ++Pass)
+			{
+				const FVector Lean = CS.GetComponentSpaceTransform(Skull).GetLocation() - CS.GetComponentSpaceTransform(Hips).GetLocation();
+				const float Ahead = FVector::DotProduct(Lean, BodyForward);
+				const float Height = FMath::Max(20.f, Lean.Z);
+				if (Ahead <= Allowed)
+				{
+					break;
+				}
+				const float Back = FMath::RadiansToDegrees(FMath::Atan2(Ahead - Allowed, Height)) * Upright;
+				for (const auto& Share : Shares)
+				{
+					TurnBone(CS, B(Share.Key), FQuat(BodyLeft, FMath::DegreesToRadians(Back * Share.Value)));
+				}
+				EasedBack += Back;
+			}
+			// The spine taking the head back with it would tip the face up: it's turned back down by as much, so the
+			// eyes look where the clip had them looking (a straighter back, not a chin in the air).
+			if (EasedBack > 0.f)
+			{
+				TurnBone(CS, Skull, FQuat(BodyLeft, FMath::DegreesToRadians(-EasedBack)));
+			}
+			// The neck: no more than 22 degrees off upright (standing it's about 18).
+			const FVector NeckLine = CS.GetComponentSpaceTransform(Skull).GetLocation() - CS.GetComponentSpaceTransform(Neck).GetLocation();
+			const float NeckTilt = FMath::RadiansToDegrees(FMath::Atan2(FVector::DotProduct(NeckLine, BodyForward), FMath::Max(1.f, NeckLine.Z)));
+			if (NeckTilt > 22.f)
+			{
+				const float Lift = (NeckTilt - 22.f) * 0.9f * Upright;
+				TurnBone(CS, Neck, FQuat(BodyLeft, FMath::DegreesToRadians(Lift)));
+				TurnBone(CS, Skull, FQuat(BodyLeft, FMath::DegreesToRadians(-Lift * 0.7f)));
+			}
+		}
+	}
 	// Looking up and down: the chest, neck and head share the look's pitch (only on their feet: swimming,
 	// climbing or down on the deck the pose is the clip's).
 	const float Pitch = FMath::Clamp(In.AimPitch, -70.f, 70.f) * Upright;
@@ -750,6 +959,15 @@ bool FRiptideCrewAnimProxy::Evaluate(FPoseContext& Output)
 		{
 			TurnBone(CS, B(Share.Key), FQuat(BodyLeft, FMath::DegreesToRadians(Pitch * Share.Value)));
 		}
+	}
+	// A fishing rod in hand: both hands on it, on their feet.
+	if (In.bHoldingRod)
+	{
+		HoldRod(CS, Upright);
+	}
+	if (In.bRowing)
+	{
+		HoldOars(CS);
 	}
 	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CS), Output.Pose);
 

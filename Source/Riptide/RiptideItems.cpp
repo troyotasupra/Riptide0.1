@@ -2,69 +2,86 @@
 
 #define LOCTEXT_NAMESPACE "RiptideItems"
 
+TArray<FRiptideItemDef> RiptideItems_BuildTable();     // Data/RiptideItemTable.cpp
+
 namespace
 {
-	const FText AmmoHint = LOCTEXT("AmmoHint", "Rounds for one calibre of gun: they don't fit anything else.");
-	const FText ComingSoon = LOCTEXT("ComingSoon", "Not usable yet: it arrives in a later update.");
-
-	TArray<FRiptideItemDef> BuildTable()
+	struct FTables
 	{
-		auto Item = [](const TCHAR* Id, const FText& Name, const FText& Category, int32 W, int32 H, int32 Stack, float Kg, int32 Rarity,
-			const FText& Hint)
+		TArray<FRiptideItemDef> Items;
+		TMap<FName, int32> Index;
+		TMap<FName, TArray<FName>> Groups;
+
+		FTables()
 		{
-			FRiptideItemDef Def;
-			Def.Id = FName(Id);
-			Def.Name = Name;
-			Def.Category = Category;
-			Def.Size = FIntPoint(W, H);
-			Def.Stack = Stack;
-			Def.WeightKg = Kg;
-			Def.Rarity = Rarity;
-			Def.Hint = Hint;
-			return Def;
-		};
-		const FText Ammo = LOCTEXT("Ammo", "Ammunition");
-		const FText Weapon = LOCTEXT("Weapon", "Weapon");
-		const FText Medical = LOCTEXT("Medical", "Medical");
-		const FText Food = LOCTEXT("Food", "Food");
-		const FText Drink = LOCTEXT("Drink", "Drink");
-		const FText Tool = LOCTEXT("Tool", "Tool");
-		const FText Material = LOCTEXT("Material", "Material");
-		const FText Part = LOCTEXT("Part", "Part");
-		const FText Chart = LOCTEXT("Chart", "Chart");
-		// Ids match the Godot build's item table where the item existed there.
-		return {
-			Item(TEXT("ammo_556"), LOCTEXT("ammo_556", "5.56"), Ammo, 1, 1, 60, 0.013f, 2, AmmoHint),
-			Item(TEXT("ammo_9mm"), LOCTEXT("ammo_9mm", "9mm"), Ammo, 1, 1, 60, 0.012f, 2, AmmoHint),
-			Item(TEXT("ammo_12ga"), LOCTEXT("ammo_12ga", "12 gauge"), Ammo, 1, 1, 30, 0.045f, 2, AmmoHint),
-			Item(TEXT("m4"), LOCTEXT("m4", "M4 carbine"), Weapon, 2, 4, 1, 3.1f, 3, ComingSoon),
-			Item(TEXT("m1911"), LOCTEXT("m1911", "M1911"), Weapon, 2, 2, 1, 1.1f, 2, ComingSoon),
-			Item(TEXT("flare_gun"), LOCTEXT("flare_gun", "Flare gun"), Weapon, 2, 1, 1, 0.6f, 2, ComingSoon),
-			Item(TEXT("flare"), LOCTEXT("flare", "Flare"), Material, 1, 1, 6, 0.15f, 1, ComingSoon),
-			Item(TEXT("bandage"), LOCTEXT("bandage", "Bandage"), Medical, 1, 1, 10, 0.05f, 1, LOCTEXT("bandage_hint", "Stops bleeding and heals a little.")),
-			Item(TEXT("first_aid_kit"), LOCTEXT("first_aid_kit", "First aid kit"), Medical, 2, 2, 1, 1.2f, 2, LOCTEXT("fak_hint", "A boat's trauma kit: dressings, tourniquets, splints.")),
-			Item(TEXT("ration_pack"), LOCTEXT("ration_pack", "Ration pack"), Food, 1, 2, 4, 0.6f, 1, LOCTEXT("ration_hint", "A sealed field meal. Keeps forever.")),
-			Item(TEXT("canteen_clean"), LOCTEXT("canteen_clean", "Canteen (clean water)"), Drink, 1, 2, 1, 1.f, 0, LOCTEXT("canteen_hint", "A litre of clean water.")),
-			Item(TEXT("rope"), LOCTEXT("rope", "Rope"), Material, 1, 1, 20, 0.1f, 1, LOCTEXT("rope_hint", "Mooring line, lashing, towing.")),
-			Item(TEXT("binoculars"), LOCTEXT("binoculars", "Binoculars"), Tool, 2, 1, 1, 0.9f, 2, ComingSoon),
-			Item(TEXT("handheld_radio"), LOCTEXT("handheld_radio", "Handheld radio"), Tool, 1, 2, 1, 0.4f, 2, ComingSoon),
-			Item(TEXT("tool_kit"), LOCTEXT("tool_kit", "Tool kit"), Tool, 3, 2, 1, 4.5f, 1, LOCTEXT("toolkit_hint", "Spanners, sockets and spares for fixing motors and hulls.")),
-			Item(TEXT("cleaning_kit"), LOCTEXT("cleaning_kit", "Cleaning kit"), Tool, 2, 1, 1, 0.3f, 1, ComingSoon),
-			Item(TEXT("sea_chart"), LOCTEXT("sea_chart", "Sea chart"), Chart, 1, 2, 1, 0.1f, 2, ComingSoon),
-			Item(TEXT("fuel_drum"), LOCTEXT("fuel_drum", "Fuel drum"), Part, 2, 3, 1, 18.f, 0, LOCTEXT("fuel_hint", "Twenty litres of outboard fuel in a steel drum.")),
-		};
-	}
+			Items = RiptideItems_BuildTable();
+			for (int32 i = 0; i < Items.Num(); ++i)
+			{
+				Index.Add(Items[i].Id, i);
+			}
+			// Recipes name these instead of one item; the first listed is spent first (data/item_table.gd GROUPS).
+			Groups.Add(TEXT("wood"), { TEXT("driftwood"), TEXT("log") });
+			Groups.Add(TEXT("baitfish"), { TEXT("raw_sardine"), TEXT("raw_mullet"), TEXT("raw_fish") });
+		}
+	};
 
-	const TArray<FRiptideItemDef>& Table()
+	const FTables& Tables()
 	{
-		static const TArray<FRiptideItemDef> Items = BuildTable();
-		return Items;
+		static const FTables T;
+		return T;
 	}
 }
 
 const FRiptideItemDef* RiptideItems::Find(FName Id)
 {
-	return Table().FindByPredicate([Id](const FRiptideItemDef& Def) { return Def.Id == Id; });
+	const int32* At = Tables().Index.Find(Id);
+	return At ? &Tables().Items[*At] : nullptr;
+}
+
+const TArray<FRiptideItemDef>& RiptideItems::All()
+{
+	return Tables().Items;
+}
+
+const TArray<FName>* RiptideItems::Group(FName Group)
+{
+	return Tables().Groups.Find(Group);
+}
+
+bool RiptideItems::Matches(FName Need, FName Id)
+{
+	if (Need == Id)
+	{
+		return true;
+	}
+	const TArray<FName>* Members = Group(Need);
+	return Members && Members->Contains(Id);
+}
+
+FText RiptideItems::KindName(ERiptideItemKind Kind)
+{
+	switch (Kind)
+	{
+	case ERiptideItemKind::Food: return LOCTEXT("Food", "Food");
+	case ERiptideItemKind::Drink: return LOCTEXT("Drink", "Drink");
+	case ERiptideItemKind::Material: return LOCTEXT("Material", "Material");
+	case ERiptideItemKind::Tool: return LOCTEXT("Tool", "Tool");
+	case ERiptideItemKind::Weapon: return LOCTEXT("Weapon", "Weapon");
+	case ERiptideItemKind::Ammo: return LOCTEXT("Ammo", "Ammunition");
+	case ERiptideItemKind::Attachment: return LOCTEXT("Attachment", "Attachment");
+	case ERiptideItemKind::Medical: return LOCTEXT("Medical", "Medical");
+	case ERiptideItemKind::Prosthetic: return LOCTEXT("Prosthetic", "Prosthetic");
+	case ERiptideItemKind::Book: return LOCTEXT("Book", "Book");
+	case ERiptideItemKind::Page: return LOCTEXT("Page", "Page");
+	case ERiptideItemKind::Note: return LOCTEXT("Note", "Note");
+	case ERiptideItemKind::Chart: return LOCTEXT("Chart", "Chart");
+	case ERiptideItemKind::Key: return LOCTEXT("Key", "Key");
+	case ERiptideItemKind::Kit: return LOCTEXT("Kit", "Kit");
+	case ERiptideItemKind::Wearable: return LOCTEXT("Wearable", "Clothing");
+	case ERiptideItemKind::Part: return LOCTEXT("Part", "Part");
+	case ERiptideItemKind::Bag: return LOCTEXT("Bag", "Bag");
+	}
+	return FText::GetEmpty();
 }
 
 FLinearColor RiptideItems::RarityColour(int32 Rarity)
@@ -105,6 +122,29 @@ FIntRect FRiptideItemGrid::RectOf(const FRiptideItem& Item)
 {
 	const FIntPoint Size = Footprint(Item.Id, Item.bRotated);
 	return FIntRect(Item.X, Item.Y, Item.X + Size.X, Item.Y + Size.Y);
+}
+
+FRiptideItem FRiptideItemGrid::NewStack(FName Id, int32 Count)
+{
+	FRiptideItem Stack;
+	Stack.Id = Id;
+	Stack.Count = Count;
+	if (const FRiptideItemDef* Def = RiptideItems::Find(Id))
+	{
+		if (Def->Tool.IsSet() && Def->Tool->Uses > 0)
+		{
+			Stack.Charges = Def->Tool->Uses;
+		}
+		else if (Def->Tool.IsSet() && Def->Tool->BurnSeconds > 0.f)
+		{
+			Stack.Charges = FMath::RoundToInt(Def->Tool->BurnSeconds);
+		}
+		else if (Def->Food.IsSet() && Def->Food->Sips > 0)
+		{
+			Stack.Charges = Def->Food->Sips;
+		}
+	}
+	return Stack;
 }
 
 const FRiptideItem* FRiptideItemGrid::Get(int32 Uid) const
@@ -217,24 +257,35 @@ bool FRiptideItemGrid::Place(FRiptideItem Stack, int32 X, int32 Y, bool bRotated
 
 int32 FRiptideItemGrid::Add(FName Id, int32 Count)
 {
-	const FRiptideItemDef* Def = RiptideItems::Find(Id);
+	return AddStack(NewStack(Id, Count));
+}
+
+int32 FRiptideItemGrid::AddStack(const FRiptideItem& Stack)
+{
+	const FRiptideItemDef* Def = RiptideItems::Find(Stack.Id);
+	int32 Count = Stack.Count;
 	if (!Def || Count <= 0)
 	{
 		return Count;
 	}
 	for (FRiptideItem& Item : Items)
 	{
-		if (Count > 0 && Item.Id == Id && Item.Count < Def->Stack)
+		if (Count > 0 && Item.CanMergeWith(Stack) && Item.Count < Def->Stack)
 		{
 			const int32 Moved = FMath::Min(Count, Def->Stack - Item.Count);
 			Item.Count += Moved;
 			Count -= Moved;
+			// Merged food keeps the earlier spoil time.
+			if (Stack.SpoilAt > 0.f && (Item.SpoilAt <= 0.f || Stack.SpoilAt < Item.SpoilAt))
+			{
+				Item.SpoilAt = Stack.SpoilAt;
+			}
 		}
 	}
 	while (Count > 0)
 	{
-		FRiptideItem Piece;
-		Piece.Id = Id;
+		FRiptideItem Piece = Stack;
+		Piece.Uid = 0;
 		Piece.Count = FMath::Min(Count, Def->Stack);
 		if (!Place(Piece))
 		{
@@ -270,6 +321,100 @@ FRiptideItem FRiptideItemGrid::Take(int32 Uid, int32 Count)
 	FRiptideItem Nothing;
 	Nothing.Count = 0;
 	return Nothing;
+}
+
+int32 FRiptideItemGrid::CountOf(FName Need) const
+{
+	int32 Total = 0;
+	for (const FRiptideItem& Item : Items)
+	{
+		if (RiptideItems::Matches(Need, Item.Id))
+		{
+			Total += Item.Count;
+		}
+	}
+	return Total;
+}
+
+int32 FRiptideItemGrid::Remove(FName Need, int32 Count)
+{
+	// A group is spent in its listed order: driftwood before logs.
+	TArray<FName> Order;
+	if (const TArray<FName>* Members = RiptideItems::Group(Need))
+	{
+		Order = *Members;
+	}
+	else
+	{
+		Order.Add(Need);
+	}
+	for (const FName Id : Order)
+	{
+		for (int32 i = 0; i < Items.Num() && Count > 0; )
+		{
+			if (Items[i].Id != Id)
+			{
+				++i;
+				continue;
+			}
+			const int32 Taken = FMath::Min(Count, Items[i].Count);
+			Items[i].Count -= Taken;
+			Count -= Taken;
+			if (Items[i].Count <= 0)
+			{
+				Items.RemoveAt(i);
+			}
+			else
+			{
+				++i;
+			}
+		}
+	}
+	return Count;
+}
+
+bool FRiptideItemGrid::HasTool(FName Type) const
+{
+	return FindTool(Type) != nullptr;
+}
+
+const FRiptideItem* FRiptideItemGrid::FindTool(FName Type) const
+{
+	return Items.FindByPredicate([Type](const FRiptideItem& Item)
+	{
+		const FRiptideItemDef* Def = RiptideItems::Find(Item.Id);
+		return Def && Def->IsTool(Type) && (!Def->Tool->Uses || Item.Charges > 0);
+	});
+}
+
+TArray<FName> FRiptideItemGrid::ToolTypes() const
+{
+	TArray<FName> Types;
+	for (const FRiptideItem& Item : Items)
+	{
+		const FRiptideItemDef* Def = RiptideItems::Find(Item.Id);
+		if (Def && Def->Tool.IsSet() && (!Def->Tool->Uses || Item.Charges > 0))
+		{
+			Types.AddUnique(Def->Tool->Type);
+		}
+	}
+	return Types;
+}
+
+int32 FRiptideItemGrid::Spoil(float Now)
+{
+	int32 Changed = 0;
+	for (FRiptideItem& Item : Items)
+	{
+		if (Item.SpoilAt > 0.f && Now >= Item.SpoilAt)
+		{
+			Item.Id = TEXT("spoiled_food");
+			Item.SpoilAt = 0.f;
+			Item.Charges = 0;
+			++Changed;
+		}
+	}
+	return Changed;
 }
 
 float FRiptideItemGrid::TotalWeight() const

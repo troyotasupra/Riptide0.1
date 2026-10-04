@@ -383,16 +383,16 @@ def swim_check(world, boat, walker, t):
 
 
 # A crew member in this look is put on the deck for a moment (as another player would see one): (Body, Skin, Hair,
-# HairColour, Beard, Headgear, Face, Camo, Vest, GearColour, Pack, Gloves). Female, long hair under a helmet, ballistic
-# glasses, woodland, plate carrier, ranger green, assault pack, gloves: what its body should wear.
-CREW_LOOK = [1, 1, 3, 3, 1, 1, 2, 1, 1, 1, 1, 1]
-CREW_PARTS = ["Body=SK_CrewFemale", "Uniform=SK_Uniform", "Boots=SK_Boots", "Gloves=SK_Gloves", "Hair=SK_Hair_Long_Hat",
-              "Headgear=SK_Helmet", "FaceCover=SK_BallisticGlasses", "Vest=SK_PlateCarrier", "Pack=SK_AssaultPack_OverPlate"]
+# HairColour, Beard, Headgear, Face, Camo, Vest, GearColour, Pack, Gloves, Shirt, Shorts, Footwear). Female, long hair,
+# a t-shirt, shorts and sandals: a castaway wears no military gear, whatever the look's gear choices say (it's found).
+CREW_LOOK = [1, 1, 3, 3, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1]
+CREW_PARTS = ["Body=SK_CrewFemale", "Hair=SK_Hair_Long", "Shirt=SK_TShirt", "Shorts=SK_Shorts", "Footwear=SK_Sandals"]
+CREW_GEAR = ("Uniform=", "Boots=", "Gloves=", "Headgear=", "FaceCover=", "Vest=", "Pack=")
 
 
 def crew_body_check(world, boat, walker, t):
     """The player's crew member has a body built from their look, hidden from their own eyes; a crew member put on the
-    deck in a chosen look wears exactly its parts (and no beard: she's female) and stands in its idle animation."""
+    deck in a chosen look wears exactly its castaway clothes (and no beard: she's female; no gear) and stands in its idle animation."""
     cb = state.setdefault("crew_body", {})
     if t < 3.0 or "done" in cb:
         return
@@ -403,6 +403,8 @@ def crew_body_check(world, boat, walker, t):
         look.set_editor_property("choices", CREW_LOOK)
         spot = boat.get_actor_transform().transform_location(unreal.Vector(-300.0, 60.0, 20.0 + 92.0))
         cb["other"] = unreal.RiptideCrewLibrary.spawn_crew_member(world, boat, spot, boat.get_actor_rotation().yaw, look)
+        # Someone else's body animates only while it's on screen, and nothing is drawn in a headless run: posed always.
+        cb["other"].get_crew_body().set_always_posed(True)
         cb["spawned"] = t
         return
     if t < cb["spawned"] + 1.0:
@@ -413,7 +415,7 @@ def crew_body_check(world, boat, walker, t):
         return
     cb["other_parts"] = other.get_crew_body().describe_parts()
     cb["other_state"] = str(other.get_crew_body().get_anim_state()).split(".")[-1].split(":")[0]
-    cb["parts_ok"] = all(part in cb["other_parts"].split(" ") for part in CREW_PARTS) and "Beard=" not in cb["other_parts"]
+    cb["parts_ok"] = all(part in cb["other_parts"].split(" ") for part in CREW_PARTS) and "Beard=" not in cb["other_parts"]         and not any(g in cb["other_parts"] for g in CREW_GEAR)
     if "in_sea" not in cb:
         log("t=%5.1f crew bodies: the player's %s (has a body %s); a crew member in look %s wears %s, animation %s" % (
             t, cb["walker_parts"], cb["walker_has_body"], CREW_LOOK, cb["other_parts"], cb["other_state"]))
@@ -508,7 +510,8 @@ def fuel_and_engine_check(world, boat, walker, t):
     fe = state.setdefault("fuel", {})
     xf = boat.get_actor_transform()
     if t >= 123.0 and "drum" not in fe:
-        walker.set_actor_location(xf.transform_location(unreal.Vector(-318.0, -90.0, 20.0 + 92.0)), False, True)
+        # Between the two stern lockers, so the one looked at is the only thing that decides which opens.
+        walker.set_actor_location(xf.transform_location(unreal.Vector(-318.0, 0.0, 20.0 + 92.0)), False, True)
         fe["drum"] = t
     if t >= 123.0 and "taken" not in fe:
         look_at(unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world(), walker,
@@ -785,7 +788,7 @@ def verdict():
                        "locker %s, %s stacks" % (stc.get("reach"), stc.get("took"))))
         cb = state.get("crew_body", {})
         checks.append(("the crew member has a skeletal body built from the look, and another in a chosen look wears exactly its parts",
-                       bool(cb.get("walker_has_body")) and "Uniform=" in cb.get("walker_parts", "") and bool(cb.get("parts_ok"))
+                       bool(cb.get("walker_has_body")) and "Shorts=" in cb.get("walker_parts", "") and bool(cb.get("parts_ok"))
                        and cb.get("other_state") == "GROUND", "%s" % cb.get("other_parts")))
         ca = state.get("crew_anim", {})
         for key, what in (("walk", "walking (standing or holding on)"), ("swim", "swimming"), ("ladder", "on the ladder"), ("helm", "at the helm")):

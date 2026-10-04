@@ -26,8 +26,12 @@
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
 #include "RiptideDevPanel.h"
+#include "RiptideItems.h"
 #include "RiptideSprayComponent.h"
+#include "RiptideWorldItem.h"
 #include "RiptideVoice.h"
+#include "RiptideHudOverlay.h"
+#include "RiptideSkyClock.h"
 #include "WaterBodyComponent.h"
 #include "WaterBodyOceanActor.h"
 #include "Widgets/SWeakWidget.h"
@@ -249,7 +253,7 @@ void ARiptidePlayerController::DevNote(const FString& Text, const FColor& Colour
 {
 	if (GEngine && IsLocalController())
 	{
-		GEngine->AddOnScreenDebugMessage(DevNoteKey, Seconds, Colour, Text);
+		RiptideHud::Note(this, Text, Seconds, FLinearColor(Colour), int32(DevNoteKey & 0x7fffffff));
 	}
 	UE_LOG(LogRiptideDev, Log, TEXT("Dev: %s"), *Text);
 }
@@ -678,6 +682,16 @@ void ARiptidePlayerController::SetTimeOfDay(ERiptideTimeOfDay InTime)
 	{
 		return;
 	}
+	// In a game with a running day, the time of day is the sky clock's: set it, and the sun follows.
+	if (ARiptideSkyClock* Clock = ARiptideSkyClock::Get(this))
+	{
+		const float Hour = InTime == ERiptideTimeOfDay::GoldenHour ? 17.f : InTime == ERiptideTimeOfDay::Dusk ? 18.3f
+			: InTime == ERiptideTimeOfDay::Night ? 0.f : 12.f;
+		Clock->SetHours(Hour);
+		TimeOfDay = InTime;
+		DevNote(FString::Printf(TEXT("Time: %s (%02d:%02d)"), *TimeOfDayName(InTime), int32(Hour), int32(FMath::Frac(Hour) * 60.f)));
+		return;
+	}
 	ADirectionalLight* Sun = FindSun();
 	if (!Sun || !Sun->GetLightComponent())
 	{
@@ -918,6 +932,61 @@ void ARiptidePlayerController::SetGodMode(bool bOn)
 		Crew->SetSteadyFeet(bOn);
 	}
 	DevNote(bOn ? TEXT("God mode on: the deck never throws you, and the tank never empties") : TEXT("God mode off"));
+#endif
+}
+
+void ARiptidePlayerController::Give(const FString& Item, int32 Count)
+{
+#if RIPTIDE_WITH_DEV_MODE
+	ARiptideCharacter* Crew = GetCrewMember();
+	const FName Id(*Item.ToLower());
+	if (!CanUseDevMode() || !Crew || !Crew->HasAuthority())
+	{
+		DevNote(TEXT("Give: dev mode only, on the machine running the game"), FColor::Orange);
+		return;
+	}
+	if (!RiptideItems::Find(Id))
+	{
+		DevNote(FString::Printf(TEXT("No item called %s (type Items for the list)"), *Item), FColor::Orange);
+		return;
+	}
+	const int32 Left = Crew->GiveItem(Id, FMath::Max(Count, 1));
+	DevNote(FString::Printf(TEXT("Gave %d %s%s"), FMath::Max(Count, 1), *Item, Left > 0 ? TEXT(" (some on the ground: no room)") : TEXT("")));
+#endif
+}
+
+void ARiptidePlayerController::Spawn(const FString& Item, int32 Count)
+{
+#if RIPTIDE_WITH_DEV_MODE
+	ARiptideCharacter* Crew = GetCrewMember();
+	const FName Id(*Item.ToLower());
+	if (!CanUseDevMode() || !Crew || !Crew->HasAuthority())
+	{
+		DevNote(TEXT("Spawn: dev mode only, on the machine running the game"), FColor::Orange);
+		return;
+	}
+	if (!RiptideItems::Find(Id))
+	{
+		DevNote(FString::Printf(TEXT("No item called %s (type Items for the list)"), *Item), FColor::Orange);
+		return;
+	}
+	const FVector Forward = GetControlRotation().Vector();
+	const FVector At = (DevCamera ? DevCamera->GetActorLocation() : Crew->GetActorLocation() + FVector(0.f, 0.f, 60.f)) + Forward * 150.f;
+	ARiptideWorldItem::Drop(GetWorld(), FRiptideItemGrid::NewStack(Id, FMath::Max(Count, 1)), At, Forward * 80.f);
+	DevNote(FString::Printf(TEXT("Dropped %d %s"), FMath::Max(Count, 1), *Item));
+#endif
+}
+
+void ARiptidePlayerController::Items()
+{
+#if RIPTIDE_WITH_DEV_MODE
+	FString All;
+	for (const FRiptideItemDef& Def : RiptideItems::All())
+	{
+		All += (All.IsEmpty() ? TEXT("") : TEXT(", ")) + Def.Id.ToString();
+	}
+	UE_LOG(LogRiptideDev, Display, TEXT("Items: %s"), *All);
+	DevNote(FString::Printf(TEXT("%d items; the list is in the log (Items:)"), RiptideItems::All().Num()));
 #endif
 }
 

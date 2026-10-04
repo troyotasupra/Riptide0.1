@@ -82,8 +82,13 @@ private:
 	TSharedPtr<SWidgetSwitcher> Switcher;
 	TMap<ERiptideMenuScreen, TSharedPtr<SWidget>> FirstControl;
 
-	// Host
+	// Host: carry on with the saved world or start a new one, and who can join.
 	bool bFriendsOnly = true;
+	bool bContinue = true;
+	bool bHaveSave = false;
+	FText SaveSummary;
+	/** Reads what's saved, for the host screen. */
+	void RefreshSave();
 
 	// Join
 	TSharedPtr<SVerticalBox> GameList;

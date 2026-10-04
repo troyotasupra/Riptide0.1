@@ -1,4 +1,5 @@
 #include "RiptideBoat.h"
+#include "RiptideHudOverlay.h"
 
 #include "BuoyancyComponent.h"
 #include "Camera/CameraComponent.h"
@@ -267,14 +268,14 @@ ARiptideBoat::ARiptideBoat()
 	SearchlightBeam->SetupAttachment(SearchlightHead);
 	SearchlightBeam->SetRelativeLocation(FVector(13.f, 0.f, 0.f));
 	SearchlightBeam->SetIntensityUnits(ELightUnits::Candelas);
-	SearchlightBeam->SetIntensity(250000.f);
+	SearchlightBeam->SetIntensity(120000.f);
 	SearchlightBeam->SetAttenuationRadius(25000.f);
 	SearchlightBeam->SetInnerConeAngle(2.5f);
 	SearchlightBeam->SetOuterConeAngle(6.f);
 	SearchlightBeam->SetLightColor(FLinearColor(1.f, 0.96f, 0.88f));
 	// No shadows: at a searchlight's grazing angle the sea shadows its own lit patch and the beam never shows.
 	SearchlightBeam->SetCastShadows(false);
-	SearchlightBeam->SetVolumetricScatteringIntensity(1.5f);
+	SearchlightBeam->SetVolumetricScatteringIntensity(8.f);
 	SearchlightBeam->SetVisibility(false);
 	SearchlightModel = TSoftObjectPtr<UStaticMesh>(FSoftObjectPath(TEXT("/Game/Riptide/Boats/SM_Searchlight.SM_Searchlight")));
 	LampOnMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Riptide/Materials/MI_Boat_LampOn.MI_Boat_LampOn")));
@@ -733,7 +734,15 @@ void ARiptideBoat::SetUpLockers()
 	Stock(SternPort, TEXT("rope"), 10);
 	Stock(SternStarboard, TEXT("tool_kit"), 1);
 	Stock(SternStarboard, TEXT("cleaning_kit"), 1);
+	Stock(SternStarboard, TEXT("knife"), 1);
+	Stock(SternStarboard, TEXT("lighter"), 1);
+	Stock(SternStarboard, TEXT("fishing_rod"), 1);
+	Stock(SternStarboard, TEXT("lure"), 3);
 	Stock(Anchor, TEXT("rope"), 20);
+	Stock(Anchor, TEXT("paracord"), 2);
+	Stock(Anchor, TEXT("tarp"), 1);
+	Stock(Forward, TEXT("machete"), 1);
+	Stock(Forward, TEXT("canteen"), 1);
 }
 
 namespace
@@ -1356,7 +1365,7 @@ void ARiptideBoat::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ARiptideBoat, MotorOutputPort);
 	DOREPLIFETIME(ARiptideBoat, MotorOutputStarboard);
 	DOREPLIFETIME(ARiptideBoat, Helmsman);
-	DOREPLIFETIME(ARiptideBoat, bSearchlightOn);
+	DOREPLIFETIME(ARiptideBoat, SearchlightLevel);
 	DOREPLIFETIME(ARiptideBoat, bNavLightsOn);
 	DOREPLIFETIME(ARiptideBoat, bDeckLightsOn);
 	DOREPLIFETIME(ARiptideBoat, SearchlightYaw);
@@ -1632,9 +1641,14 @@ FTransform ARiptideBoat::GetDeckSpotTransform(int32 Index) const
 
 void ARiptideBoat::SetSearchlightOn(bool bOn)
 {
+	SetSearchlightLevel(bOn ? 2 : 0);
+}
+
+void ARiptideBoat::SetSearchlightLevel(uint8 Level)
+{
 	if (HasAuthority())
 	{
-		bSearchlightOn = bOn;
+		SearchlightLevel = FMath::Min<uint8>(Level, 2);
 		ApplyLights();
 	}
 }
@@ -1661,7 +1675,7 @@ void ARiptideBoat::ServerToggleLight_Implementation(uint8 Which)
 {
 	switch (Which)
 	{
-	case 0: SetSearchlightOn(!bSearchlightOn); break;
+	case 0: SetSearchlightLevel(SearchlightLevel == 0 ? 2 : SearchlightLevel - 1); break;   // off, full, dim, off
 	case 1: SetNavLightsOn(!bNavLightsOn); break;
 	default: SetDeckLightsOn(!bDeckLightsOn); break;
 	}
@@ -1690,14 +1704,25 @@ void ARiptideBoat::OnRep_Lights()
 
 void ARiptideBoat::ApplyLights()
 {
-	SearchlightBeam->SetVisibility(bSearchlightOn);
+	// Off, dimmed (a working light to see the deck and the water close by), or full (a beam a long way out).
+	SearchlightBeam->SetVisibility(SearchlightLevel > 0);
+	SearchlightBeam->SetIntensity(SearchlightLevel >= 2 ? 120000.f : 18000.f);
 	const int32 LampIndex = SearchlightHead->GetMaterialIndex(TEXT("Lamp"));
 	if (LampIndex != INDEX_NONE)
 	{
-		UMaterialInterface* Lens = bSearchlightOn ? LampOnMaterial.Get() : LampOffMaterial.Get();
-		if (Lens)
+		if (SearchlightLevel > 0 && LampOnMaterial.Get())
 		{
-			SearchlightHead->SetMaterial(LampIndex, Lens);
+			if (!LampLitLens)
+			{
+				LampLitLens = UMaterialInstanceDynamic::Create(LampOnMaterial.Get(), this);
+			}
+			// The lens itself blazes: seen from in front it should be the brightest thing on the boat.
+			LampLitLens->SetScalarParameterValue(TEXT("Glow"), SearchlightLevel >= 2 ? 600.f : 120.f);
+			SearchlightHead->SetMaterial(LampIndex, LampLitLens);
+		}
+		else if (LampOffMaterial.Get())
+		{
+			SearchlightHead->SetMaterial(LampIndex, LampOffMaterial.Get());
 		}
 	}
 	MastheadLight->SetVisibility(bNavLightsOn);
@@ -2348,31 +2373,24 @@ void ARiptideBoat::SetHelmInput(float Throttle, float Steer)
 
 void ARiptideBoat::DrawDebugHud() const
 {
-	if (!GEngine)
-	{
-		return;
-	}
-	const uint64 KeyBase = 0x52495054ull;
 	if (Helmsman)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 3, 0.f, FColor::White, IsHelmViewOnMic()
+		RiptideHud::Prompt(this, RiptideHud::ESlot::Helm, IsHelmViewOnMic()
 			? (MicHolder && MicHolder == Helmsman ? TEXT("E  Hang up the mic      Hold right mouse  Aim the searchlight      H  Tuning readout") : TEXT("E  Take the radio mic      Hold right mouse  Aim the searchlight      H  Tuning readout"))
-			: TEXT("E  Leave the helm      Hold right mouse  Aim the searchlight (L on/off)      Look at the radio mic + E  Take it      H  Tuning readout"));
+			: TEXT("E  Leave the helm      Hold right mouse  Aim the searchlight      L  Searchlight: full, dim, off      H  Tuning readout"));
 	}
 	if (!bShowDebugHud)
 	{
 		return;
 	}
-	GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
-		FString::Printf(TEXT("Speed %.1f kn   Throttle %+.0f%%   Engine %+.0f%%"),
-			GetSpeedKnots(), ThrottleLever * 100.f, EngineOutput * 100.f));
-	GEngine->AddOnScreenDebugMessage(KeyBase + 1, 0.f, FColor::White,
-		FString::Printf(TEXT("Motors %+.0f deg   Trim %+.0f deg (R/F)   Fuel %.1f L   Engine health %.0f%%"),
-			SteerAngleDeg, TrimDeg, FuelLiters, GetEngineHealth() * 100.f));
+	// The tuning readout (H): speed, controls, motors and props, on one line.
 	const bool bPort = IsPropSubmerged(Propeller);
 	const bool bStarboard = IsPropSubmerged(PropellerStarboard);
-	GEngine->AddOnScreenDebugMessage(KeyBase + 2, 0.f, bPort && bStarboard ? FColor::Green : bPort || bStarboard ? FColor::Yellow : FColor::Red,
-		bPort && bStarboard ? TEXT("Props in water") : bPort || bStarboard ? TEXT("One prop out of water") : TEXT("Props out of water"));
+	RiptideHud::Prompt(this, RiptideHud::ESlot::HelmReadout,
+		FString::Printf(TEXT("%.1f kn   throttle %+.0f%%   engine %+.0f%%   motors %+.0f deg   trim %+.0f deg (R/F)   fuel %.1f L   health %.0f%%   %s"),
+			GetSpeedKnots(), ThrottleLever * 100.f, EngineOutput * 100.f, SteerAngleDeg, TrimDeg, FuelLiters, GetEngineHealth() * 100.f,
+			bPort && bStarboard ? TEXT("props in water") : bPort || bStarboard ? TEXT("ONE PROP OUT") : TEXT("PROPS OUT")),
+		bPort && bStarboard ? FLinearColor::White : FLinearColor(1.f, 0.75f, 0.3f));
 }
 
 // --- Props and wheel ---

@@ -1,4 +1,5 @@
 #include "RiptideCharacter.h"
+#include "RiptideHudOverlay.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -14,13 +15,26 @@
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
 #include "Net/UnrealNetwork.h"
+#include "RiptideAngler.h"
 #include "RiptideBoat.h"
+#include "RiptideRaft.h"
+#include "RiptideChart.h"
+#include "RiptideChartPanel.h"
 #include "RiptideCharacterMovement.h"
+#include "RiptideCraftBook.h"
+#include "RiptideCraftingComponent.h"
 #include "RiptideCrewBody.h"
+#include "RiptideInteractionComponent.h"
+#include "RiptideItems.h"
 #include "RiptidePlayerState.h"
 #include "RiptideInventoryWidget.h"
+#include "RiptideWorldItem.h"
+#include "RiptideGameMode.h"
 #include "RiptideSettings.h"
+#include "RiptideSea.h"
 #include "RiptideStorageComponent.h"
+#include "RiptideStructure.h"
+#include "RiptideSurvivalComponent.h"
 #include "Engine/GameViewportClient.h"
 #include "Widgets/SWeakWidget.h"
 
@@ -43,6 +57,10 @@ ARiptideCharacter::ARiptideCharacter(const FObjectInitializer& ObjectInitializer
 	FirstPersonCamera->bUsePawnControlRotation = true;
 
 	Inventory = CreateDefaultSubobject<URiptideStorageComponent>(TEXT("Inventory"));
+	Interaction = CreateDefaultSubobject<URiptideInteractionComponent>(TEXT("Interaction"));
+	Crafting = CreateDefaultSubobject<URiptideCraftingComponent>(TEXT("Crafting"));
+	Survival = CreateDefaultSubobject<URiptideSurvivalComponent>(TEXT("Survival"));
+	Angler = CreateDefaultSubobject<URiptideAnglerComponent>(TEXT("Angler"));
 	BaseEyeHeight = 70.f;
 
 	bUseControllerRotationYaw = true;
@@ -71,13 +89,15 @@ ARiptideCharacter::ARiptideCharacter(const FObjectInitializer& ObjectInitializer
 	// A body nobody is controlling (its player away driving the boat, or a crew member whose player has left) still
 	// stands on the deck and rides along with it.
 	Move->bRunPhysicsWithNoController = true;
+	Move->GetNavAgentPropertiesRef().bCanCrouch = true;
+	Move->SetCrouchedHalfHeight(58.f);
 
 	// The body (built from the player's look in ApplyAppearance): feet on the bottom of the capsule, turned to face
-	// forward (the model faces its own +Y). Its own player never sees it (it would fill the first-person view),
-	// only its shadow; everyone else does.
+	// forward (the model faces its own +Y). Its own player sees it too, looking down: the camera sits at its eyes
+	// (Tick), and only what's on the face (glasses, a scarf) is kept out of the view.
 	URiptideCrewBodyComponent* Body = GetCrewBody();
 	Body->SetRelativeLocationAndRotation(FVector(0.f, 0.f, -88.f), FRotator(0.f, -90.f, 0.f));
-	Body->SetHiddenFromOwner(true);
+	Body->SetHiddenFromOwner(false);
 }
 
 URiptideCrewBodyComponent* ARiptideCharacter::GetCrewBody() const
@@ -90,13 +110,19 @@ void ARiptideCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ARiptideCharacter, HomeBoat);
 	DOREPLIFETIME(ARiptideCharacter, bManningHelm);
+	DOREPLIFETIME(ARiptideCharacter, bSleeping);
 	DOREPLIFETIME(ARiptideCharacter, OverboardCount);
 	DOREPLIFETIME(ARiptideCharacter, bBracing);
+	DOREPLIFETIME(ARiptideCharacter, bSprinting);
+	DOREPLIFETIME(ARiptideCharacter, Action);
+	DOREPLIFETIME(ARiptideCharacter, ActionStartTime);
 	DOREPLIFETIME(ARiptideCharacter, KnockdownEndTime);
 	DOREPLIFETIME(ARiptideCharacter, LadderState);
 	DOREPLIFETIME(ARiptideCharacter, LadderFeetZ);
 	DOREPLIFETIME(ARiptideCharacter, ClimbOverStart);
 	DOREPLIFETIME(ARiptideCharacter, LadderLeavePush);
+	DOREPLIFETIME(ARiptideCharacter, HeldItem);
+	DOREPLIFETIME(ARiptideCharacter, RowingRaft);
 }
 
 void ARiptideCharacter::BeginPlay()
@@ -167,6 +193,40 @@ void ARiptideCharacter::BuildInput()
 	WalkMapping->MapKey(BraceAction, EKeys::Gamepad_LeftShoulder);
 	WalkMapping->MapKey(InteractAction, EKeys::E);
 	WalkMapping->MapKey(InteractAction, EKeys::Gamepad_FaceButton_Left);
+	// A punch: the left mouse button (or the right trigger), empty-handed.
+	PunchAction = NewObject<UInputAction>(this, TEXT("IA_Punch"));
+	PunchAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(PunchAction, EKeys::LeftMouseButton);
+	WalkMapping->MapKey(PunchAction, EKeys::Gamepad_RightTrigger);
+	// G drops the first thing in the pockets on the ground.
+	DropAction = NewObject<UInputAction>(this, TEXT("IA_Drop"));
+	DropAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(DropAction, EKeys::G);
+	// B opens the crafting book.
+	CraftAction = NewObject<UInputAction>(this, TEXT("IA_Craft"));
+	CraftAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(CraftAction, EKeys::B);
+
+	// With something in hand: Q takes the rod out or puts it away; the left mouse button (above) casts and reels, the
+	// right picks the bait, F cuts the line.
+	HoldAction = NewObject<UInputAction>(this, TEXT("IA_Hold"));
+	HoldAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(HoldAction, EKeys::Q);
+	WalkMapping->MapKey(HoldAction, EKeys::Gamepad_DPad_Up);
+	SecondaryAction = NewObject<UInputAction>(this, TEXT("IA_Secondary"));
+	SecondaryAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(SecondaryAction, EKeys::RightMouseButton);
+	WalkMapping->MapKey(SecondaryAction, EKeys::Gamepad_LeftTrigger);
+	CutLineAction = NewObject<UInputAction>(this, TEXT("IA_CutLine"));
+	CutLineAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(CutLineAction, EKeys::F);
+	WalkMapping->MapKey(CutLineAction, EKeys::Gamepad_FaceButton_Top);
+
+	// M: the chart.
+	ChartAction = NewObject<UInputAction>(this, TEXT("IA_Chart"));
+	ChartAction->ValueType = EInputActionValueType::Boolean;
+	WalkMapping->MapKey(ChartAction, EKeys::M);
+	WalkMapping->MapKey(ChartAction, EKeys::Gamepad_DPad_Down);
 
 	InventoryAction = NewObject<UInputAction>(this, TEXT("IA_Inventory"));
 	InventoryAction->ValueType = EInputActionValueType::Boolean;
@@ -251,11 +311,27 @@ void ARiptideCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		Old->OnAppearanceChanged.Remove(AppearanceWatch);
 	}
 	CloseInventory();
+	CloseChart();
 	if (HasAuthority() && IsValid(HomeBoat) && HomeBoat->GetLadderUser() == this)
 	{
 		HomeBoat->SetLadderUser(nullptr);
 	}
+	NoteLeavingForSave();       // the game ending with them in it
 	Super::EndPlay(EndPlayReason);
+}
+
+void ARiptideCharacter::Destroyed()
+{
+	NoteLeavingForSave();       // their player leaving: noted while the body is still theirs (the pawn lets go of its
+	Super::Destroyed();         // controller before EndPlay)
+}
+
+void ARiptideCharacter::NoteLeavingForSave()
+{
+	if (ARiptideGameMode* Mode = HasAuthority() && GetWorld() ? GetWorld()->GetAuthGameMode<ARiptideGameMode>() : nullptr)
+	{
+		Mode->NotePlayerLeaving(this);
+	}
 }
 
 void ARiptideCharacter::NotifyControllerChanged()
@@ -295,15 +371,28 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	if (UEnhancedInputComponent* Input = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		Input->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnMove);
-		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetLadderInput(0.f); });
-		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetLadderInput(0.f); });
+		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetLadderInput(0.f); SetRowInput(0.f, 0.f); });
+		Input->BindActionValueLambda(MoveAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetLadderInput(0.f); SetRowInput(0.f, 0.f); });
 		Input->BindAction(LookAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnLook);
 		Input->BindAction(JumpAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnJump);
 		Input->BindAction(JumpAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnSwimUp);
 		Input->BindAction(DiveAction, ETriggerEvent::Triggered, this, &ARiptideCharacter::OnDive);
-		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Started, [this](const FInputActionValue&) { SetBracing(true); });
-		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetBracing(false); });
-		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetBracing(false); });
+		Input->BindAction(DiveAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnCrouchKey);
+		// Shift: hold on to a handhold if one is near, otherwise run.
+		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Started, [this](const FInputActionValue&) { SetBracing(true); SetSprinting(true); });
+		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetBracing(false); SetSprinting(false); });
+		Input->BindActionValueLambda(BraceAction, ETriggerEvent::Canceled, [this](const FInputActionValue&) { SetBracing(false); SetSprinting(false); });
+		Input->BindAction(PunchAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnPunch);
+		Input->BindAction(PunchAction, ETriggerEvent::Completed, this, &ARiptideCharacter::OnPrimaryReleased);
+		Input->BindAction(PunchAction, ETriggerEvent::Canceled, this, &ARiptideCharacter::OnPrimaryReleased);
+		Input->BindAction(HoldAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnHoldKey);
+		Input->BindActionValueLambda(ChartAction, ETriggerEvent::Started, [this](const FInputActionValue&) { IsChartOpen() ? CloseChart() : OpenChart(); });
+		Input->BindAction(SecondaryAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnSecondary);
+		Input->BindAction(CutLineAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnCutLine);
+		Input->BindAction(DropAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnDropKey);
+		Input->BindAction(CraftAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnCraftKey);
+		Input->BindAction(InteractAction, ETriggerEvent::Completed, this, &ARiptideCharacter::OnInteractReleased);
+		Input->BindAction(InteractAction, ETriggerEvent::Canceled, this, &ARiptideCharacter::OnInteractReleased);
 		Input->BindAction(InteractAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInteract);
 		Input->BindAction(InventoryAction, ETriggerEvent::Started, this, &ARiptideCharacter::OnInventoryKey);
 	}
@@ -311,6 +400,22 @@ void ARiptideCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 
 void ARiptideCharacter::OnMove(const FInputActionValue& Value)
 {
+	if (RowingRaft)
+	{
+		// At the oars: W and S pull ahead and back, A and D turn.
+		const FVector2D Axis = Value.Get<FVector2D>();
+		SetRowInput(Axis.Y, Axis.X);
+		return;
+	}
+	if (bSleeping)
+	{
+		// Moving gets up.
+		if (!Value.Get<FVector2D>().IsNearlyZero())
+		{
+			ServerWake();
+		}
+		return;
+	}
 	if (IsKnockedDown())
 	{
 		return;
@@ -343,7 +448,11 @@ void ARiptideCharacter::OnLook(const FInputActionValue& Value)
 
 void ARiptideCharacter::OnJump(const FInputActionValue& Value)
 {
-	if (IsOnLadder())
+	if (RowingRaft)
+	{
+		StopRowing();
+	}
+	else if (IsOnLadder())
 	{
 		LetGoOfLadder();
 	}
@@ -710,6 +819,45 @@ void ARiptideCharacter::ServerToggleMic_Implementation(bool bTake)
 	}
 }
 
+void ARiptideCharacter::SetSleeping(bool bSleep)
+{
+	if (!HasAuthority() || bSleeping == bSleep)
+	{
+		return;
+	}
+	bSleeping = bSleep;
+	// Curled up (crouched) where they lie; up again when they wake.
+	if (bSleep)
+	{
+		GetCharacterMovement()->StopMovementImmediately();
+		Crouch();
+	}
+	else
+	{
+		UnCrouch();
+	}
+}
+
+void ARiptideCharacter::ServerWake_Implementation()
+{
+	SetSleeping(false);
+}
+
+void ARiptideCharacter::WakeAfterNight(float SkippedSeconds)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	// A night's sleep: hungrier and thirstier (at under half the waking rate), warm, and somewhat mended.
+	if (Survival)
+	{
+		Survival->PassTimeAsleep(SkippedSeconds, 0.4f);
+		Survival->Heal(25.f);
+	}
+	SetSleeping(false);
+}
+
 void ARiptideCharacter::OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode)
 {
 	Super::OnMovementModeChanged(PrevMovementMode, PreviousCustomMode);
@@ -726,6 +874,31 @@ void ARiptideCharacter::OnMovementModeChanged(EMovementMode PrevMovementMode, ui
 
 void ARiptideCharacter::OnInteract(const FInputActionValue& Value)
 {
+	if (bSleeping)
+	{
+		ServerWake();
+		return;
+	}
+	if (RowingRaft)
+	{
+		StopRowing();
+		return;
+	}
+	// Swimming beside a raft, E climbs aboard it.
+	if (IsInSea() && Interaction && Interaction->HasFocus() && Cast<ARiptideRaft>(Interaction->GetFocus().Actor.Get()))
+	{
+		Interaction->BeginUse();
+		return;
+	}
+	// Whatever is under the crosshair comes first: a thing on the ground, a plant, a fire. A hand goes out to it.
+	if (!IsInSea() && !IsClimbing() && !IsKnockedDown() && !bManningHelm && !IsInventoryOpen())
+	{
+		StartAction(ERiptideCrewAction::Reach);
+		if (Interaction && Interaction->BeginUse())
+		{
+			return;
+		}
+	}
 	if (IsAtLadder())
 	{
 		TryClimbAboard();
@@ -768,22 +941,50 @@ int32 ARiptideCharacter::GetLockerInReach() const
 
 void ARiptideCharacter::OpenInventory(int32 Locker)
 {
+	OpenContainer(Locker != INDEX_NONE && HomeBoat ? HomeBoat->GetLockers() : nullptr, Locker);
+	OpenLocker = Locker;
+}
+
+void ARiptideCharacter::ClientOpenContainer_Implementation(URiptideStorageComponent* Container, int32 Index)
+{
+	OpenContainer(Container, Index);
+}
+
+void ARiptideCharacter::OpenContainer(URiptideStorageComponent* Container, int32 Index)
+{
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	if (!PC || !PC->IsLocalController() || IsInventoryOpen() || !GEngine || !GEngine->GameViewport)
 	{
 		return;
 	}
+	OpenedContainer = Container;
+	OpenedContainerIndex = Container ? Index : INDEX_NONE;
+	OpenLocker = INDEX_NONE;
 	TWeakObjectPtr<ARiptideCharacter> WeakThis(this);
 	InventoryWidget = SNew(SRiptideInventory)
 		.Carrying(Inventory)
-		.Container(Locker != INDEX_NONE && HomeBoat ? HomeBoat->GetLockers() : nullptr)
-		.ContainerIndex(Locker)
+		.Container(Container)
+		.ContainerIndex(Container ? Index : INDEX_NONE)
 		.OnMove(SRiptideInventory::FOnMove::CreateLambda([WeakThis](URiptideStorageComponent* From, int32 FromIndex, int32 Uid,
 			URiptideStorageComponent* To, int32 ToIndex, int32 X, int32 Y, bool bRotated, int32 Count)
 		{
 			if (ARiptideCharacter* Self = WeakThis.Get())
 			{
 				Self->ServerMoveItem(From, FromIndex, Uid, To, ToIndex, X, Y, bRotated, Count);
+			}
+		}))
+		.OnUse(SRiptideInventory::FOnItem::CreateLambda([WeakThis](URiptideStorageComponent* From, int32 FromIndex, int32 Uid)
+		{
+			if (ARiptideCharacter* Self = WeakThis.Get(); Self && From == Self->Inventory)
+			{
+				Self->UseItem(FromIndex, Uid);
+			}
+		}))
+		.OnDrop(SRiptideInventory::FOnItem::CreateLambda([WeakThis](URiptideStorageComponent* From, int32 FromIndex, int32 Uid)
+		{
+			if (ARiptideCharacter* Self = WeakThis.Get(); Self && From == Self->Inventory)
+			{
+				Self->DropItem(FromIndex, Uid, 0);
 			}
 		}))
 		.OnClose(FSimpleDelegate::CreateLambda([WeakThis]()
@@ -793,7 +994,6 @@ void ARiptideCharacter::OpenInventory(int32 Locker)
 				Self->CloseInventory();
 			}
 		}));
-	OpenLocker = Locker;
 	InventoryWidgetContainer = SNew(SWeakWidget).PossiblyNullContent(InventoryWidget);
 	GEngine->GameViewport->AddViewportWidgetContent(InventoryWidgetContainer.ToSharedRef(), 10);
 	FInputModeUIOnly Mode;
@@ -814,6 +1014,8 @@ void ARiptideCharacter::CloseInventory()
 	InventoryWidget.Reset();
 	InventoryWidgetContainer.Reset();
 	OpenLocker = INDEX_NONE;
+	OpenedContainer.Reset();
+	OpenedContainerIndex = INDEX_NONE;
 	if (!bWasOpen)
 	{
 		return;
@@ -923,6 +1125,12 @@ bool ARiptideCharacter::CanReach(const URiptideStorageComponent* Storage, int32 
 	{
 		// By distance from the eyes (the server doesn't know exactly where a client is looking).
 		return FVector::Dist(Storage->GetWorldPoint(Index), FirstPersonCamera->GetComponentLocation()) <= LockerReach * 1.4f;
+	}
+	// Anything else usable in the world (a bag on the ground, a crate): within reach of it.
+	if (Storage && Storage->GetStorage(Index) && Storage->GetOwner() && Cast<IRiptideInteractable>(Storage->GetOwner()))
+	{
+		const float Reach = Interaction ? Interaction->Reach : 260.f;
+		return FVector::Dist(Storage->GetOwner()->GetActorLocation(), FirstPersonCamera->GetComponentLocation()) <= Reach * 1.6f;
 	}
 	return false;
 }
@@ -1068,6 +1276,575 @@ void ARiptideCharacter::ServerSetBracing_Implementation(bool bHold)
 	bBracing = bHold;
 }
 
+// --- Sprinting, crouching, actions ---
+
+void ARiptideCharacter::SetSprinting(bool bRun)
+{
+	bSprinting = bRun;
+	if (!HasAuthority())
+	{
+		ServerSetSprinting(bRun);
+	}
+}
+
+void ARiptideCharacter::ServerSetSprinting_Implementation(bool bRun)
+{
+	bSprinting = bRun;
+}
+
+void ARiptideCharacter::OnCrouchKey(const FInputActionValue& Value)
+{
+	// C (or Ctrl) dives in the water (held: OnDive); on your feet it crouches, and again stands up.
+	if (IsInSea() || IsClimbing() || IsKnockedDown() || bManningHelm)
+	{
+		return;
+	}
+	if (bIsCrouched)
+	{
+		UnCrouch();
+	}
+	else
+	{
+		Crouch();
+	}
+}
+
+ERiptideCrewAction ARiptideCharacter::GetAction() const
+{
+	return Action;
+}
+
+float ARiptideCharacter::GetActionTime() const
+{
+	return float(ServerNow() - ActionStartTime);
+}
+
+void ARiptideCharacter::StartAction(ERiptideCrewAction NewAction)
+{
+	// Shown at once on this machine; the server's word reaches everyone else.
+	Action = NewAction;
+	ActionStartTime = ServerNow();
+	if (!HasAuthority())
+	{
+		ServerStartAction(NewAction);
+	}
+}
+
+void ARiptideCharacter::ServerStartAction_Implementation(ERiptideCrewAction NewAction)
+{
+	Action = NewAction;
+	ActionStartTime = ServerNow();
+}
+
+void ARiptideCharacter::StopAction()
+{
+	StartAction(ERiptideCrewAction::None);
+}
+
+void ARiptideCharacter::Punch()
+{
+	if (IsInSea() || IsClimbing() || IsKnockedDown() || bManningHelm || IsInventoryOpen())
+	{
+		return;
+	}
+	// Not over a punch still being thrown (either clip is under a second).
+	if ((Action == ERiptideCrewAction::PunchJab || Action == ERiptideCrewAction::PunchCross) && GetActionTime() < 0.45f)
+	{
+		return;
+	}
+	StartAction(bNextPunchIsCross ? ERiptideCrewAction::PunchCross : ERiptideCrewAction::PunchJab);
+	bNextPunchIsCross = !bNextPunchIsCross;
+}
+
+void ARiptideCharacter::OnPunch(const FInputActionValue& Value)
+{
+	// With the rod in hand the left button fishes; empty-handed, it punches.
+	if (HeldItem == TEXT("fishing_rod"))
+	{
+		if (CanUseHands() && !IsInventoryOpen() && !IsCraftBookOpen())
+		{
+			Angler->PrimaryPressed();
+		}
+		return;
+	}
+	Punch();
+}
+
+void ARiptideCharacter::OnPrimaryReleased(const FInputActionValue& Value)
+{
+	if (HeldItem == TEXT("fishing_rod"))
+	{
+		Angler->PrimaryReleased();
+	}
+}
+
+void ARiptideCharacter::OnSecondary(const FInputActionValue& Value)
+{
+	if (HeldItem == TEXT("fishing_rod") && !IsInventoryOpen() && !IsCraftBookOpen())
+	{
+		Angler->CycleBait();
+	}
+}
+
+void ARiptideCharacter::OnCutLine(const FInputActionValue& Value)
+{
+	if (HeldItem == TEXT("fishing_rod"))
+	{
+		Angler->CutLine();
+	}
+}
+
+// --- In hand ---
+
+bool ARiptideCharacter::IsHoldable(FName Id)
+{
+	return Id == TEXT("fishing_rod");
+}
+
+bool ARiptideCharacter::CanUseHands() const
+{
+	return !bManningHelm && !IsClimbing() && !IsInSea() && !IsKnockedDown() && !bSleeping && !RowingRaft;
+}
+
+// --- At a raft's oars ---
+
+void ARiptideCharacter::SetRowInput(float Forward, float Turn)
+{
+	const int8 F = int8(FMath::RoundToInt(FMath::Clamp(Forward, -1.f, 1.f) * 127.f));
+	const int8 T = int8(FMath::RoundToInt(FMath::Clamp(Turn, -1.f, 1.f) * 127.f));
+	if (!RowingRaft || (F == SentRowForward && T == SentRowTurn))
+	{
+		return;
+	}
+	SentRowForward = F;
+	SentRowTurn = T;
+	if (HasAuthority())
+	{
+		RowingRaft->SetRowInput(F / 127.f, T / 127.f);
+	}
+	else
+	{
+		ServerRow(F, T);
+	}
+}
+
+void ARiptideCharacter::ServerRow_Implementation(int8 Forward, int8 Turn)
+{
+	if (RowingRaft && RowingRaft->GetRower() == this)
+	{
+		RowingRaft->SetRowInput(Forward / 127.f, Turn / 127.f);
+	}
+}
+
+void ARiptideCharacter::StopRowing()
+{
+	if (HasAuthority())
+	{
+		if (RowingRaft)
+		{
+			RowingRaft->SetRower(nullptr);
+		}
+	}
+	else
+	{
+		ServerStopRowing();
+	}
+}
+
+void ARiptideCharacter::ServerStopRowing_Implementation()
+{
+	StopRowing();
+}
+
+void ARiptideCharacter::SetRowing(ARiptideRaft* Raft)
+{
+	if (!HasAuthority() || RowingRaft == Raft)
+	{
+		return;
+	}
+	ARiptideRaft* Was = RowingRaft;
+	RowingRaft = Raft;
+	SentRowForward = SentRowTurn = 0;
+	if (Raft)
+	{
+		// Kneeling amidships at the oars, riding with the raft.
+		HoldItem(NAME_None);
+		const FTransform Seat = Raft->GetSeatTransform();
+		ApplyRowing();
+		// Looking the way it kneels, toward the bow (the body stays that way while the head looks round).
+		if (APlayerController* PC = Cast<APlayerController>(GetController()))
+		{
+			PC->ClientSetRotation(FRotator(0.f, Seat.Rotator().Yaw, 0.f));
+		}
+		SetActorLocationAndRotation(Seat.GetLocation() + Seat.GetUnitAxis(EAxis::Z) * GetCapsuleComponent()->GetScaledCapsuleHalfHeight(),
+			FRotator(0.f, Seat.Rotator().Yaw, 0.f), false, nullptr, ETeleportType::TeleportPhysics);
+		AttachToComponent(Raft->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
+	}
+	else
+	{
+		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		ApplyRowing();
+		if (IsValid(Was))
+		{
+			// Up off the oars onto the deck, where the seat was.
+			const FTransform Seat = Was->GetSeatTransform();
+			SetActorLocation(Seat.GetLocation() + Seat.GetUnitAxis(EAxis::Z) * (GetCapsuleComponent()->GetScaledCapsuleHalfHeight() + 6.f), false, nullptr,
+				ETeleportType::TeleportPhysics);
+			GetCharacterMovement()->Velocity = Was->GetVelocity();
+		}
+	}
+	ForceNetUpdate();
+}
+
+void ARiptideCharacter::ClientNote_Implementation(const FString& Text)
+{
+	RiptideHud::Note(Cast<APlayerController>(GetController()), Text, 4.f, FLinearColor(0.9f, 0.9f, 0.9f), 0x2071);
+}
+
+void ARiptideCharacter::OnRep_Rowing()
+{
+	ApplyRowing();
+}
+
+void ARiptideCharacter::ApplyRowing()
+{
+	// The body stops being solid while it rides at the oars (attached to the raft, it would otherwise shove the raft
+	// it kneels on); the animation kneels it and puts its hands on the oars.
+	SetActorEnableCollision(!RowingRaft);
+	// Kneeling at the oars the body faces the bow whichever way its player looks; on its feet it turns with the look.
+	bUseControllerRotationYaw = !RowingRaft;
+	UCharacterMovementComponent* Move = GetCharacterMovement();
+	if (RowingRaft)
+	{
+		Move->DisableMovement();
+	}
+	else
+	{
+		if (Move->MovementMode == MOVE_None)
+		{
+			Move->SetMovementMode(MOVE_Falling);
+		}
+	}
+}
+
+void ARiptideCharacter::OnHoldKey(const FInputActionValue& Value)
+{
+	if (IsInventoryOpen() || IsCraftBookOpen())
+	{
+		return;
+	}
+	if (!HeldItem.IsNone())
+	{
+		HoldItem(NAME_None);
+		return;
+	}
+	// Nothing in hand: the first thing carried that's held to use.
+	for (int32 Grid = 0; Grid < Inventory->Num(); ++Grid)
+	{
+		for (const FRiptideItem& Item : Inventory->GetStorage(Grid)->Grid.Items)
+		{
+			if (IsHoldable(Item.Id))
+			{
+				HoldItem(Item.Id);
+				return;
+			}
+		}
+	}
+	RiptideHud::Note(Cast<APlayerController>(GetController()), TEXT("Nothing to hold: Q takes out a fishing rod"), 2.5f, FLinearColor(0.8f, 0.8f, 0.8f), 0x51ED);
+}
+
+void ARiptideCharacter::HoldItem(FName Id)
+{
+	if (!HasAuthority())
+	{
+		ServerHoldItem(Id);
+		return;
+	}
+	if (!Id.IsNone() && (!IsHoldable(Id) || Inventory->CountOf(Id) <= 0))
+	{
+		return;
+	}
+	if (HeldItem != Id)
+	{
+		Angler->Stop();
+		HeldItem = Id;
+		StartAction(ERiptideCrewAction::Reach);
+	}
+}
+
+void ARiptideCharacter::ServerHoldItem_Implementation(FName Id)
+{
+	HoldItem(Id);
+}
+
+void ARiptideCharacter::OnInteractReleased(const FInputActionValue& Value)
+{
+	if (Interaction)
+	{
+		Interaction->EndUse();
+	}
+}
+
+// --- Things on the ground ---
+
+void ARiptideCharacter::OnDropKey(const FInputActionValue& Value)
+{
+	if (IsInventoryOpen() || IsInSea() || IsClimbing() || IsKnockedDown() || bManningHelm)
+	{
+		return;
+	}
+	// The first stack in the pockets, then the pack.
+	for (int32 Grid = 0; Grid < Inventory->Num(); ++Grid)
+	{
+		const FRiptideStorage* Storage = Inventory->GetStorage(Grid);
+		if (Storage && Storage->Grid.Items.Num() > 0)
+		{
+			ServerDropItem(Grid, Storage->Grid.Items[0].Uid, 0);
+			StartAction(ERiptideCrewAction::Throw);
+			return;
+		}
+	}
+}
+
+void ARiptideCharacter::DropItem(int32 StorageIndex, int32 Uid, int32 Count)
+{
+	ServerDropItem(StorageIndex, Uid, Count);
+}
+
+void ARiptideCharacter::ServerDropItem_Implementation(int32 StorageIndex, int32 Uid, int32 Count)
+{
+	FRiptideStorage* Storage = Inventory->GetStorage(StorageIndex);
+	if (!Storage || !Storage->Grid.Get(Uid))
+	{
+		return;
+	}
+	const FRiptideItem Taken = Storage->Grid.Take(Uid, Count);
+	if (Taken.Count <= 0)
+	{
+		return;
+	}
+	Inventory->OnChanged.Broadcast();
+	const FVector Forward = GetControlRotation().Vector();
+	const FVector At = FirstPersonCamera->GetComponentLocation() + Forward * 60.f;
+	ARiptideWorldItem::Drop(GetWorld(), Taken, At, Forward * 250.f + FVector(0.f, 0.f, 120.f) + GetVelocity());
+}
+
+void ARiptideCharacter::UseItem(int32 StorageIndex, int32 Uid)
+{
+	ServerUseItem(StorageIndex, Uid);
+}
+
+void ARiptideCharacter::ServerUseItem_Implementation(int32 StorageIndex, int32 Uid)
+{
+	FRiptideStorage* Storage = Inventory->GetStorage(StorageIndex);
+	FRiptideItem* Item = Storage ? Storage->Grid.Get(Uid) : nullptr;
+	const FRiptideItemDef* Def = Item ? RiptideItems::Find(Item->Id) : nullptr;
+	if (!Def)
+	{
+		return;
+	}
+	switch (Def->Kind)
+	{
+	case ERiptideItemKind::Book:
+	case ERiptideItemKind::Page:
+		// Read: its recipes go into the crafting book. A page is used up; a book stays.
+		Crafting->Learn(Def->Teaches);
+		if (Def->Kind == ERiptideItemKind::Page)
+		{
+			Storage->Grid.Take(Uid, 1);
+		}
+		StartAction(ERiptideCrewAction::Reach);
+		break;
+	case ERiptideItemKind::Food:
+	case ERiptideItemKind::Drink:
+		// Eaten or drunk: one helping, or one sip of a canteen.
+		if (Def->Food.IsSet())
+		{
+			Survival->Consume(Def->Food->Food, Def->Food->Water, Def->Food->SicknessSeconds, Def->Food->SickChance);
+		}
+		if (Def->Food.IsSet() && Def->Food->Sips > 0 && Item->Charges > 0)
+		{
+			if (--Item->Charges <= 0 && !Def->Food->EmptiesTo.IsNone())
+			{
+				Item->Id = Def->Food->EmptiesTo;
+				Item->Charges = 0;
+			}
+		}
+		else
+		{
+			Storage->Grid.Take(Uid, 1);
+		}
+		StartAction(ERiptideCrewAction::Consume);
+		break;
+	case ERiptideItemKind::Kit:
+	{
+		// Placed on the ground a couple of metres ahead, facing you; the kit becomes the first stage of the thing.
+		const FRiptideStructureDef* StructureDef = RiptideStructures::Find(Def->Places);
+		if (!StructureDef)
+		{
+			return;
+		}
+		const FVector Forward = FRotator(0.f, GetControlRotation().Yaw, 0.f).Vector();
+		FVector At = GetActorLocation() + Forward * (120.f + StructureDef->FootprintRadius);
+		At.Z = URiptideSeaSubsystem::GroundHeightAt(this, At);
+		if (At.Z < 0.f && !StructureDef->bShore)
+		{
+			UE_LOG(LogTemp, Log, TEXT("Riptide: %s not placed: the ground there is under the sea (%.0f cm)"), *Def->Places.ToString(), At.Z);
+			return;
+		}
+		FTransform Where(FRotator(0.f, GetControlRotation().Yaw + 180.f, 0.f), At);
+		if (!ARiptideStructure::Place(GetWorld(), Def->Places, Where))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Riptide: %s could not be placed"), *Def->Places.ToString());
+			return;
+		}
+		Storage->Grid.Take(Uid, 1);
+		StartAction(ERiptideCrewAction::Reach);
+		break;
+	}
+	case ERiptideItemKind::Medical:
+		// A bandage or kit used on yourself; nothing to do with it at full health.
+		if (Def->Heal <= 0.f || Survival->GetHealth() >= 100.f)
+		{
+			return;
+		}
+		Survival->Heal(Def->Heal);
+		Storage->Grid.Take(Uid, 1);
+		StartAction(ERiptideCrewAction::Reach);
+		break;
+	case ERiptideItemKind::Chart:
+	{
+		// Studied: the islands go on everyone's compass (and are named on the chart). The chart is kept.
+		ARiptideChart* Chart = ARiptideChart::Get(this);
+		const FString Name = GetPlayerState() ? GetPlayerState()->GetPlayerName() : FString(TEXT("Someone"));
+		for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+		{
+			if (ARiptideCharacter* Mate = It->IsValid() ? Cast<ARiptideCharacter>((*It)->GetPawn()) : nullptr)
+			{
+				Mate->ClientNote(Chart && Chart->Read() ? FString::Printf(TEXT("%s studied the sea chart: the islands are on everyone's compass."), *Name)
+					: FString(TEXT("The islands are already on your compass.")));
+			}
+		}
+		StartAction(ERiptideCrewAction::Reach);
+		return;
+	}
+	case ERiptideItemKind::Tool:
+		// Something held to use (the rod): into the hands, or away again.
+		if (!IsHoldable(Def->Id))
+		{
+			return;
+		}
+		HoldItem(HeldItem == Def->Id ? NAME_None : Def->Id);
+		return;
+	default:
+		return;
+	}
+	Inventory->OnChanged.Broadcast();
+}
+
+void ARiptideCharacter::OnCraftKey(const FInputActionValue& Value)
+{
+	if (IsCraftBookOpen())
+	{
+		CloseCraftBook();
+	}
+	else if (!IsInventoryOpen() && !bManningHelm && !IsInSea() && !IsClimbing())
+	{
+		OpenCraftBook();
+	}
+}
+
+void ARiptideCharacter::OpenChart()
+{
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !PC->IsLocalController() || IsChartOpen() || IsInventoryOpen() || IsCraftBookOpen() || !GEngine || !GEngine->GameViewport)
+	{
+		return;
+	}
+	ChartPanel = SNew(SRiptideChartPanel).Crew(this);
+	GEngine->GameViewport->AddViewportWidgetContent(ChartPanel.ToSharedRef(), 8);
+}
+
+void ARiptideCharacter::CloseChart()
+{
+	if (GEngine && GEngine->GameViewport && ChartPanel.IsValid())
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(ChartPanel.ToSharedRef());
+	}
+	ChartPanel.Reset();
+}
+
+void ARiptideCharacter::OpenCraftBook()
+{
+	CloseChart();
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !PC->IsLocalController() || IsCraftBookOpen() || !GEngine || !GEngine->GameViewport)
+	{
+		return;
+	}
+	TWeakObjectPtr<ARiptideCharacter> WeakThis(this);
+	CraftBook = SNew(SRiptideCraftBook)
+		.Crew(this)
+		.OnClose(FSimpleDelegate::CreateLambda([WeakThis]()
+		{
+			if (ARiptideCharacter* Self = WeakThis.Get())
+			{
+				Self->CloseCraftBook();
+			}
+		}));
+	CraftBookContainer = SNew(SWeakWidget).PossiblyNullContent(CraftBook);
+	GEngine->GameViewport->AddViewportWidgetContent(CraftBookContainer.ToSharedRef(), 10);
+	FInputModeUIOnly Mode;
+	Mode.SetWidgetToFocus(CraftBook);
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	PC->SetInputMode(Mode);
+	PC->SetShowMouseCursor(true);
+	GetCharacterMovement()->StopMovementImmediately();
+}
+
+void ARiptideCharacter::CloseCraftBook()
+{
+	if (GEngine && GEngine->GameViewport && CraftBookContainer.IsValid())
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(CraftBookContainer.ToSharedRef());
+	}
+	const bool bWasOpen = CraftBook.IsValid();
+	CraftBook.Reset();
+	CraftBookContainer.Reset();
+	if (!bWasOpen)
+	{
+		return;
+	}
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		PC->SetInputMode(FInputModeGameOnly());
+		PC->SetShowMouseCursor(false);
+	}
+}
+
+int32 ARiptideCharacter::GiveItem(FName Id, int32 Count)
+{
+	if (!HasAuthority() || !RiptideItems::Find(Id) || Count <= 0)
+	{
+		return Count;
+	}
+	int32 Left = Count;
+	for (int32 Grid = 0; Grid < Inventory->Num() && Left > 0; ++Grid)
+	{
+		if (FRiptideStorage* Storage = Inventory->GetStorage(Grid))
+		{
+			Left = Storage->Grid.Add(Id, Left);
+		}
+	}
+	Inventory->OnChanged.Broadcast();
+	if (Left > 0)
+	{
+		const FVector At = GetActorLocation() + GetControlRotation().Vector() * 90.f;
+		ARiptideWorldItem::Drop(GetWorld(), FRiptideItemGrid::NewStack(Id, Left), At, FVector(0.f, 0.f, 50.f));
+	}
+	return Left;
+}
+
 bool ARiptideCharacter::IsBraced() const
 {
 	if (bManningHelm)
@@ -1081,8 +1858,8 @@ void ARiptideCharacter::UpdateBalance(float DeltaSeconds)
 {
 	UCharacterMovementComponent* Move = GetCharacterMovement();
 	StaggerCooldown -= DeltaSeconds;
-	// Holding on slows you to a shuffle; down on the deck you can't move at all.
-	Move->MaxWalkSpeed = IsKnockedDown() ? 0.f : IsBraced() ? BracedWalkSpeed : 350.f;
+	// Holding on slows you to a shuffle; down on the deck you can't move at all; flat out is a sprint.
+	Move->MaxWalkSpeed = IsKnockedDown() ? 0.f : IsBraced() ? BracedWalkSpeed : IsSprinting() ? SprintSpeed : 350.f;
 
 	// Feel the deck: how hard the point under the feet is accelerating (beyond gravity). The body lags behind it:
 	// thrown aft when the boat surges, outward in a hard turn, and down onto the knees when the bow slams.
@@ -1144,11 +1921,17 @@ void ARiptideCharacter::Tick(float DeltaSeconds)
 	{
 		UpdateBalance(DeltaSeconds);
 	}
-	// Knocked down: the view drops to the deck and comes back up as you get to your feet.
-	const float EyeZ = IsKnockedDown() ? 5.f : 70.f;
-	FVector Cam = FirstPersonCamera->GetRelativeLocation();
-	Cam.Z = FMath::FInterpTo(Cam.Z, EyeZ, DeltaSeconds, IsKnockedDown() ? 9.f : 3.f);
-	FirstPersonCamera->SetRelativeLocation(Cam);
+	// The view is from the body's own eyes: it crouches, bobs, falls and gets up with the animation. The body's own
+	// player doesn't see its head from inside it.
+	if (URiptideCrewBodyComponent* Crew = GetCrewBody())
+	{
+		Crew->SetFirstPersonView(IsLocallyControlled() && IsPlayerControlled());
+	}
+	if (const USkeletalMeshComponent* Body = GetMesh(); Body && Body->DoesSocketExist(TEXT("Head")) && !bManningHelm)
+	{
+		const FVector Eyes = Body->GetSocketLocation(TEXT("Head")) + FVector(0.f, 0.f, 8.f) + FRotator(0.f, GetControlRotation().Yaw, 0.f).Vector() * 14.f;
+		FirstPersonCamera->SetWorldLocation(Eyes);
+	}
 
 	UpdateLadder(DeltaSeconds);
 	if (IsInSea())
@@ -1163,6 +1946,12 @@ void ARiptideCharacter::Tick(float DeltaSeconds)
 	if (IsHoldingMic() && !bManningHelm)
 	{
 		HomeBoat->UpdateMicCord();
+	}
+	// What's held is let go of if it's no longer carried (dropped, stowed in a crate).
+	if (HasAuthority() && !HeldItem.IsNone() && Inventory->CountOf(HeldItem) <= 0)
+	{
+		Angler->Stop();
+		HeldItem = NAME_None;
 	}
 }
 
@@ -1185,7 +1974,8 @@ float ARiptideCharacter::GetKnockdownElapsed() const
 void ARiptideCharacter::CloseInventoryIfOutOfReach()
 {
 	if (IsInventoryOpen() && (IsInSea() || IsClimbing() || bManningHelm
-		|| (OpenLocker != INDEX_NONE && (!IsValid(HomeBoat) || !CanReach(HomeBoat->GetLockers(), OpenLocker)))))
+		|| (OpenLocker != INDEX_NONE && (!IsValid(HomeBoat) || !CanReach(HomeBoat->GetLockers(), OpenLocker)))
+		|| (OpenedContainerIndex != INDEX_NONE && !CanReach(OpenedContainer.Get(), OpenedContainerIndex))))
 	{
 		CloseInventory();
 	}
@@ -1193,20 +1983,39 @@ void ARiptideCharacter::CloseInventoryIfOutOfReach()
 
 void ARiptideCharacter::DrawHud() const
 {
-	if (!GEngine)
-	{
-		return;
-	}
-	// Temporary prompts until the real HUD exists (same keys as the boat's readout, which is off while walking).
-	const uint64 KeyBase = 0x52495054ull;
+	auto Say = [this](const FColor& Colour, const FString& Text) { RiptideHud::Prompt(this, RiptideHud::ESlot::Context, Text, FLinearColor(Colour)); };
 	if (IsInventoryOpen())
 	{
 		return;
 	}
-	if (IsOnLadder() && IsValid(HomeBoat))
+	// How the body is doing.
+	if (Survival && IsPlayerControlled())
+	{
+		const FRiptideVitals& V = Survival->GetVitals();
+		RiptideHud::Vitals(this, V.Health, V.Hunger, V.Thirst, V.Sickness > 0.f, V.Cold, V.bWarm);
+	}
+	if (bSleeping)
+	{
+		RiptideHud::Fade(this, 0.85f);
+		RiptideHud::Prompt(this, RiptideHud::ESlot::Context, TEXT("Asleep: the night passes once everyone is asleep      Move  Get up"));
+		return;
+	}
+	// The thing under the crosshair: what E does with it, and how far a hold has got.
+	if (Interaction && Interaction->HasFocus())
+	{
+		const FRiptideInteraction& Use = Interaction->GetFocus().Interaction;
+		RiptideHud::Prompt(this, RiptideHud::ESlot::Focus, Use.bEnabled ? FString::Printf(TEXT("E  %s"), *Use.Prompt.ToString()) : Use.WhyNot.ToString(),
+			Use.bEnabled ? FLinearColor::White : FLinearColor(0.7f, 0.7f, 0.7f), Use.HoldSeconds > 0.f && Use.bEnabled ? Interaction->GetHoldFraction() : -1.f);
+	}
+	if (RowingRaft)
+	{
+		Say(FColor::White, RowingRaft->IsAfloat() ? TEXT("At the oars:  W  Row ahead    S  Back    A D  Turn    E  Let go")
+			: TEXT("Aground: the oars find no water.  Push off from the sand, or E  Let go"));
+	}
+	else if (IsOnLadder() && IsValid(HomeBoat))
 	{
 		const float Top = HomeBoat->GetActorTransform().InverseTransformPosition(HomeBoat->GetLadderFootTransform().GetLocation()).Z + LadderHighestFeet;
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, LadderFeetZ >= Top - 1.f
+		Say(FColor::White, LadderFeetZ >= Top - 1.f
 			? TEXT("On the ladder:  W  Climb aboard    S  Climb down    Space  Let go")
 			: TEXT("On the ladder:  W  Climb    S  Climb down    Space  Let go"));
 	}
@@ -1215,59 +2024,59 @@ void ARiptideCharacter::DrawHud() const
 	}
 	else if (IsAtLadder())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Swim into the ladder to take hold of it"));
+		Say(FColor::White, TEXT("Swim into the ladder to take hold of it"));
 	}
 	else if (IsInSea() && IsValid(HomeBoat) && !IsLadderFree()
 		&& FVector::Dist(GetActorLocation(), HomeBoat->GetLadderFootTransform().GetLocation()) <= LadderReach)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Someone's on the ladder"));
+		Say(FColor::White, TEXT("Someone's on the ladder"));
 	}
 	else if (IsKnockedDown())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::Orange, TEXT("Knocked off your feet!  Hold Shift near a rail at speed"));
+		Say(FColor::Orange, TEXT("Knocked off your feet!  Hold Shift near a rail at speed"));
 	}
 	else if (IsInSea() && HomeBoat)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Swimming: the boarding ladder is on the stern, port side.  Space up, C dive"));
+		Say(FColor::White, TEXT("Swimming: the boarding ladder is on the stern, port side.  Space up, C dive"));
 	}
 	else if (CanGrabMic())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Take the radio mic"));
+		Say(FColor::White, TEXT("E  Take the radio mic"));
 	}
 	else if (IsHoldingMic() && HomeBoat && IsLookingAt(HomeBoat->GetMicHookLocation(), MicReach + 60.f, 25.f))
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("E  Hang up the mic"));
+		Say(FColor::White, TEXT("E  Hang up the mic"));
 	}
 	else if (const int32 Locker = GetLockerInReach(); Locker != INDEX_NONE)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+		Say(FColor::White,
 			FString::Printf(TEXT("E  Open the %s"), *HomeBoat->GetLockers()->GetStorage(Locker)->Title.ToString().ToLower()));
 	}
 	else if (IsAtHelm())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+		Say(FColor::White,
 			IsHoldingMic() ? TEXT("E  Take the helm    (holding the radio mic: look at its clip and press E to hang it up)") : TEXT("E  Take the helm"));
 	}
 	else if (IsValid(HomeBoat) && HomeBoat->GetHelmsman() && HomeBoat->GetHelmsman() != this && !bManningHelm
 		&& FVector::Dist(GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight()),
 			HomeBoat->GetHelmStandTransform().GetLocation()) <= HelmReach)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White, TEXT("Someone's at the helm"));
+		Say(FColor::White, TEXT("Someone's at the helm"));
 	}
 	else if (CanRefuel())
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+		Say(FColor::White,
 			FString::Printf(TEXT("E  Pour the fuel drum in (tank %d%%)"), FMath::RoundToInt(HomeBoat->GetFuelFraction() * 100.f)));
 	}
 	else if (int32 Grid, Uid; IsValid(HomeBoat) && !bManningHelm && !IsInSea() && FindFuelDrum(Grid, Uid) && !HomeBoat->HasRoomForFuel(DrumLiters)
 		&& FVector::Dist(GetActorLocation(), HomeBoat->GetFuelFillerTransform().GetLocation()) < 200.f)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor::White,
+		Say(FColor::White,
 			FString::Printf(TEXT("The tank's too full for a whole drum (%d%%)"), FMath::RoundToInt(HomeBoat->GetFuelFraction() * 100.f)));
 	}
 	else if (IsValid(HomeBoat) && IsStandingOnBoat() && HomeBoat->GetSpeedKnots() > 12.f)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, IsBraced() ? FColor::Green : FColor::White,
+		Say(IsBraced() ? FColor::Green : FColor::White,
 			IsBraced() ? TEXT("Holding on") : HomeBoat->IsHandholdNear(GetActorLocation(), HandholdReach)
 				? TEXT("Shift  Hold on") : TEXT("Get to a rail: the boat's moving fast"));
 	}

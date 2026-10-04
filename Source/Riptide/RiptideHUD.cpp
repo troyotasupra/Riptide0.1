@@ -299,6 +299,12 @@ void ARiptideHUD::BeginPlay()
 		FSlateApplication::Get().SetAllUserFocusToGameViewport();
 	}
 	BuildInput();
+	// The in-game overlay: prompts, vitals, crosshair and notes (under the menus).
+	if (GEngine && GEngine->GameViewport)
+	{
+		Overlay = SNew(SRiptideHudOverlay).Hud(this);
+		GEngine->GameViewport->AddViewportWidgetContent(Overlay.ToSharedRef(), 5);
+	}
 	// Its own input on the player's controller, so it works whatever the player controls (on foot, at the helm, or
 	// the dev mode's camera).
 	EnableInput(Player);
@@ -392,6 +398,11 @@ void ARiptideHUD::SetCursorFreed(bool bFree)
 void ARiptideHUD::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	SetMenuOpen(false);
+	if (Overlay.IsValid() && GEngine && GEngine->GameViewport)
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(Overlay.ToSharedRef());
+	}
+	Overlay.Reset();
 	APlayerController* Player = GetOwningPlayerController();
 	if (Player && Player->GetLocalPlayer() && MenuMapping)
 	{
@@ -476,6 +487,8 @@ void ARiptideHUD::ShowMenuSettings(bool bShow)
 void ARiptideHUD::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	const double RealNow = GetWorld() ? GetWorld()->GetRealTimeSeconds() : 0.0;
+	Notes.RemoveAll([RealNow](const FNote& N) { return N.Until < RealNow; });
 	// The player's field of view, on their own eyes and at the helm (not on other cameras, like the dev mode's).
 	const APlayerController* Player = GetOwningPlayerController();
 	AActor* Target = Player ? Player->GetViewTarget() : nullptr;

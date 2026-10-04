@@ -2,7 +2,11 @@
 
 #include "Fonts/FontMeasure.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
+#include "GameFramework/GameStateBase.h"
 #include "Rendering/DrawElements.h"
+#include "RiptideItemIcons.h"
 #include "RiptideItems.h"
 #include "RiptideStorageComponent.h"
 #include "Styling/CoreStyle.h"
@@ -98,6 +102,8 @@ void SRiptideInventory::Construct(const FArguments& InArgs)
 	Container = InArgs._Container;
 	ContainerIndex = InArgs._ContainerIndex;
 	OnMove = InArgs._OnMove;
+	OnUse = InArgs._OnUse;
+	OnDrop = InArgs._OnDrop;
 	OnClose = InArgs._OnClose;
 	ForceVolatile(true);
 
@@ -209,7 +215,10 @@ SRiptideInventory::FTarget SRiptideInventory::FindTarget(const TArray<FPanel>& P
 		? Grid.SingleOverlap(Drag.Id, Target.Cell.X, Target.Cell.Y, Drag.bRotated, Ignore) : nullptr)
 	{
 		const FRiptideItemDef* Def = RiptideItems::Find(Drag.Id);
-		Target.State = Def && Onto->Id == Drag.Id && Onto->Count < Def->Stack ? FTarget::Merge : FTarget::Blocked;
+		const FRiptideStorage* DragFrom = Drag.Storage ? Drag.Storage->GetStorage(Drag.Index) : nullptr;
+		const FRiptideItem* Dragged = DragFrom ? DragFrom->Grid.Get(Drag.Uid) : nullptr;
+		const bool bSameStack = Onto->Id == Drag.Id && (!Dragged || Onto->CanMergeWith(*Dragged));
+		Target.State = Def && bSameStack && Onto->Count < Def->Stack ? FTarget::Merge : FTarget::Blocked;
 	}
 	else
 	{
@@ -231,13 +240,34 @@ void SRiptideInventory::PaintItem(FSlateWindowElementList& Out, int32 Layer, con
 	FSlateDrawElement::MakeBox(Out, Layer, G.ToPaintGeometry(Size - FVector2f(4.f), FSlateLayoutTransform(Pos + FVector2f(2.f))),
 		&CardBrushes[Rarity], ESlateDrawEffect::None, Fill);
 	FillRect(Out, Layer + 1, G, Pos + FVector2f(4.f, Size.Y * 0.55f), FVector2f(Size.X - 8.f, Size.Y * 0.45f - 4.f), FLinearColor(Colour.R, Colour.G, Colour.B, 0.18f * Alpha));
-	const FSlateFontInfo NameFont = Font(10, true);
+	// The item's picture, taken from its model, over the card; its name along the bottom.
+	const FSlateBrush* Icon = nullptr;
+	if (const URiptideStorageComponent* Owner = Carrying.Get())
+	{
+		if (const UWorld* World = Owner->GetWorld())
+		{
+			if (UGameInstance* Game = World->GetGameInstance())
+			{
+				if (URiptideItemIconSubsystem* Icons = Game->GetSubsystem<URiptideItemIconSubsystem>())
+				{
+					Icon = Icons->Icon(Id);
+				}
+			}
+		}
+	}
+	const FSlateFontInfo NameFont = Font(Icon ? 9 : 10, true);
 	const TArray<FString> Lines = Wrap(Def ? Def->Name.ToString() : Id.ToString(), NameFont, Size.X - 10.f);
 	const float LineH = NameFont.Size * 1.35f;
-	float Y = Pos.Y + (Size.Y - LineH * Lines.Num()) * 0.5f;
-	for (const FString& Line : Lines)
+	if (Icon)
 	{
-		Text(Out, Layer + 2, G, Line, NameFont, FVector2f(Pos.X + Size.X * 0.5f, Y), FLinearColor(0.92f, 0.94f, 0.96f, Alpha), true);
+		const float Side = FMath::Min(Size.X, Size.Y) - 8.f - LineH;
+		FSlateDrawElement::MakeBox(Out, Layer + 2, G.ToPaintGeometry(FVector2f(Side, Side), FSlateLayoutTransform(Pos + FVector2f((Size.X - Side) * 0.5f, 4.f))),
+			Icon, ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, Alpha));
+	}
+	float Y = Icon ? Pos.Y + Size.Y - LineH * FMath::Min(Lines.Num(), 2) - 2.f : Pos.Y + (Size.Y - LineH * Lines.Num()) * 0.5f;
+	for (int32 i = 0; i < Lines.Num() && (!Icon || i < 2); ++i)
+	{
+		Text(Out, Layer + 3, G, Lines[i], NameFont, FVector2f(Pos.X + Size.X * 0.5f, Y), FLinearColor(0.92f, 0.94f, 0.96f, Alpha), true);
 		Y += LineH;
 	}
 	if (Count > 1)
@@ -341,8 +371,17 @@ int32 SRiptideInventory::OnPaint(const FPaintArgs& Args, const FGeometry& Allott
 			const FString Info = FString::Printf(TEXT("%s · %s · %d×%d · %.2f kg"), *RiptideItems::RarityName(Def->Rarity).ToString(),
 				*Def->Category.ToString(), Size.X, Size.Y, Def->WeightKg * Hovered->Count);
 			const TArray<FString> HintLines = Wrap(Def->Hint.ToString(), Body, 260.f);
+			// Food: how long it keeps.
+			FString Keeps;
+			const UWorld* World = Carrying.IsValid() ? Carrying->GetWorld() : nullptr;
+			const AGameStateBase* State = World ? World->GetGameState() : nullptr;
+			if (Hovered->SpoilAt > 0.f && State)
+			{
+				const int32 Minutes = FMath::CeilToInt((Hovered->SpoilAt - State->GetServerWorldTimeSeconds()) / 60.0);
+				Keeps = Minutes <= 1 ? FString(TEXT("Going off")) : FString::Printf(TEXT("Goes off in %d min"), Minutes);
+			}
 			const float Width = FMath::Max(280.f, Measure(Info, Body).X + 20.f);
-			const float Height = 20.f + NameFont.Size * 1.5f + Body.Size * 1.5f * (1 + HintLines.Num()) + 8.f;
+			const float Height = 20.f + NameFont.Size * 1.5f + Body.Size * 1.5f * (1 + HintLines.Num() + (Keeps.IsEmpty() ? 0 : 1)) + 8.f;
 			FVector2f Pos = Mouse + FVector2f(18.f, 18.f);
 			Pos.X = FMath::Min(Pos.X, Screen.X - Width - 8.f);
 			Pos.Y = FMath::Min(Pos.Y, Screen.Y - Height - 8.f);
@@ -355,6 +394,11 @@ int32 SRiptideInventory::OnPaint(const FPaintArgs& Args, const FGeometry& Allott
 			Y += NameFont.Size * 1.5f;
 			Text(Out, L + 21, G, Info, Body, FVector2f(Pos.X + 10.f, Y), Srgb(0.54f, 0.6f, 0.66f));
 			Y += Body.Size * 1.5f + 4.f;
+			if (!Keeps.IsEmpty())
+			{
+				Text(Out, L + 21, G, Keeps, Body, FVector2f(Pos.X + 10.f, Y), Srgb(0.95f, 0.72f, 0.38f));
+				Y += Body.Size * 1.5f;
+			}
 			for (const FString& Line : HintLines)
 			{
 				Text(Out, L + 21, G, Line, Body, FVector2f(Pos.X + 10.f, Y), Srgb(0.72f, 0.77f, 0.81f));
@@ -377,16 +421,21 @@ FReply SRiptideInventory::OnMouseMove(const FGeometry& MyGeometry, const FPointe
 FReply SRiptideInventory::OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent)
 {
 	Mouse = FVector2f(MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition()));
-	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton)
-	{
-		return FReply::Handled();
-	}
 	const float Cell = CellSize(ScreenSize);
 	const TArray<FPanel> Panels = Layout(ScreenSize);
 	FIntPoint Under;
 	const FPanel* Panel = PanelAt(Panels, Mouse, Cell, Under);
 	const FRiptideItem* Item = Panel ? Panel->Storage->GetStorage(Panel->Index)->Grid.ItemAt(Under) : nullptr;
-	if (!Item)
+	if (MouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
+	{
+		// Right-click uses it: eat, drink, read, wear.
+		if (Item && !Panel->bContainer)
+		{
+			OnUse.ExecuteIfBound(Panel->Storage, Panel->Index, Item->Uid);
+		}
+		return FReply::Handled();
+	}
+	if (MouseEvent.GetEffectingButton() != EKeys::LeftMouseButton || !Item)
 	{
 		return FReply::Handled();
 	}
@@ -448,6 +497,20 @@ FReply SRiptideInventory::OnMouseButtonUp(const FGeometry& MyGeometry, const FPo
 FReply SRiptideInventory::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
 	const FKey Key = InKeyEvent.GetKey();
+	if (Key == EKeys::G && !Drag.bActive)
+	{
+		// G drops what the mouse is over onto the ground.
+		const float Cell = CellSize(ScreenSize);
+		const TArray<FPanel> Panels = Layout(ScreenSize);
+		FIntPoint Under;
+		const FPanel* Panel = PanelAt(Panels, Mouse, Cell, Under);
+		const FRiptideItem* Item = Panel ? Panel->Storage->GetStorage(Panel->Index)->Grid.ItemAt(Under) : nullptr;
+		if (Item && !Panel->bContainer)
+		{
+			OnDrop.ExecuteIfBound(Panel->Storage, Panel->Index, Item->Uid);
+		}
+		return FReply::Handled();
+	}
 	if (Key == EKeys::R && Drag.bActive)
 	{
 		// Turn it sideways, keeping the grabbed cell under the cursor.

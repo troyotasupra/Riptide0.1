@@ -236,8 +236,14 @@ private:
 	void ApplyGraphics(bool bResolution);
 	void ResetToDefaults();
 
+	/** The microphone test: the local player talks (nobody hears it) and the row shows how loud they are. */
+	void SetMicTest(bool bOn);
+	class APlayerController* LocalPlayer() const;
+
 	TWeakObjectPtr<UObject> WorldContext;
 	FSimpleDelegate OnBack;
 	TSharedPtr<SWidget> FirstRow;
 	TArray<FIntPoint> Resolutions;
+	TArray<FString> Microphones;
+	bool bMicTest = false;
 };

@@ -1,4 +1,5 @@
 #include "RiptideDevCamera.h"
+#include "RiptideHudOverlay.h"
 
 #include "Camera/CameraComponent.h"
 #include "Engine/Engine.h"
@@ -183,10 +184,7 @@ void ARiptideDevCamera::OnWheel(const FInputActionValue& Value)
 	{
 		SetFlySpeed(FlySpeed * FMath::Pow(1.25f, Notches));
 	}
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(SpeedMessageKey, 1.5f, DevNoteColour, GetSpeedText());
-	}
+	RiptideHud::Note(Cast<APlayerController>(GetController()), GetSpeedText(), 1.5f, FLinearColor(DevNoteColour), int32(SpeedMessageKey & 0x7fffffff));
 }
 
 void ARiptideDevCamera::SetFlyInput(FVector Move)

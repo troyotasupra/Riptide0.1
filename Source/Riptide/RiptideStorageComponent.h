@@ -40,12 +40,17 @@ public:
 	URiptideStorageComponent();
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	/** Food going off (server): a fresh stack's time starts when it's first stored, and past it the stack is spoiled. */
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 	int32 AddStorage(const FText& Title, int32 Width, int32 Height, const FVector& Point = FVector::ZeroVector,
 		const FVector2D& LidHalfSize = FVector2D::ZeroVector);
 
 	UFUNCTION(BlueprintPure, Category = "Storage")
 	int32 Num() const { return Storages.Num(); }
+
+	/** How many of Need (an item id or group) are here, across every grid. */
+	int32 CountOf(FName Need) const;
 
 	/** How many stacks are in one grid, and the free cells left in it. */
 	UFUNCTION(BlueprintPure, Category = "Storage")

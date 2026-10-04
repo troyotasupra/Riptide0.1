@@ -13,9 +13,16 @@
 #include "InputMappingContext.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
+#include "AudioCaptureCore.h"
+#include "Interfaces/VoiceCapture.h"
+#include "OnlineSubsystemUtils.h"
 #include "RiptideBoat.h"
 #include "RiptideCharacter.h"
+#include "RiptideHudOverlay.h"
 #include "RiptidePlayerController.h"
+#include "RiptideSettings.h"
+#include "VoiceEngineImpl.h"
+#include "VoiceInterfaceImpl.h"
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundEffectSource.h"
 #include "SourceEffects/SourceEffectFilter.h"
@@ -166,7 +173,7 @@ void URiptideVoiceComponent::BuildInput()
 	UInputAction* Talk = Make(TEXT("IA_PushToTalk"), { EKeys::V, EKeys::Gamepad_LeftThumbstick });
 	UInputAction* ChannelDown = Make(TEXT("IA_RadioChannelDown"), { EKeys::LeftBracket });
 	UInputAction* ChannelUp = Make(TEXT("IA_RadioChannelUp"), { EKeys::RightBracket });
-	UInputAction* Mode = Make(TEXT("IA_MicMode"), { EKeys::B });
+	UInputAction* Mode = Make(TEXT("IA_MicMode"), { EKeys::T });     // (B is the crafting book)
 	Input->BindActionValueLambda(Talk, ETriggerEvent::Started, [this](const FInputActionValue&) { SetPushToTalk(true); });
 	Input->BindActionValueLambda(Talk, ETriggerEvent::Completed, [this](const FInputActionValue&) { SetPushToTalk(false); });
 	Input->BindActionValueLambda(ChannelDown, ETriggerEvent::Started, [this](const FInputActionValue&) { ChangeChannel(-1); });
@@ -186,11 +193,109 @@ void URiptideVoiceComponent::SetPushToTalk(bool bDown)
 	if (bDown)
 	{
 		PC->StartTalking();
+		ApplyMicrophone(this);
 	}
 	else
 	{
 		PC->StopTalking();
 	}
+}
+
+// --- The microphone ---
+
+namespace
+{
+	/** The online voice engine keeps its capture device to itself (protected, twice over); these reach it the C++
+	 * way: a derived type may read its base's protected members, and nothing is ever constructed. */
+	struct FRiptideEnginePeek : public FVoiceEngineImpl
+	{
+		static IVoiceCapture* CaptureOf(IVoiceEngine* Engine)
+		{
+			FRiptideEnginePeek* Impl = static_cast<FRiptideEnginePeek*>(static_cast<FVoiceEngineImpl*>(Engine));
+			return Impl && Impl->GetVoiceCapture().IsValid() ? Impl->GetVoiceCapture().Get() : nullptr;
+		}
+	};
+
+	struct FRiptideVoicePeek : public FOnlineVoiceImpl
+	{
+		static IVoiceCapture* CaptureOf(IOnlineVoice* Voice)
+		{
+			if (!Voice)
+			{
+				return nullptr;
+			}
+			const IVoiceEnginePtr& Engine = static_cast<FRiptideVoicePeek*>(static_cast<FOnlineVoiceImpl*>(Voice))->VoiceEngine;
+			return FRiptideEnginePeek::CaptureOf(Engine.Get());
+		}
+	};
+
+	IVoiceCapture* LocalCapture(const UObject* WorldContext)
+	{
+		UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull) : nullptr;
+		IOnlineSubsystem* Online = World ? Online::GetSubsystem(World) : nullptr;
+		return Online ? FRiptideVoicePeek::CaptureOf(Online->GetVoiceInterface().Get()) : nullptr;
+	}
+
+	/** Which microphone the capture was last pointed at, so it isn't re-opened on every press. */
+	FString AppliedMicrophone = TEXT("\x01unset");
+}
+
+TArray<FString> URiptideVoiceComponent::ListMicrophones()
+{
+	TArray<FString> Names;
+	Audio::FAudioCapture Capture;
+	TArray<Audio::FCaptureDeviceInfo> Devices;
+	Capture.GetCaptureDevicesAvailable(Devices);
+	for (const Audio::FCaptureDeviceInfo& Device : Devices)
+	{
+		if (!Device.DeviceName.IsEmpty() && Device.InputChannels > 0)
+		{
+			Names.AddUnique(Device.DeviceName);
+		}
+	}
+	return Names;
+}
+
+bool URiptideVoiceComponent::ApplyMicrophone(const UObject* WorldContext)
+{
+	IVoiceCapture* Capture = LocalCapture(WorldContext);
+	if (!Capture)
+	{
+		return false;
+	}
+	const FString& Wanted = URiptideSettingsSave::Get()->Microphone;
+	if (Wanted == AppliedMicrophone)
+	{
+		return true;
+	}
+	const bool bWasCapturing = Capture->IsCapturing();
+	bool bTaken = Capture->ChangeDevice(Wanted, UVOIPStatics::GetVoiceSampleRate(), UVOIPStatics::GetVoiceNumChannels());
+	if (!bTaken && !Wanted.IsEmpty())
+	{
+		// A microphone that's gone: back to the system's default rather than silence.
+		UE_LOG(LogTemp, Warning, TEXT("Riptide: microphone '%s' not found; using the default"), *Wanted);
+		bTaken = Capture->ChangeDevice(TEXT(""), UVOIPStatics::GetVoiceSampleRate(), UVOIPStatics::GetVoiceNumChannels());
+	}
+	if (bTaken)
+	{
+		AppliedMicrophone = Wanted;
+		if (bWasCapturing && !Capture->IsCapturing())
+		{
+			Capture->Start();
+		}
+	}
+	return bTaken;
+}
+
+float URiptideVoiceComponent::MicrophoneLevel(const UObject* WorldContext)
+{
+	const IVoiceCapture* Capture = LocalCapture(WorldContext);
+	if (!Capture)
+	{
+		return 0.f;
+	}
+	const float Amplitude = Capture->GetCurrentAmplitude();
+	return Amplitude < 0.f ? 0.f : FMath::Clamp(Amplitude, 0.f, 1.f);
 }
 
 ARiptideBoat* URiptideVoiceComponent::RadioInReach() const
@@ -370,11 +475,7 @@ void URiptideVoiceComponent::HearRadioLine(int32 Channel, ARiptideBoat* FromBoat
 		}
 	}
 	LastHeardLine = Text;
-	HeardLines.Add({ Text, FPlatformTime::Seconds() + LineSeconds });
-	if (HeardLines.Num() > 4)
-	{
-		HeardLines.RemoveAt(0);
-	}
+	RiptideHud::Note(Cast<APlayerController>(GetOwner()), Text, LineSeconds, FLinearColor(1.f, 0.86f, 0.55f));
 	UE_LOG(LogTemp, Log, TEXT("Riptide: heard %s"), *Text);
 }
 
@@ -387,43 +488,31 @@ void URiptideVoiceComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 		BuildInput();
 	}
 	UpdateTalkers();
-	const double Now = FPlatformTime::Seconds();
-	HeardLines.RemoveAll([Now](const FHeardLine& L) { return L.Until < Now; });
 	DrawHud();
 }
 
 void URiptideVoiceComponent::DrawHud() const
 {
-	if (!GEngine)
-	{
-		return;
-	}
-	// Temporary readouts until the real HUD exists (keys above the crew's and the boat's prompts).
-	const uint64 KeyBase = 0x52495054ull + 20;
 	const APlayerController* PC = Cast<APlayerController>(GetOwner());
 	const ARiptideCharacter* Crew = PC ? CrewOf(PC->PlayerState) : nullptr;
 	const ARiptideBoat* Boat = RadioInReach();
 	const bool bHolding = Boat && Boat->GetMicHolder() == Crew;
+	const FLinearColor Live(1.f, 0.35f, 0.27f), Calm(0.47f, 0.84f, 1.f);
 	if (bHolding)
 	{
 		const bool bHailer = Boat->GetMicMode() == ERiptideMicMode::Loudhailer;
-		const FString Mode = bHailer ? TEXT("LOUDHAILER") : FString::Printf(TEXT("CB channel %d"), Boat->GetRadioChannel());
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, bPushToTalk ? FColor(255, 90, 70) : FColor(120, 215, 255),
-			FString::Printf(TEXT("%s%s      Hold V  Talk      [ ]  Channel      B  %s"), bPushToTalk ? TEXT("TRANSMITTING  ") : TEXT(""), *Mode,
-				bHailer ? TEXT("Switch to the CB") : TEXT("Switch to the loudhailer")));
+		const FString Mode = bHailer ? TEXT("Loudhailer") : FString::Printf(TEXT("CB channel %d"), Boat->GetRadioChannel());
+		RiptideHud::Prompt(PC, RiptideHud::ESlot::Radio,
+			FString::Printf(TEXT("%s%s      Hold V  Talk      [ ]  Channel      T  %s"), bPushToTalk ? TEXT("ON AIR  ") : TEXT(""), *Mode,
+				bHailer ? TEXT("Switch to the CB") : TEXT("Switch to the loudhailer")), bPushToTalk ? Live : Calm);
 	}
 	else if (Boat)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor(120, 215, 255),
-			FString::Printf(TEXT("Radio: CB channel %d      [ ]  Channel"), Boat->GetRadioChannel()));
+		RiptideHud::Prompt(PC, RiptideHud::ESlot::Radio, FString::Printf(TEXT("Radio on CB channel %d      [ ]  Channel"), Boat->GetRadioChannel()), Calm);
 	}
 	else if (bPushToTalk)
 	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 0, 0.f, FColor(255, 90, 70), TEXT("Talking"));
-	}
-	for (int32 i = 0; i < HeardLines.Num(); ++i)
-	{
-		GEngine->AddOnScreenDebugMessage(KeyBase + 1 + i, 0.f, FColor(255, 220, 140), HeardLines[i].Text);
+		RiptideHud::Prompt(PC, RiptideHud::ESlot::Radio, TEXT("Talking"), Live);
 	}
 }
 

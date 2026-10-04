@@ -8,7 +8,9 @@
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "ReferenceSkeleton.h"
 #include "Engine/World.h"
+#include "RiptideAngler.h"
 #include "RiptideBoat.h"
+#include "RiptideItemIcons.h"
 #include "RiptideCharacter.h"
 #include "RiptideCrewMannequin.h"
 
@@ -104,15 +106,22 @@ void URiptideCrewBodyComponent::SetAppearance(const FRiptideAppearance& Look)
 	static const TCHAR* Pack[] = { nullptr, TEXT("SK_AssaultPack"), TEXT("SK_HydrationPack") };
 	static const TCHAR* PackOverPlate[] = { nullptr, TEXT("SK_AssaultPack_OverPlate"), TEXT("SK_HydrationPack_OverPlate") };
 	const uint8 HairChoice = Appearance.Get(ERiptideLook::Hair);
-	SetPart(EPart::Uniform, TEXT("SK_Uniform"));
-	SetPart(EPart::Boots, TEXT("SK_Boots"));
-	SetPart(EPart::Gloves, Appearance.Get(ERiptideLook::Gloves) == 1 ? TEXT("SK_Gloves") : nullptr);
-	SetPart(EPart::Hair, bBalaclava ? nullptr : (Head != 0 ? HairHat : Hair)[FMath::Min<int32>(HairChoice, 4)]);
-	SetPart(EPart::Beard, Folder == TEXT("Male") && Appearance.Get(ERiptideLook::Beard) == 1 && !bBalaclava && !bShemagh ? TEXT("SK_Beard") : nullptr);
-	SetPart(EPart::Headgear, Headgear[FMath::Min<int32>(Head, 4)]);
-	SetPart(EPart::FaceCover, FaceCover[FMath::Min<int32>(Face, 4)]);
-	SetPart(EPart::Vest, Vest[FMath::Min<int32>(Appearance.Get(ERiptideLook::Vest), 2)]);
-	SetPart(EPart::Pack, (bOverPlate ? PackOverPlate : Pack)[FMath::Min<int32>(Appearance.Get(ERiptideLook::Backpack), 2)]);
+	// Castaways: what they wash up in. The military gear parts are kept for when such things are found as items;
+	// until then nothing of the sort is worn, whatever an old profile says.
+	static const TCHAR* Footwear[] = { nullptr, TEXT("SK_Sandals"), TEXT("SK_Slides"), TEXT("SK_Clogs") };
+	const bool bMilitary = false;
+	SetPart(EPart::Uniform, nullptr);
+	SetPart(EPart::Boots, nullptr);
+	SetPart(EPart::Shirt, Appearance.Get(ERiptideLook::Shirt) == 7 ? nullptr : TEXT("SK_TShirt"));
+	SetPart(EPart::Shorts, TEXT("SK_Shorts"));
+	SetPart(EPart::Footwear, Footwear[FMath::Min<int32>(Appearance.Get(ERiptideLook::Footwear), 3)]);
+	SetPart(EPart::Gloves, bMilitary && Appearance.Get(ERiptideLook::Gloves) == 1 ? TEXT("SK_Gloves") : nullptr);
+	SetPart(EPart::Hair, bBalaclava && bMilitary ? nullptr : (Head != 0 && bMilitary ? HairHat : Hair)[FMath::Min<int32>(HairChoice, 4)]);
+	SetPart(EPart::Beard, Folder == TEXT("Male") && Appearance.Get(ERiptideLook::Beard) == 1 && !(bMilitary && (bBalaclava || bShemagh)) ? TEXT("SK_Beard") : nullptr);
+	SetPart(EPart::Headgear, bMilitary ? Headgear[FMath::Min<int32>(Head, 4)] : nullptr);
+	SetPart(EPart::FaceCover, bMilitary ? FaceCover[FMath::Min<int32>(Face, 4)] : nullptr);
+	SetPart(EPart::Vest, bMilitary ? Vest[FMath::Min<int32>(Appearance.Get(ERiptideLook::Vest), 2)] : nullptr);
+	SetPart(EPart::Pack, bMilitary ? (bOverPlate ? PackOverPlate : Pack)[FMath::Min<int32>(Appearance.Get(ERiptideLook::Backpack), 2)] : nullptr);
 
 	// The eyebrows (a section of the body) would poke through a balaclava.
 	if (USkeletalMesh* BodyMesh = GetSkeletalMeshAsset())
@@ -137,6 +146,92 @@ void URiptideCrewBodyComponent::SetAppearance(const FRiptideAppearance& Look)
 	bBuilt = true;
 	ColourAll();
 	UpdateRifle();
+	ApplyFirstPerson();
+}
+
+void URiptideCrewBodyComponent::SetFirstPersonView(bool bOn)
+{
+	if (bFirstPerson == bOn)
+	{
+		return;
+	}
+	bFirstPerson = bOn;
+	// A player's own body is posed every frame, on screen or not: looking up takes it out of view, but its shadow
+	// on the ground (and the state other code reads from it) must keep moving.
+	VisibilityBasedAnimTickOption = bOn || bHiddenFromOwner ? EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones
+		: EVisibilityBasedAnimTickOption::OnlyTickPoseWhenRendered;
+	ApplyFirstPerson();
+	for (int32 i = 0; i < Parts.Num(); ++i)
+	{
+		ApplyOwnerVisibility(Parts[i], EPart(i));
+	}
+}
+
+void URiptideCrewBodyComponent::ApplyFirstPerson()
+{
+	if (!HasBody())
+	{
+		return;
+	}
+	// For this machine's own view the body is drawn without its head, closed at the neck (SK_Crew<Body>_FP), so
+	// looking down shows a chest and not the inside of a funnel; the shadow comes from a copy with the whole body.
+	const FString Folder = BodyFolder(Appearance);
+	const TCHAR* BaseName = Folder == TEXT("Female") ? TEXT("SK_CrewFemale") : TEXT("SK_CrewMale");
+	USkeletalMesh* Whole = LoadCrewAsset<USkeletalMesh>(Folder, BaseName);
+	USkeletalMesh* Headless = LoadCrewAsset<USkeletalMesh>(Folder, *(FString(BaseName) + TEXT("_FP")));
+	USkeletalMesh* Want = bFirstPerson && Headless ? Headless : Whole;
+	if (Want && GetSkeletalMeshAsset() != Want)
+	{
+		EmptyOverrideMaterials();
+		SetSkeletalMeshAsset(Want);
+		for (int32 i = 0; i < Want->GetMaterials().Num(); ++i)
+		{
+			SetMaterial(i, Coloured(Want->GetMaterials()[i].MaterialInterface));
+		}
+	}
+	const FName Head(TEXT("Head"));
+	if (!bFirstPerson)
+	{
+		if (GetBoneIndex(Head) != INDEX_NONE)
+		{
+			UnHideBoneByName(Head);
+		}
+		if (ShadowBody)
+		{
+			ShadowBody->DestroyComponent();
+			ShadowBody = nullptr;
+		}
+		return;
+	}
+	if (!Headless && GetBoneIndex(Head) != INDEX_NONE)
+	{
+		// No head-less body built yet: the head scales away instead.
+		HideBoneByName(Head, EPhysBodyOp::PBO_None);
+	}
+	if (!ShadowBody)
+	{
+		AActor* Owner = GetOwner();
+		ShadowBody = NewObject<USkeletalMeshComponent>(Owner ? static_cast<UObject*>(Owner) : static_cast<UObject*>(this), NAME_None, RF_Transient);
+		ShadowBody->SetupAttachment(this);
+		ShadowBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		ShadowBody->SetGenerateOverlapEvents(false);
+		ShadowBody->bUseBoundsFromLeaderPoseComponent = true;
+		ShadowBody->CastShadow = true;
+		ShadowBody->bCastHiddenShadow = true;
+		ShadowBody->SetOwnerNoSee(true);
+		ShadowBody->SetOnlyOwnerSee(false);
+		ShadowBody->SetVisibility(true);
+		ShadowBody->bRenderInMainPass = false;      // never drawn, only its shadow
+		if (GetWorld())
+		{
+			ShadowBody->RegisterComponentWithWorld(GetWorld());
+		}
+	}
+	if (Whole && ShadowBody->GetSkeletalMeshAsset() != Whole)
+	{
+		ShadowBody->SetSkeletalMeshAsset(Whole);
+	}
+	ShadowBody->SetLeaderPoseComponent(this, true);
 }
 
 USkeletalMeshComponent* URiptideCrewBodyComponent::PartComponent(EPart Part)
@@ -154,7 +249,7 @@ USkeletalMeshComponent* URiptideCrewBodyComponent::PartComponent(EPart Part)
 		Slot->SetGenerateOverlapEvents(false);
 		Slot->bUseBoundsFromLeaderPoseComponent = true;
 		Slot->CastShadow = true;
-		ApplyOwnerVisibility(Slot);
+		ApplyOwnerVisibility(Slot, Part);
 		if (GetWorld())
 		{
 			Slot->RegisterComponentWithWorld(GetWorld());
@@ -213,8 +308,12 @@ void URiptideCrewBodyComponent::ColourAll()
 	const FLinearColor Hair = URiptideAppearanceLibrary::GetHairColour(Appearance.Get(ERiptideLook::HairColour));
 	const int32 GearOption = Appearance.Get(ERiptideLook::GearColour);
 	const FLinearColor Gear = URiptideAppearanceLibrary::GetGearColour(GearOption);
-	// Boots: brown leather with the earth-tone gear (coyote, tan), black with the rest.
-	const FLinearColor Boots = GearOption == 0 || GearOption == 4 ? FLinearColor::FromSRGBColor(FColor(66, 45, 30))
+	// Boots: brown leather with the earth-tone gear (coyote, tan), black with the rest. A castaway's sandals and
+	// slides (worn without the gear) are tan leather.
+	const bool bBeachFootwear = Parts.IsValidIndex(int32(EPart::Footwear)) && Parts[int32(EPart::Footwear)]
+		&& Parts[int32(EPart::Footwear)]->GetSkeletalMeshAsset();
+	const FLinearColor Boots = bBeachFootwear ? FLinearColor::FromSRGBColor(FColor(150, 108, 70))
+		: GearOption == 0 || GearOption == 4 ? FLinearColor::FromSRGBColor(FColor(66, 45, 30))
 		: FLinearColor::FromSRGBColor(FColor(24, 23, 22));
 	const FCamo& Pattern = Camo(Appearance.Get(ERiptideLook::Camo));
 	for (const TPair<TObjectPtr<UMaterialInterface>, TObjectPtr<UMaterialInstanceDynamic>>& Pair : Dynamic)
@@ -228,6 +327,11 @@ void URiptideCrewBodyComponent::ColourAll()
 		M->SetVectorParameterValue(TEXT("HairColour"), Hair);
 		M->SetVectorParameterValue(TEXT("GearColour"), Gear);
 		M->SetVectorParameterValue(TEXT("BootColour"), Boots);
+		// The castaway clothes: each in its own chosen colour (the shirt's and the shorts' instances are told apart
+		// by their names).
+		const FString Name = Pair.Key ? Pair.Key->GetName() : FString();
+		const ERiptideLook ClothPart = Name.Contains(TEXT("Shorts")) ? ERiptideLook::Shorts : ERiptideLook::Shirt;
+		M->SetVectorParameterValue(TEXT("ClothColour"), URiptideAppearanceLibrary::GetClothColour(ClothPart, Appearance.Get(ClothPart)));
 		M->SetScalarParameterValue(TEXT("CamoStyle"), Pattern.Style);
 		M->SetScalarParameterValue(TEXT("CamoSize"), Pattern.Size);
 		for (int32 i = 0; i < 4; ++i)
@@ -247,22 +351,26 @@ void URiptideCrewBodyComponent::SetHiddenFromOwner(bool bHide)
 {
 	bHiddenFromOwner = bHide;
 	// Its own player never sees the body, but its shadow on the deck still moves with it: posed every frame.
-	VisibilityBasedAnimTickOption = bHide ? EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones
+	VisibilityBasedAnimTickOption = bHide || bFirstPerson ? EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones
 		: EVisibilityBasedAnimTickOption::OnlyTickPoseWhenRendered;
 	ApplyOwnerVisibility(this);
-	for (USkeletalMeshComponent* Part : Parts)
+	for (int32 i = 0; i < Parts.Num(); ++i)
 	{
-		ApplyOwnerVisibility(Part);
+		ApplyOwnerVisibility(Parts[i], EPart(i));
 	}
 	ApplyOwnerVisibility(Rifle);
 }
 
-void URiptideCrewBodyComponent::ApplyOwnerVisibility(UPrimitiveComponent* Component) const
+void URiptideCrewBodyComponent::ApplyOwnerVisibility(UPrimitiveComponent* Component, EPart Part) const
 {
 	if (Component)
 	{
-		Component->SetOwnerNoSee(bHiddenFromOwner);
-		Component->bCastHiddenShadow = bHiddenFromOwner;
+		// What's on the face (a beard, a scarf or balaclava) and what sits right under the chin (the vest's plates
+		// and the pack's straps) would fill its own player's view looking down: never shown to them.
+		const bool bOnTheFace = Part == EPart::Beard || Part == EPart::FaceCover || Part == EPart::Vest || Part == EPart::Pack
+			|| (bFirstPerson && (Part == EPart::Hair || Part == EPart::Headgear));
+		Component->SetOwnerNoSee(bHiddenFromOwner || bOnTheFace);
+		Component->bCastHiddenShadow = bHiddenFromOwner || bOnTheFace;
 	}
 }
 
@@ -299,6 +407,7 @@ void URiptideCrewBodyComponent::UpdateRifle()
 void URiptideCrewBodyComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	UpdateHeld();
 	if (Rifle && Rifle->IsVisible())
 	{
 		// Shouldered, from the posed body each frame (it moves with the breathing and sway); the animation puts the
@@ -306,6 +415,77 @@ void URiptideCrewBodyComponent::TickComponent(float DeltaTime, ELevelTick TickTy
 		const FTransform InComponent = RifleInComponent(GetSocketTransform(TEXT("upperarm_r"), RTS_Component).GetLocation(),
 			GetSocketTransform(TEXT("Head"), RTS_Component).GetLocation());
 		Rifle->SetWorldTransform(InComponent * GetComponentTransform());
+	}
+}
+
+FTransform URiptideCrewBodyComponent::RodInComponent(const FVector& UpperArmR, float Pitch, float Swing)
+{
+	// The body faces +Y with its left at +X. Held at the waist in front of the right hip, pointing out a little to the
+	// right and up; it follows the look up and down by half, winds back over the right shoulder for a cast (the hands
+	// coming up beside the head) and flicks out low as the cast goes.
+	const FVector Forward(0.f, 1.f, 0.f), Left(1.f, 0.f, 0.f), Up(0.f, 0.f, 1.f);
+	const float Back = FMath::Max(Swing, 0.f);
+	const FVector Grip = UpperArmR + Forward * (28.f - 16.f * Back) + Left * (4.f - 18.f * Back) + Up * (-24.f + 36.f * Back);
+	const float Tilt = FMath::DegreesToRadians(FMath::Clamp(26.f + FMath::Clamp(Pitch, -60.f, 60.f) * 0.5f + (Swing > 0.f ? Swing * 95.f : Swing * 30.f), -5.f, 125.f));
+	const float Out = FMath::DegreesToRadians(12.f);
+	const FVector Flat = Forward * FMath::Cos(Out) - Left * FMath::Sin(Out);
+	const FVector Along = (Flat * FMath::Cos(Tilt) + Up * FMath::Sin(Tilt)).GetSafeNormal();
+	const FVector Down = (-Up - Along * FVector::DotProduct(-Up, Along)).GetSafeNormal();
+	return FTransform(FRotationMatrix::MakeFromXY(Along, Down).ToQuat(), Grip);
+}
+
+bool URiptideCrewBodyComponent::GetHeldTip(FVector& OutTip) const
+{
+	if (!Held || !Held->IsVisible() || HeldShown.IsNone())
+	{
+		return false;
+	}
+	OutTip = Held->GetComponentTransform().TransformPosition(HeldTip);
+	return true;
+}
+
+void URiptideCrewBodyComponent::UpdateHeld()
+{
+	const ARiptideCharacter* Crew = Pose == ERiptideCrewPose::Gameplay ? Cast<ARiptideCharacter>(GetOwner()) : nullptr;
+	const FName Want = Crew && HasBody() ? Crew->GetHeldItem() : NAME_None;
+	if (Want != HeldShown)
+	{
+		HeldShown = Want;
+		if (!Want.IsNone() && !Held)
+		{
+			Held = NewObject<UStaticMeshComponent>(GetOwner() ? static_cast<UObject*>(GetOwner()) : static_cast<UObject*>(this), NAME_None, RF_Transient);
+			Held->SetupAttachment(this);
+			Held->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			Held->SetUsingAbsoluteLocation(true);
+			Held->SetUsingAbsoluteRotation(true);
+			if (GetWorld())
+			{
+				Held->RegisterComponentWithWorld(GetWorld());
+			}
+		}
+		if (Held && !Want.IsNone())
+		{
+			// The rod's model lies along x, butt to tip; the right hand goes round its reel seat, 21 cm up from the
+			// butt, on the line of its handle (riptide_item_catalog.py's build_fishing_rod).
+			UStaticMesh* Mesh = URiptideItemIconSubsystem::MeshFor(Want);
+			Held->SetStaticMesh(Mesh);
+			const FBox Box = Mesh ? Mesh->GetBoundingBox() : FBox(FVector(-70.f, -2.f, 0.f), FVector(70.f, 2.f, 3.f));
+			HeldGrip = FVector(Box.Min.X + 21.f, Box.Min.Y + 1.2f, Box.Min.Z + 1.4f);
+			HeldTip = FVector(Box.Max.X, HeldGrip.Y, HeldGrip.Z);
+		}
+	}
+	if (!Held)
+	{
+		return;
+	}
+	const bool bShow = !HeldShown.IsNone() && Crew && Crew->CanUseHands() && IsVisible();
+	Held->SetVisibility(bShow);
+	if (bShow)
+	{
+		const URiptideAnglerComponent* Angler = Crew->GetAngler();
+		const FTransform InComponent = RodInComponent(GetSocketTransform(TEXT("upperarm_r"), RTS_Component).GetLocation(),
+			FRotator::NormalizeAxis(Crew->GetBaseAimRotation().Pitch), Angler ? Angler->GetRodSwing() : 0.f);
+		Held->SetWorldTransform(FTransform(-HeldGrip) * InComponent * GetComponentTransform());
 	}
 }
 
@@ -339,6 +519,12 @@ void URiptideCrewBodyComponent::OnUnregister()
 		Rifle->DestroyComponent();
 	}
 	Rifle = nullptr;
+	if (Held && Held->IsRegistered())
+	{
+		Held->DestroyComponent();
+	}
+	Held = nullptr;
+	HeldShown = NAME_None;
 	bBuilt = false;
 	Super::OnUnregister();
 }
@@ -351,8 +537,10 @@ ERiptideCrewAnimState URiptideCrewBodyComponent::GetAnimState() const
 
 FString URiptideCrewBodyComponent::DescribeParts() const
 {
+	// In EPart's order.
 	static const TCHAR* Names[] = { TEXT("Uniform"), TEXT("Boots"), TEXT("Gloves"), TEXT("Hair"), TEXT("Beard"), TEXT("Headgear"),
-		TEXT("FaceCover"), TEXT("Vest"), TEXT("Pack") };
+		TEXT("FaceCover"), TEXT("Vest"), TEXT("Pack"), TEXT("Shirt"), TEXT("Shorts"), TEXT("Footwear") };
+	static_assert(UE_ARRAY_COUNT(Names) == int32(EPart::Count), "a name for every part");
 	FString Out = FString::Printf(TEXT("Body=%s"), GetSkeletalMeshAsset() ? *GetSkeletalMeshAsset()->GetName() : TEXT("none"));
 	for (int32 i = 0; i < Parts.Num() && i < int32(UE_ARRAY_COUNT(Names)); ++i)
 	{

@@ -80,6 +80,7 @@ def import_sounds():
 
 
 RADIO_SOUNDS_VERSION = "1"
+FISHING_SOUNDS_VERSION = "1"
 
 
 def _squelch(open_click, seconds, seed):
@@ -105,43 +106,116 @@ def _squelch(open_click, seconds, seed):
     return rate, out
 
 
+def _made_sound(name, version, make, volume=0.5):
+    """Imports a sound made in code (make() returns (rate, samples in -1..1)) as AUDIO_PATH/name, unless the one there
+    is already this version: written out as a 16-bit mono WAV and put in the effects sound class."""
+    import struct
+    import wave
+    path = f"{AUDIO_PATH}/{name}"
+    if unreal.EditorAssetLibrary.does_asset_exist(path) and \
+            unreal.EditorAssetLibrary.get_metadata_tag(unreal.load_asset(path), "RiptideVersion") == version:
+        return
+    out_dir = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()), "Generated", "Audio")
+    os.makedirs(out_dir, exist_ok=True)
+    rate, samples = make()
+    filename = os.path.join(out_dir, f"{name}.wav")
+    with wave.open(filename, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"".join(struct.pack("<h", int(max(-1.0, min(1.0, v)) * 32000)) for v in samples))
+    task = unreal.AssetImportTask()
+    task.filename = filename
+    task.destination_path = AUDIO_PATH
+    task.destination_name = name
+    task.automated = True
+    task.replace_existing = True
+    task.save = False
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    sound = unreal.load_asset(path)
+    if not sound:
+        unreal.log_error(f"Riptide: sound {name} failed to import")
+        return
+    sound.set_editor_property("volume", volume)
+    effects = f"{AUDIO_PATH}/SC_Effects"
+    if unreal.EditorAssetLibrary.does_asset_exist(effects):
+        sound.set_editor_property("sound_class_object", unreal.load_asset(effects))
+    unreal.EditorAssetLibrary.set_metadata_tag(sound, "RiptideVersion", version)
+    unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+    unreal.log(f"Riptide: made the sound {name}")
+
+
 def make_radio_sounds():
     """The radio's squelch opening and closing (S_RadioSquelchOpen and S_RadioSquelchClose): generated, written out as
     WAVs and imported."""
-    import struct
-    import wave
-    out_dir = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()), "Generated", "Audio")
-    os.makedirs(out_dir, exist_ok=True)
     for name, open_click, seconds, seed in (("S_RadioSquelchOpen", True, 0.16, 7), ("S_RadioSquelchClose", False, 0.32, 11)):
-        path = f"{AUDIO_PATH}/{name}"
-        if unreal.EditorAssetLibrary.does_asset_exist(path) and                 unreal.EditorAssetLibrary.get_metadata_tag(unreal.load_asset(path), "RiptideVersion") == RADIO_SOUNDS_VERSION:
-            continue
-        rate, samples = _squelch(open_click, seconds, seed)
-        filename = os.path.join(out_dir, f"{name}.wav")
-        with wave.open(filename, "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(rate)
-            w.writeframes(b"".join(struct.pack("<h", int(v * 32000)) for v in samples))
-        task = unreal.AssetImportTask()
-        task.filename = filename
-        task.destination_path = AUDIO_PATH
-        task.destination_name = name
-        task.automated = True
-        task.replace_existing = True
-        task.save = False
-        unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
-        sound = unreal.load_asset(path)
-        if not sound:
-            unreal.log_error(f"Riptide: radio sound {name} failed to import")
-            continue
-        sound.set_editor_property("volume", 0.5)
-        effects = f"{AUDIO_PATH}/SC_Effects"
-        if unreal.EditorAssetLibrary.does_asset_exist(effects):
-            sound.set_editor_property("sound_class_object", unreal.load_asset(effects))
-        unreal.EditorAssetLibrary.set_metadata_tag(sound, "RiptideVersion", RADIO_SOUNDS_VERSION)
-        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
-        unreal.log(f"Riptide: made the radio sound {name}")
+        _made_sound(name, RADIO_SOUNDS_VERSION, lambda o=open_click, s=seconds, r=seed: _squelch(o, s, r))
+
+
+def _fishing_sound(kind):
+    """Fishing's sounds, made rather than recorded (22.05 kHz mono): the rod swishing through a cast, the bobber's
+    plop, the splash of a bite, one click of the reel's ratchet, and the line snapping."""
+    import math
+    import random
+    rate = 22050
+    rng = random.Random({"cast": 3, "plop": 5, "splash": 9, "reel": 13, "snap": 17}[kind])
+    out = []
+    lp = lp2 = 0.0
+    if kind == "cast":
+        # Air past a thin rod: hiss swept up and down in pitch as the tip whips through.
+        n = int(rate * 0.42)
+        for i in range(n):
+            t = i / n
+            k = 0.05 + 0.5 * math.sin(math.pi * t) ** 2
+            lp += k * (rng.uniform(-1.0, 1.0) - lp)
+            lp2 += 0.5 * k * (lp - lp2)
+            out.append((lp - lp2) * 2.2 * math.sin(math.pi * t) ** 1.5)
+    elif kind == "plop":
+        # A small thing into water: a falling bubble tone and a short wash.
+        n = int(rate * 0.35)
+        phase = 0.0
+        for i in range(n):
+            t = i / rate
+            phase += 2.0 * math.pi * (900.0 * math.exp(-t / 0.03) + 260.0) / rate
+            lp += 0.25 * (rng.uniform(-1.0, 1.0) - lp)
+            out.append(0.55 * math.sin(phase) * math.exp(-t / 0.05) + 0.35 * lp * math.exp(-t / 0.09))
+    elif kind == "splash":
+        # A fish breaking the surface: a broadband burst with a few bubble tones in it.
+        n = int(rate * 0.7)
+        bubbles = [(rng.uniform(0.0, 0.25), rng.uniform(500.0, 1400.0)) for _ in range(6)]
+        for i in range(n):
+            t = i / rate
+            lp += 0.45 * (rng.uniform(-1.0, 1.0) - lp)
+            v = lp * (1.0 - math.exp(-t / 0.004)) * math.exp(-t / 0.16) * 0.9
+            for start, f in bubbles:
+                if t > start:
+                    u = t - start
+                    v += 0.18 * math.sin(2.0 * math.pi * f * (1.0 + 2.0 * u) * u) * math.exp(-u / 0.04)
+            out.append(v)
+    elif kind == "reel":
+        # One tick of the ratchet: a hard click and a short metallic ring.
+        n = int(rate * 0.05)
+        for i in range(n):
+            t = i / rate
+            out.append(0.8 * math.exp(-t / 0.0015) * (1.0 if (i // 3) % 2 else -1.0)
+                       + 0.25 * math.sin(2.0 * math.pi * 3400.0 * t) * math.exp(-t / 0.012))
+    elif kind == "snap":
+        # The line going: a sharp crack and a falling twang.
+        n = int(rate * 0.45)
+        phase = 0.0
+        for i in range(n):
+            t = i / rate
+            phase += 2.0 * math.pi * (1800.0 * math.exp(-t / 0.08) + 180.0) / rate
+            crack = rng.uniform(-1.0, 1.0) * math.exp(-t / 0.006)
+            out.append(0.7 * crack + 0.35 * math.sin(phase) * math.exp(-t / 0.12))
+    return rate, out
+
+
+def make_fishing_sounds():
+    """S_FishCast, S_FishPlop, S_FishSplash, S_FishReel, S_FishSnap (URiptideAnglerComponent plays them where they happen)."""
+    for name, kind, volume in (("S_FishCast", "cast", 0.45), ("S_FishPlop", "plop", 0.6), ("S_FishSplash", "splash", 0.7),
+                               ("S_FishReel", "reel", 0.3), ("S_FishSnap", "snap", 0.6)):
+        _made_sound(name, FISHING_SOUNDS_VERSION, lambda k=kind: _fishing_sound(k), volume=volume)
 
 
 def _spawn(actor_class, location=(0.0, 0.0, 0.0), yaw=0.0, pitch=0.0):
@@ -912,23 +986,25 @@ def make_boat_assets():
 # skeleton under /Game/Riptide/Characters. URiptideCrewBodyComponent loads them by path. Bump CREW_VERSION when
 # riptide_crew_mesh.py or the recipe here changes, so every machine rebuilds them on its next launch.
 CHARACTERS_PATH = "/Game/Riptide/Characters"
-CREW_VERSION = "6"
+CREW_VERSION = "14"
 CREW_MATERIALS = f"{CHARACTERS_PATH}/Materials"
 
-# Textures from the packs: (asset name, file under SourceAssets/Characters/Quaternius, kind)
+# Textures: (asset name, file under SourceAssets/Characters, kind). The bodies' are MakeHuman's (CC0, see
+# Docs/CREDITS.md); the beard's are Quaternius's.
+CREW_HAIR_STYLES = ("short04", "short01", "long01", "braid01")
 CREW_TEXTURES = [
-    ("T_CrewMale_Base", "BaseCharacters/T_Superhero_Male_Dark.png", "colour"),
-    ("T_CrewMale_Normal", "BaseCharacters/T_Superhero_Male_Normal.png", "normal"),
-    ("T_CrewMale_Rough", "BaseCharacters/T_Superhero_Male_Roughness.png", "data"),
-    ("T_CrewFemale_Base", "BaseCharacters/T_Superhero_Female_Dark_BaseColor.png", "colour"),
-    ("T_CrewFemale_Normal", "BaseCharacters/T_Superhero_Female_Normal.png", "normal"),
-    ("T_CrewFemale_Rough", "BaseCharacters/T_Superhero_Female_Roughness.png", "data"),
-    ("T_CrewHair1_Base", "Hair/T_Hair_1_BaseColor.png", "colour"),
-    ("T_CrewHair1_Normal", "Hair/T_Hair_1_Normal.png", "normal"),
-    ("T_CrewHair2_Base", "Hair/T_Hair_2_BaseColor.png", "colour"),
-    ("T_CrewHair2_Normal", "Hair/T_Hair_2_Normal.png", "normal"),
-    ("T_CrewEye", "BaseCharacters/T_Eye_Brown.png", "colour"),
-]
+    ("T_CrewMale_Base", "MakeHuman/Male/middleage_lightskinned_male_diffuse.png", "colour"),
+    ("T_CrewFemale_Base", "MakeHuman/Female/middleage_lightskinned_female_diffuse.png", "colour"),
+    ("T_CrewBrows_Male", "MakeHuman/Male/eyebrow001.png", "colour"),
+    ("T_CrewBrows_Female", "MakeHuman/Female/eyebrow006.png", "colour"),
+    ("T_CrewLashes", "MakeHuman/Male/eyelashes01.png", "colour"),
+    ("T_CrewTeeth", "MakeHuman/Male/teeth.png", "colour"),
+    ("T_CrewEye", "MakeHuman/Male/brown_eye.png", "colour"),
+    ("T_CrewHair1_Base", "Quaternius/Hair/T_Hair_1_BaseColor.png", "colour"),
+    ("T_CrewHair1_Normal", "Quaternius/Hair/T_Hair_1_Normal.png", "normal"),
+    ("T_CrewHair2_Base", "Quaternius/Hair/T_Hair_2_BaseColor.png", "colour"),
+    ("T_CrewHair2_Normal", "Quaternius/Hair/T_Hair_2_Normal.png", "normal"),
+] + [("T_CrewHair_" + style, f"MakeHuman/Male/{style}_diffuse.png", "colour") for style in CREW_HAIR_STYLES]
 
 # A tiny noise library for the crew's materials' HLSL (value noise and fBm, self-contained so it compiles the same
 # on every platform), wrapped in a struct: a Custom node's code can't declare functions, but it can declare a struct
@@ -983,7 +1059,7 @@ _CLOTH_NORMAL_HLSL = _NOISE_HLSL + (
 #   Weave 0 nylon (Cordura), 1 webbing, 2 knit ribs, 3 velcro loop, 4 smooth (rubber, plastic, metal), 5 shemagh
 #   check, 6 boot leather, 7 glove
 _GEAR_HLSL = _NOISE_HLSL + (
-    "float3 base = lerp(Fixed.rgb, Gear.rgb, UseGear); base = lerp(base, Boot.rgb, UseBoot); base *= Tint;\n"
+    "float3 base = lerp(Fixed.rgb, Gear.rgb, UseGear); base = lerp(base, Boot.rgb, UseBoot); base = lerp(base, Cloth.rgb, UseCloth); base *= Tint;\n"
     "float3 P = float3(UV * 10.0, 0.0);\n"
     "float w = Weave;\n"
     "if (w < 0.5) {\n"
@@ -1046,6 +1122,10 @@ CREW_GEAR_SLOTS = {
     "GloveGuard": (1, 0, 0.45, (0.1, 0.1, 0.1), 4, 0.5, 0.0),
     "Furniture": (1, 0, 0.9, (0.1, 0.1, 0.1), 4, 0.6, 0.0),
     "Boot": (0, 1, 1.0, (0.1, 0.1, 0.1), 6, 0.62, 0.0),
+    # The castaway clothes: cloth in the look's colour (UseCloth, set below), wood for the clogs.
+    "Shirt": (0, 0, 1.0, (0.8, 0.8, 0.8), 0, 0.9, 0.0),
+    "Shorts": (0, 0, 1.0, (0.5, 0.45, 0.3), 0, 0.88, 0.0),
+    "Clog": (0, 0, 1.0, (0.36, 0.24, 0.12), 4, 0.55, 0.0),
     "Mount": (0, 0, 1.0, (0.035, 0.036, 0.038), 4, 0.42, 0.5),
     "Trim": (0, 0, 1.0, (0.02, 0.02, 0.02), 4, 0.75, 0.0),
     "Polymer": (0, 0, 1.0, (0.03, 0.03, 0.032), 4, 0.55, 0.0),
@@ -1059,6 +1139,10 @@ CREW_OTHER_SLOTS = {
     "Uniform": "MI_CrewCamo", "Camo": "MI_CrewCamo", "Lens": "MI_CrewLens_Sun", "ClearLens": "MI_CrewLens_Clear",
     "Hair1": "MI_CrewHair1", "Hair2": "MI_CrewHair2", "MI_Hair_1": "MI_CrewHair1", "MI_Hair_2": "MI_CrewHair2",
     "MI_Eyes": "M_CrewEyes", "MI_Superhero_Male": "MI_CrewSkin_Male", "MI_Superhero_Female": "MI_CrewSkin_Female",
+    # MakeHuman's bodies (Tools/mh_export.py names the slots).
+    "Skin_Male": "MI_CrewSkin_Male", "Skin_Female": "MI_CrewSkin_Female", "Eyes": "M_CrewEyes",
+    "Brows_Male": "MI_CrewBrows_Male", "Brows_Female": "MI_CrewBrows_Female", "Lashes": "MI_CrewLashes", "Teeth": "MI_CrewTeeth",
+    "Hair_short04": "MI_CrewHair_short04", "Hair_short01": "MI_CrewHair_short01", "Hair_long01": "MI_CrewHair_long01", "Hair_braid01": "MI_CrewHair_braid01",
 }
 
 
@@ -1133,25 +1217,35 @@ def _make_crew_materials(textures):
     mel = unreal.MaterialEditingLibrary
 
     mat, g = _new_material("M_CrewSkin")
+    # MakeHuman's skin photos have no normal or roughness maps: skin is smooth-ish and a little shiny.
     base = g.texture("BaseTex", textures["T_CrewMale_Base"])
-    nrm = g.texture("NormalTex", textures["T_CrewMale_Normal"])
-    rough = g.texture("RoughTex", textures["T_CrewMale_Rough"])
     tone = g.vector("SkinTone", (0.56, 0.32, 0.2))
     g.out(g.custom(_SKIN_HLSL, _F3, [("Tex", base, "RGB"), ("Tone", tone, "")]), mp.MP_BASE_COLOR)
-    g.out(nrm, mp.MP_NORMAL, "RGB")
-    g.out(rough, mp.MP_ROUGHNESS, "G")
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.55), mp.MP_ROUGHNESS)
     spec = g.node(unreal.MaterialExpressionConstant, r=0.35)
     g.out(spec, mp.MP_SPECULAR)
     _finish_material(mat)
 
     mat, g = _new_material("M_CrewHair")
+    # Hair cards: the photo's alpha cuts the strands out.
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    mat.set_editor_property("two_sided", True)
     base = g.texture("BaseTex", textures["T_CrewHair1_Base"])
-    nrm = g.texture("NormalTex", textures["T_CrewHair1_Normal"])
     colour = g.vector("HairColour", (0.03, 0.02, 0.015))
     g.out(g.custom(_HAIR_HLSL, _F3, [("Tex", base, "RGB"), ("Colour", colour, "")]), mp.MP_BASE_COLOR)
-    g.out(nrm, mp.MP_NORMAL, "RGB")
+    g.out(base, mp.MP_OPACITY_MASK, "A")
     g.out(g.node(unreal.MaterialExpressionConstant, r=0.6), mp.MP_ROUGHNESS)
     g.out(g.node(unreal.MaterialExpressionConstant, r=0.3), mp.MP_SPECULAR)
+    _finish_material(mat)
+
+    mat, g = _new_material("M_CrewCutout")
+    # Eyebrows, eyelashes, teeth: a photo with its alpha, as it comes.
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    mat.set_editor_property("two_sided", True)
+    base = g.texture("BaseTex", textures["T_CrewLashes"])
+    g.out(base, mp.MP_BASE_COLOR, "RGB")
+    g.out(base, mp.MP_OPACITY_MASK, "A")
+    g.out(g.node(unreal.MaterialExpressionConstant, r=0.7), mp.MP_ROUGHNESS)
     _finish_material(mat)
 
     mat, g = _new_material("M_CrewEyes")
@@ -1183,6 +1277,7 @@ def _make_crew_materials(textures):
     ins = [("Gear", g.vector("GearColour", (0.22, 0.12, 0.05)), ""), ("Boot", g.vector("BootColour", (0.1, 0.06, 0.03)), ""),
            ("Fixed", g.vector("FixedColour", (0.1, 0.1, 0.1)), ""), ("UseGear", g.scalar("UseGear", 1.0), ""),
            ("UseBoot", g.scalar("UseBoot", 0.0), ""), ("Tint", g.scalar("Tint", 1.0), ""), ("Weave", weave, ""),
+           ("Cloth", g.vector("ClothColour", (0.8, 0.8, 0.8)), ""), ("UseCloth", g.scalar("UseCloth", 0.0), ""),
            ("UV", uv, ""), ("VC", vc, "")]
     g.out(g.custom(_GEAR_HLSL, _F3, ins), mp.MP_BASE_COLOR)
     g.out(g.custom(_GEAR_ROUGH_HLSL, _F1, [("Rough", g.scalar("Roughness", 0.8), ""), ("Weave", weave, ""), ("VC", vc, "")]), mp.MP_ROUGHNESS)
@@ -1218,18 +1313,23 @@ def _make_crew_materials(textures):
         unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
         return mi
 
-    instance("MI_CrewSkin_Male", "M_CrewSkin", textures_={"BaseTex": textures["T_CrewMale_Base"], "NormalTex": textures["T_CrewMale_Normal"],
-                                                          "RoughTex": textures["T_CrewMale_Rough"]})
-    instance("MI_CrewSkin_Female", "M_CrewSkin", textures_={"BaseTex": textures["T_CrewFemale_Base"], "NormalTex": textures["T_CrewFemale_Normal"],
-                                                            "RoughTex": textures["T_CrewFemale_Rough"]})
+    instance("MI_CrewSkin_Male", "M_CrewSkin", textures_={"BaseTex": textures["T_CrewMale_Base"]})
+    instance("MI_CrewSkin_Female", "M_CrewSkin", textures_={"BaseTex": textures["T_CrewFemale_Base"]})
     for k in ("1", "2"):
-        instance("MI_CrewHair" + k, "M_CrewHair", textures_={"BaseTex": textures[f"T_CrewHair{k}_Base"], "NormalTex": textures[f"T_CrewHair{k}_Normal"]})
+        instance("MI_CrewHair" + k, "M_CrewHair", textures_={"BaseTex": textures[f"T_CrewHair{k}_Base"]})
+    for style in CREW_HAIR_STYLES:
+        instance("MI_CrewHair_" + style, "M_CrewHair", textures_={"BaseTex": textures["T_CrewHair_" + style]})
+    instance("MI_CrewBrows_Male", "M_CrewCutout", textures_={"BaseTex": textures["T_CrewBrows_Male"]})
+    instance("MI_CrewBrows_Female", "M_CrewCutout", textures_={"BaseTex": textures["T_CrewBrows_Female"]})
+    instance("MI_CrewLashes", "M_CrewCutout", textures_={"BaseTex": textures["T_CrewLashes"]})
+    instance("MI_CrewTeeth", "M_CrewCutout", textures_={"BaseTex": textures["T_CrewTeeth"]})
     instance("MI_CrewCamo", "M_CrewCamo")
     instance("MI_CrewLens_Sun", "M_CrewLens", scalars={"Opacity": 0.88}, vectors={"Tint": (0.012, 0.01, 0.008)})
     instance("MI_CrewLens_Clear", "M_CrewLens", scalars={"Opacity": 0.3}, vectors={"Tint": (0.05, 0.045, 0.035)})
     for slot, (use_gear, use_boot, tint, fixed, weave, rough, metal) in CREW_GEAR_SLOTS.items():
         instance("MI_CrewGear_" + slot, "M_CrewGear", scalars={"UseGear": use_gear, "UseBoot": use_boot, "Tint": tint, "Weave": weave,
-                                                              "Roughness": rough, "Metallic": metal}, vectors={"FixedColour": fixed})
+                                                              "Roughness": rough, "Metallic": metal, "UseCloth": 1.0 if slot in ("Shirt", "Shorts") else 0.0},
+                 vectors={"FixedColour": fixed})
 
 
 def _crew_material_for(slot):
@@ -1298,7 +1398,8 @@ def make_crew_assets():
         assets.delete_directory(CHARACTERS_PATH)
 
     project = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())
-    source = os.path.join(project, "SourceAssets", "Characters", "Quaternius")
+    source = os.path.join(project, "SourceAssets", "Characters")
+    quaternius = os.path.join(source, "Quaternius")
     out_dir = os.path.join(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()), "Generated", "Crew")
     generated, rifle_obj = riptide_crew_mesh.build_all(source, out_dir, log=unreal.log)
 
@@ -1332,12 +1433,12 @@ def make_crew_assets():
     # The bodies (the male one first: its skeleton becomes the crew's), copied under the asset names they get.
     import shutil
     skeleton = None
-    for body, src in (("Male", "Superhero_Male_FullBody"), ("Female", "Superhero_Female_FullBody")):
+    for body, src in (("Male", "Male_FullBody"), ("Female", "Female_FullBody")):
         folder = os.path.join(out_dir, body)
         name = "SK_Crew" + body
-        with open(os.path.join(source, "BaseCharacters", src + ".gltf")) as f:
+        with open(os.path.join(source, "MakeHuman", body, src + ".gltf")) as f:
             doc = f.read()
-        shutil.copyfile(os.path.join(source, "BaseCharacters", src + ".bin"), os.path.join(folder, src + ".bin"))
+        shutil.copyfile(os.path.join(source, "MakeHuman", body, src + ".bin"), os.path.join(folder, src + ".bin"))
         with open(os.path.join(folder, name + ".gltf"), "w") as f:
             f.write(doc)
         _interchange_import(os.path.join(folder, name + ".gltf"), f"{CHARACTERS_PATH}/{body}", skeleton)
@@ -1346,6 +1447,13 @@ def make_crew_assets():
             if not unreal.RiptideCrewLibrary.set_up_crew_skeleton(skeleton):
                 unreal.log_error("Riptide: could not set up the crew skeleton's retargeting")
             assets.save_asset(skeleton.get_path_name().split(".")[0], only_if_is_dirty=False)
+        # The same body without its head, for the player's own view (URiptideCrewBodyComponent::ApplyFirstPerson).
+        with open(os.path.join(source, "MakeHuman", body, src + "_FP.gltf")) as f:
+            doc = f.read()
+        shutil.copyfile(os.path.join(source, "MakeHuman", body, src + "_FP.bin"), os.path.join(folder, src + "_FP.bin"))
+        with open(os.path.join(folder, name + "_FP.gltf"), "w") as f:
+            f.write(doc)
+        _interchange_import(os.path.join(folder, name + "_FP.gltf"), f"{CHARACTERS_PATH}/{body}", skeleton)
         for k, (mesh_name, gltf) in enumerate(generated[body].items()):
             _interchange_import(gltf, f"{CHARACTERS_PATH}/{body}", skeleton)
             if k % 8 == 7:
@@ -1364,7 +1472,7 @@ def make_crew_assets():
     unreal.SystemLibrary.collect_garbage()
     import_dir = f"{CHARACTERS_PATH}/Animations/Import"
     for lib in ("UAL1", "UAL2"):
-        _interchange_import(os.path.join(source, "Animations", lib + "_Standard.glb"), import_dir, skeleton, animations=True)
+        _interchange_import(os.path.join(quaternius, "Animations", lib + "_Standard.glb"), import_dir, skeleton, animations=True)
         unreal.SystemLibrary.collect_garbage()
     for name, origin in clips:
         lib, clip = origin.split("/")
@@ -1576,6 +1684,7 @@ def _set_up_project():
     try:
         import_sounds()
         make_radio_sounds()
+        make_fishing_sounds()
     except Exception as err:  # noqa: BLE001 - never block the editor from opening
         unreal.log_error(f"Riptide: could not import sounds: {err}")
 
@@ -1590,6 +1699,20 @@ def _set_up_project():
         make_boat_assets()
     except Exception as err:  # noqa: BLE001 - never block the editor from opening
         unreal.log_error(f"Riptide: could not build the boat model: {err}")
+
+    # The items' models (riptide_item_models.py), from the C++ item table.
+    try:
+        import riptide_item_models
+        riptide_item_models.make_item_assets()
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build the item models: {err}")
+
+    # The islands and their test map (riptide_islands.py), using the sea and sky built here.
+    try:
+        import riptide_islands
+        riptide_islands.build(globals())
+    except Exception as err:  # noqa: BLE001 - never block the editor from opening
+        unreal.log_error(f"Riptide: could not build the islands: {err}")
 
     # Before the ocean test map, which the editor is left on.
     try:

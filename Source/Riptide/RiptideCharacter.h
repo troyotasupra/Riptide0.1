@@ -5,6 +5,7 @@
 #include "RiptideCharacter.generated.h"
 
 class ARiptideBoat;
+class ARiptideRaft;
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
@@ -12,6 +13,21 @@ class URiptideCrewBodyComponent;
 class URiptideStorageComponent;
 class SRiptideInventory;
 struct FInputActionValue;
+
+/** A one-shot action a crew member's upper body performs over whatever the legs are doing. */
+UENUM(BlueprintType)
+enum class ERiptideCrewAction : uint8
+{
+	None,
+	PunchJab,
+	PunchCross,
+	Reach,          // a hand out to use or take something
+	Consume,        // eating or drinking
+	PickUp,
+	Chop,           // swinging a hatchet, while held
+	Harvest,
+	Throw,
+};
 
 /**
  * A crew member on foot, in first person.
@@ -34,6 +50,7 @@ public:
 	virtual void NotifyControllerChanged() override;
 
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void Destroyed() override;
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void OnRep_PlayerState() override;
 
@@ -133,6 +150,31 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crew")
 	bool IsKnockedDown() const;
 
+	/** Running flat out (Shift, away from any handhold). */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsSprinting() const { return bSprinting && !bIsCrouched; }
+
+	/** Sprints (or stops) as if Shift were held. For tests and AI. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetSprinting(bool bRun);
+
+	/** The upper-body action under way, and seconds into it (on every machine). */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	ERiptideCrewAction GetAction() const;
+	float GetActionTime() const;
+
+	/** Starts an action (a punch, a reach, a swing) now; the server tells everyone. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void StartAction(ERiptideCrewAction NewAction);
+
+	/** Stops a held action (chopping). */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void StopAction();
+
+	/** Throws a punch with alternating hands. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void Punch();
+
 	/** Seconds since the last knockdown began (large if there's never been one), on every machine. */
 	float GetKnockdownElapsed() const;
 
@@ -178,6 +220,110 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void OpenInventory(int32 Locker);
 
+	/** Opens the inventory screen with any container's grid alongside (a bag on the ground, a crate). Local player only. */
+	void OpenContainer(URiptideStorageComponent* Container, int32 Index);
+
+	/** The server telling this player's machine to open a container it has just used. */
+	UFUNCTION(Client, Reliable)
+	void ClientOpenContainer(URiptideStorageComponent* Container, int32 Index);
+
+	/** Shows a note on this crew member's player's screen (from the server: why something can't be done). */
+	UFUNCTION(Client, Reliable)
+	void ClientNote(const FString& Text);
+
+	/** Looks at and uses things in the world (IRiptideInteractable). */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	class URiptideInteractionComponent* GetInteraction() const { return Interaction; }
+
+	/** Drops Count of a carried stack (all of it when 0) on the ground in front (the server does it). Players use G. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void DropItem(int32 StorageIndex, int32 Uid, int32 Count);
+
+	UFUNCTION(Server, Reliable)
+	void ServerDropItem(int32 StorageIndex, int32 Uid, int32 Count);
+
+	/** Puts Count of item Id straight into the pockets or pack, whatever doesn't fit on the ground. Server only. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	int32 GiveItem(FName Id, int32 Count);
+
+	/** Uses a carried item: eats or drinks it, reads it (learning its recipes), or wears it. The server does it. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void UseItem(int32 StorageIndex, int32 Uid);
+
+	UFUNCTION(Server, Reliable)
+	void ServerUseItem(int32 StorageIndex, int32 Uid);
+
+	/** What this crew member can make, and the making under way. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	class URiptideCraftingComponent* GetCrafting() const { return Crafting; }
+
+	/** Hunger, thirst and health. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	class URiptideSurvivalComponent* GetSurvival() const { return Survival; }
+
+	/** Fishing, with the rod in hand. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	class URiptideAnglerComponent* GetAngler() const { return Angler; }
+
+	/** What's in the hands (a fishing rod), or none: a carried item taken out to use. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	FName GetHeldItem() const { return HeldItem; }
+
+	/** Takes a carried item in hand (one that's held to use: IsHoldable), or with none puts away what's held. The
+	 * server does it. Q takes the rod out or puts it away; using it in the inventory does too. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void HoldItem(FName Id);
+
+	/** Whether an item is one you hold in your hands to use (the fishing rod). */
+	static bool IsHoldable(FName Id);
+
+	/** Whether the hands are free to use what's held: on your feet, not swimming, climbing, at the helm or down. */
+	bool CanUseHands() const;
+
+	/** The raft this crew member is rowing (kneeling amidships, hands on the oars), or null. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	ARiptideRaft* GetRowingRaft() const { return RowingRaft; }
+
+	/** Kneels at a raft's oars, or (null) gets up off them onto its deck. Server (ARiptideRaft::SetRower). */
+	void SetRowing(ARiptideRaft* Raft);
+
+	/** Rows as if W/S (Forward) and A/D (Turn) were held, each -1..1. For tests and AI. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetRowInput(float Forward, float Turn);
+
+	/** Lets go of the oars (E or Space while rowing). */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void StopRowing();
+
+	/** Asleep in a shelter: the night passes when everyone is (ARiptideSkyClock). Moving or E gets up. */
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsSleeping() const { return bSleeping; }
+
+	/** Lies down to sleep, or gets up (server; a client asks with ServerWake). */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void SetSleeping(bool bSleep);
+
+	/** Wakes after a night skipped while asleep: SkippedSeconds of time passed (hungrier, thirstier, rested). Server. */
+	void WakeAfterNight(float SkippedSeconds);
+
+	/** The crafting book (B). Local player only. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void OpenCraftBook();
+
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void CloseCraftBook();
+	bool IsCraftBookOpen() const { return CraftBook.IsValid(); }
+
+	/** The crew's chart (M): held up while you go on moving. Local player only. */
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void OpenChart();
+
+	UFUNCTION(BlueprintCallable, Category = "Crew")
+	void CloseChart();
+
+	UFUNCTION(BlueprintPure, Category = "Crew")
+	bool IsChartOpen() const { return ChartPanel.IsValid(); }
+
 	UFUNCTION(BlueprintCallable, Category = "Crew")
 	void CloseInventory();
 	bool IsInventoryOpen() const { return InventoryWidget.IsValid(); }
@@ -192,9 +338,88 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Crew")
 	TObjectPtr<URiptideStorageComponent> Inventory;
 
+	UPROPERTY(VisibleAnywhere, Category = "Crew")
+	TObjectPtr<class URiptideInteractionComponent> Interaction;
+
+	UPROPERTY(VisibleAnywhere, Category = "Crew")
+	TObjectPtr<class URiptideCraftingComponent> Crafting;
+
+	UPROPERTY(VisibleAnywhere, Category = "Crew")
+	TObjectPtr<class URiptideSurvivalComponent> Survival;
+
+	UPROPERTY(VisibleAnywhere, Category = "Crew")
+	TObjectPtr<class URiptideAnglerComponent> Angler;
+
+	UPROPERTY(Replicated)
+	FName HeldItem;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Rowing)
+	TObjectPtr<ARiptideRaft> RowingRaft;
+
+	UFUNCTION()
+	void OnRep_Rowing();
+	void ApplyRowing();
+
+	UFUNCTION(Server, Unreliable)
+	void ServerRow(int8 Forward, int8 Turn);
+
+	UFUNCTION(Server, Reliable)
+	void ServerStopRowing();
+
+	/** The strokes last sent to the server. */
+	int8 SentRowForward = 0;
+	int8 SentRowTurn = 0;
+
+	UFUNCTION(Server, Reliable)
+	void ServerHoldItem(FName Id);
+
+	/** Q: the rod out, or away. */
+	void OnHoldKey(const FInputActionValue& Value);
+	void OnPrimaryReleased(const FInputActionValue& Value);
+	void OnSecondary(const FInputActionValue& Value);
+	void OnCutLine(const FInputActionValue& Value);
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> HoldAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> ChartAction;
+
+	TSharedPtr<class SWidget> ChartPanel;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> SecondaryAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> CutLineAction;
+
+	UPROPERTY(Replicated)
+	bool bSleeping = false;
+
+	UFUNCTION(Server, Reliable)
+	void ServerWake();
+
+	TSharedPtr<class SRiptideCraftBook> CraftBook;
+	TSharedPtr<class SWidget> CraftBookContainer;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> CraftAction;
+
+	void OnCraftKey(const FInputActionValue& Value);
+
+	/** The container the inventory screen was opened with, if not a locker. */
+	TWeakObjectPtr<URiptideStorageComponent> OpenedContainer;
+	int32 OpenedContainerIndex = INDEX_NONE;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> DropAction;
+
+	void OnDropKey(const FInputActionValue& Value);
+	void OnInteractReleased(const FInputActionValue& Value);
+
 	/** How far (cm) from the eyes a locker's lid can be looked at and opened. */
 	UPROPERTY(EditAnywhere, Category = "Crew")
-	float LockerReach = 230.f;
+	float LockerReach = 250.f;
 
 	virtual void BeginPlay() override;
 
@@ -288,6 +513,9 @@ private:
 	UFUNCTION()
 	void OnHomeBoatDestroyed(AActor* Boat);
 
+	/** Tells the game's save what this crew member has on them, as they leave. */
+	void NoteLeavingForSave();
+
 	/** Closes the inventory if what it was opened for is out of reach now. */
 	void CloseInventoryIfOutOfReach();
 
@@ -364,6 +592,34 @@ private:
 
 	UPROPERTY(Replicated)
 	bool bBracing = false;
+
+	UPROPERTY(Replicated)
+	bool bSprinting = false;
+
+	/** The action under way and when it began on the server's clock (so every machine plays it in step). */
+	UPROPERTY(Replicated)
+	ERiptideCrewAction Action = ERiptideCrewAction::None;
+
+	UPROPERTY(Replicated)
+	double ActionStartTime = -100.0;
+
+	bool bNextPunchIsCross = false;
+
+	UFUNCTION(Server, Reliable)
+	void ServerSetSprinting(bool bRun);
+
+	UFUNCTION(Server, Reliable)
+	void ServerStartAction(ERiptideCrewAction NewAction);
+
+	void OnPunch(const FInputActionValue& Value);
+	void OnCrouchKey(const FInputActionValue& Value);
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> PunchAction;
+
+	/** Running flat out, cm/s. */
+	UPROPERTY(EditAnywhere, Category = "Crew")
+	float SprintSpeed = 600.f;
 
 	bool bSteadyFeet = false;
 

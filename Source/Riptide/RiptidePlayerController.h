@@ -176,6 +176,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Dev")
 	void RefuelAndRepair();
 
+	/** Console: `Give coconut 3` puts items in the crew member's pockets; `Spawn log 2` drops them on the ground in
+	 * front; `Items` lists every item id. Dev mode only. */
+	UFUNCTION(Exec)
+	void Give(const FString& Item, int32 Count = 1);
+
+	UFUNCTION(Exec)
+	void Spawn(const FString& Item, int32 Count = 1);
+
+	UFUNCTION(Exec)
+	void Items();
+
 	/** Sets the boat upright on the sea where it is, dead in the water (the throttle stays where it is). */
 	UFUNCTION(BlueprintCallable, Category = "Dev")
 	void RightAndStopBoat();

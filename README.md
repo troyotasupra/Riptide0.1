@@ -26,22 +26,21 @@ Riptide runs from its source, on Windows or macOS, with Unreal Engine 5.7.
    - **macOS:** Unreal Engine 5.7 from the Epic Games Launcher, and Xcode (the version Epic lists for 5.7).
    - **Both:** Git with Git LFS (`git lfs install` once), and Steam for online play.
 2. **Get the game:** `git clone https://github.com/troyotasupra/Riptide0.1.git`, then `git lfs pull` inside it. The art and sounds come down through LFS.
-3. **First launch:** open `Riptide.uproject` in Unreal Engine 5.7 once and let it compile and finish opening.
-   - The first open builds the game's maps, boat, crew and materials, which takes several minutes.
-   - Close the editor when it's done.
-4. **Play:** use the launcher in `Tools/Launch/`. It brings the code up to date (quick when nothing has changed) and starts the game in its own window, on the main menu.
+3. **Play:** use the launcher in `Tools/Launch/`. It brings the code up to date, builds the game's content (maps, boat, crew, islands, items) when it needs to, and starts the game in its own window, on the main menu.
+   - The first launch, and the first after an update, takes several minutes while the content is built; after that it's quick.
    - **Windows:** `Play Riptide.bat`. Right-click it and choose Send to, Desktop (create shortcut) for a desktop icon.
    - **macOS:** `Play Riptide.command`. Double-click it in Finder; the first time, macOS may ask you to allow it in System Settings, Privacy & Security.
    - If Unreal Engine isn't in the default place, set `UE_ROOT` to its folder.
-5. **Updating:** `git pull` (and `git lfs pull`), then play as usual. After an update that changes the generated content, open the editor once to rebuild it.
+4. **Updating:** `git pull` (and `git lfs pull`), then play as usual: the launcher rebuilds whatever changed.
 
 For online play, start Steam first on every PC (see "Playing together"). Windows and Mac players can play together.
 
 ## Playing together
 Riptide is online co-op for up to four players, over Steam when it's running.
 
-- **Host:** Main menu, Host game, then Friends only (your Steam friends, and anyone you invite) or Public (listed in everyone's browser), then Host. You start on the boat. To bring friends, press Esc (P in the editor) in the game and choose Invite friends: it opens the Steam overlay's invite list. Friends can also join you from their Steam friends list ("Join game").
+- **Host:** Main menu, Host game, then Friends only (your Steam friends, and anyone you invite) or Public (listed in everyone's browser), then Host. You wash up on the island. To bring friends, press Esc (P in the editor) in the game and choose Invite friends: it opens the Steam overlay's invite list. Friends can also join you from their Steam friends list ("Join game").
 - **Join:** Main menu, Join game. The browser lists public games and your Steam friends' games (host, crew, ping): pick one and press Join, or double-click it. Accepting a Steam invite joins straight away, even from the desktop.
+- **Saving:** the host's game saves itself every minute, when everyone sleeps through a night, when a friend leaves and when the host leaves or quits. Next time, Host game offers **Continue** (the day and hour, what was built, dropped and harvested, and every castaway where they were with what they carried, friends included when they rejoin) or **New game**, which replaces the save. The save lives on the host's PC, in `Saved/SaveGames/World.sav`.
 - **Without Steam** (it isn't running, or you start the game with `-nosteam`), the game uses the local network instead: hosted games show in the Join browser on the same network, and anyone can join by typing the host's IP address under Join by IP address (the host's address is shown on the Host screen and in the in-game menu). Players outside the host's network need UDP port 7777 forwarded to the host's PC.
 - **Steam setup:** Steam has to be running and logged in before the game starts. Until Riptide has its own Steam app, it uses Valve's public test app (480, "Spacewar"), so Steam shows you as playing Spacewar. Playing in the editor always uses the local network, not Steam.
 - **Your crew member:** Main menu, Crew: your callsign (letters, digits, `-`, `_` and `.`) and a row for each part of your look (build, skin, hair, beard, headgear, face, uniform, vest, gear colour, pack, gloves), with Randomise. The preview turns when you drag it (or Q / E, LB / RB). Save keeps it; every game you host or join, the others see you by that callsign and in that look.
@@ -101,6 +100,17 @@ Each sound is levelled on import to a target loudness, with peaks held below -8 
 | On the ladder: climb up / down (let go of both to hang on), let go | W / S, Space | Left stick, A |
 | Take the helm (at the wheel), take or hang up the radio mic (looking at it), refuel (at the filler with a fuel drum), or open a locker (beside it) | E | X |
 | Inventory (Tab, E or Esc closes it) | Tab | View (B, X or Start closes it) |
+| Take a fishing rod out, or put it away (using it in the inventory does too) | Q | D-pad up |
+| Fishing: hold to wind up a cast, let go to throw; click to strike when the bobber dips; hold to reel, ease off when the line's tight | Left mouse button | Right trigger |
+| Fishing: change the bait (grub, berries, cut bait, lure, jig, or a bare hook) | Right mouse button | Left trigger |
+| Fishing: cut the line (a shark on your fish) | F | Y |
+| The chart: what the crew has seen, you and your crew on it (M again puts it away) | M | D-pad down |
+
+The chart fills in wherever anyone in the crew goes. Reading a sea chart (use it in the inventory) names the islands on it and puts their bearings and distances under the clock.
+
+A raft: make a raft kit, place it at the water's edge, add 6 logs and 3 rope (E), then E launches it onto the water. Swimming beside it, E climbs aboard. With two oars carried, E at an oarlock fits them; E on the deck takes them up (W/S row ahead and back, A/D turn, E or Space lets go); holding E at an oarlock takes them out again, so nobody rows it away. On the sand, E pushes it.
+
+A landed fish flops at your feet: E kills it, then E takes it. What bites depends on the bait, how deep the water is and the time of day. Food goes off over time (its tooltip says when); dried food keeps.
 
 ## Helm controls
 | Action | Keyboard / mouse | Gamepad |

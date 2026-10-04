@@ -176,8 +176,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Boat|Lights")
 	void SetDeckLightsOn(bool bOn);
 
+	/** The searchlight's setting: 0 off, 1 dimmed, 2 full. L at the helm goes off, full, dim, off. */
+	UFUNCTION(BlueprintCallable, Category = "Boat|Lights")
+	void SetSearchlightLevel(uint8 Level);
+
 	UFUNCTION(BlueprintPure, Category = "Boat|Lights")
-	bool IsSearchlightOn() const { return bSearchlightOn; }
+	uint8 GetSearchlightLevel() const { return SearchlightLevel; }
+
+	UFUNCTION(BlueprintPure, Category = "Boat|Lights")
+	bool IsSearchlightOn() const { return SearchlightLevel > 0; }
 
 	UFUNCTION(BlueprintPure, Category = "Boat|Lights")
 	bool AreNavLightsOn() const { return bNavLightsOn; }
@@ -361,7 +368,11 @@ protected:
 	float SearchlightSlewDeg = 120.f;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Lights)
-	bool bSearchlightOn = false;
+	uint8 SearchlightLevel = 0;
+
+	/** The lens while lit: a copy of the lit material whose glow follows the level. */
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> LampLitLens;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Lights)
 	bool bNavLightsOn = true;
